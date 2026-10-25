@@ -42,5 +42,5 @@ people do: they have a presence, hold locks, own tasks and go through review.
 
 - Tech stack: decided 2026-10-25, Electron + TypeScript.
 - Live sync: decided 2026-10-25, central server (runs on Martin's PC for now). See sync.md.
-- Which game engine the game uses (the mockup assumes Unity file names).
+- Engines: decided 2026-10-25, Unreal (with MCP), Godot and Summer Engine. See engines.md. Mockup example data now uses Godot file names.
 - The friend's name and GitHub login.
