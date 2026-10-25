@@ -36,6 +36,20 @@ jobs:
         run: |
           base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
           npm version "$base.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
+          echo "VERSION=$base.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+      # The release is created here as a draft, on this exact commit, so that
+      # electron-builder's parallel uploads all find it instead of racing to
+      # create it, and installed apps only see it once every file is there.
+      - name: Create a draft release
+        shell: bash
+        run: gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release -w @pct/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the release
+        shell: bash
+        run: gh release edit "v$VERSION" --draft=false --latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
