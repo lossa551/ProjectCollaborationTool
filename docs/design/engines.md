@@ -1,4 +1,4 @@
-# Game engine support
+# Game engine support (optional integrations)
 
 Decided 2026-10-25: support Unreal Engine (including its MCP), Godot, and
 Summer Engine (an AI-focused engine that Summer's own comparison pages place

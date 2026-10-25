@@ -44,3 +44,21 @@ people do: they have a presence, hold locks, own tasks and go through review.
 - Live sync: decided 2026-10-25, central server (runs on Martin's PC for now). See sync.md.
 - Engines: decided 2026-10-25, Unreal (with MCP), Godot and Summer Engine. See engines.md. Mockup example data now uses Godot file names.
 - The friend's name and GitHub login.
+
+## Project types (decided 2026-10-25)
+
+The app works for any software project, not only games (for example a
+command-line tool or a web app). Nothing in the core assumes a game engine:
+
+- **Core, always on:** live session, tasks and stages, acceptance criteria and
+  test results, planning space, project memory, agents and permissions, git
+  and GitHub, locks, overlap detection, bloat check.
+- **Integrations, optional per project:** game engines (Godot, Summer Engine,
+  Unreal; see engines.md) and later others (for example a test runner or a
+  design tool). An integration adds lock rules, editor tools for agents, a test
+  runner and an asset scanner.
+- **Lock rules without an integration:** soft locks on code by default, plus
+  user-defined patterns for exclusive locks (for example `*.psd`, `*.sqlite`).
+- **New project setup:** pick the repo, optionally pick a template (Godot game,
+  Unreal game, TypeScript tool, blank), which only pre-fills integrations and
+  lock patterns.
