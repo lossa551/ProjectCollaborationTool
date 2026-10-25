@@ -1,13 +1,22 @@
 name: Release
 
-# Pushing a tag like v0.2.0 builds the Windows installer and publishes it as a
-# GitHub Release. Installed apps find it there and offer the update.
+# Every push to main builds the Windows installer and publishes it as a GitHub
+# Release. Installed apps find it there, download it and offer the update.
+# The version is apps/desktop's major.minor plus this workflow's run number,
+# so it always goes up: bump major or minor in package.json by hand when you
+# want to, the patch takes care of itself.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -20,16 +29,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Check the tag matches the app version
-        shell: bash
-        run: |
-          version=$(node -p "require('./apps/desktop/package.json').version")
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "Tag $GITHUB_REF_NAME does not match apps/desktop version $version" >&2
-            exit 1
-          fi
       - run: npm ci
       - run: npm test
+      - name: Set the version
+        shell: bash
+        run: |
+          base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
+          npm version "$base.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
       - run: npm run release -w @pct/desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Notification, shell } from 'electron';
 import { join } from 'node:path';
 import WS from 'ws';
 import { PresenceStatus, SOCKET_PATH, SessionClient, decodeInvite, encodeInvite } from '@pct/shared';
@@ -131,16 +131,29 @@ ipcMain.handle(Channel.update, () => applyUpdate(leave));
 // starting another copy that would fight over the session port.
 const firstInstance = app.requestSingleInstanceLock();
 if (!firstInstance) app.quit();
-app.on('second-instance', () => {
+function focusWindow() {
   if (!window) return;
   if (window.isMinimized()) window.restore();
   window.focus();
-});
+}
+app.on('second-instance', focusWindow);
+// Windows shows notifications under this id; it matches the installer's appId.
+app.setAppUserModelId('com.lossa551.projectcollaborationtool');
 
 void app.whenReady().then(() => {
   if (!firstInstance) return;
   createWindow();
-  startUpdater(() => window?.webContents.send(Channel.updateState, updateInfo()));
+  startUpdater(
+    () => window?.webContents.send(Channel.updateState, updateInfo()),
+    (version) => {
+      const notice = new Notification({
+        title: 'Update ready',
+        body: `Version ${version} is downloaded. Click Restart to update in the app when it suits you.`,
+      });
+      notice.on('click', focusWindow);
+      notice.show();
+    },
+  );
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
