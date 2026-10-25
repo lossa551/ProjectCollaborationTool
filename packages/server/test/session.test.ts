@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { SessionClient, type SessionState } from '@pct/shared';
+import { PROTOCOL_VERSION, SessionClient, type SessionState } from '@pct/shared';
 import { MemoryStorage, startServer, type RunningServer } from '@pct/server';
 
 let server: RunningServer | null = null;
@@ -102,15 +102,15 @@ describe('session server', () => {
     const martin = join('Martin');
     await waitFor(martin, (s) => s.status === 'connected');
     martin.disconnect();
-    await expect.poll(async () => (await storage.listEvents()).map((e) => e.type)).toEqual([
-      'participant.joined',
-      'participant.left',
+    await expect.poll(async () => (await storage.listActivity()).map((e) => `${e.actorName} ${e.text}`)).toEqual([
+      'Martin joined the session',
+      'Martin left the session',
     ]);
   });
 
   it('answers health checks', async () => {
     server = await startServer({ port: 0, host: '127.0.0.1', sessionName: 'Health' });
     const res = await fetch(`http://127.0.0.1:${server.port}/health`);
-    expect(await res.json()).toEqual({ ok: true, protocol: 1, session: 'Health' });
+    expect(await res.json()).toEqual({ ok: true, protocol: PROTOCOL_VERSION, session: 'Health' });
   });
 });

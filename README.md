@@ -4,10 +4,10 @@ A Windows desktop app where two developers and their AI agents work on the same
 project in one live session: shared task board, locks, presence, GitHub status
 and agent chat. Design notes live in [docs/design](docs/design).
 
-This is the starting code (step 1 of the plan): the app, the session server and
-the shared package, with hosting, joining by invite code and live presence
-working end to end. Tasks, locks, GitHub, agents and engine integrations come
-next; see the GitHub issues.
+Working so far: hosting a session on your PC or joining one by invite code,
+live presence, and a shared task board (five stages, drag to move, assign to a
+person or agent, allowed paths, activity feed). Locks, saved storage, offline
+sync, GitHub, agents and engine integrations come next; see the GitHub issues.
 
 ## Layout
 

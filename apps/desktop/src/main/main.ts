@@ -1,7 +1,15 @@
 import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import WS from 'ws';
-import { PresenceStatus, SOCKET_PATH, SessionClient, decodeInvite, encodeInvite } from '@pct/shared';
+import {
+  PresenceStatus,
+  SOCKET_PATH,
+  SessionClient,
+  TaskStage,
+  TaskUpdateMessage,
+  decodeInvite,
+  encodeInvite,
+} from '@pct/shared';
 import { findShareableAddress, startServer, type RunningServer } from '@pct/server';
 import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
 
@@ -117,6 +125,19 @@ ipcMain.handle(Channel.leave, () => leave());
 ipcMain.on(Channel.setPresence, (_event, status: unknown, focus: unknown) => {
   const parsed = PresenceStatus.safeParse(status);
   if (parsed.success) client.setPresence(parsed.data, typeof focus === 'string' ? focus : null);
+});
+// Task messages from the window are checked here too; the server validates
+// them again before anything changes.
+ipcMain.on(Channel.createTask, (_event, title: unknown, stage: unknown) => {
+  const parsedStage = TaskStage.safeParse(stage);
+  if (typeof title === 'string' && title.trim() && parsedStage.success) client.createTask(title.trim(), { stage: parsedStage.data });
+});
+ipcMain.on(Channel.updateTask, (_event, taskId: unknown, changes: unknown) => {
+  const parsed = TaskUpdateMessage.safeParse({ type: 'task.update', taskId, changes });
+  if (parsed.success) client.updateTask(parsed.data.taskId, parsed.data.changes);
+});
+ipcMain.on(Channel.deleteTask, (_event, taskId: unknown) => {
+  if (typeof taskId === 'string') client.deleteTask(taskId);
 });
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);

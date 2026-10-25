@@ -123,12 +123,13 @@ textarea {
 
 .shell {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 180px 1fr 280px;
   grid-template-rows: 48px 1fr;
   height: 100vh;
 }
 
 .titlebar {
+  position: relative;
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
@@ -181,11 +182,210 @@ textarea {
 }
 
 .content {
-  padding: 20px;
+  padding: 16px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+button.danger {
+  align-self: flex-start;
+  background: transparent;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+}
+
+select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font: inherit;
+}
+
+input:disabled,
+select:disabled,
+textarea:disabled {
+  opacity: 0.6;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.grow {
+  flex: 1;
+}
+
+.banner {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.banner.error {
+  cursor: pointer;
+}
+
+/* Board */
+
+.board {
   display: grid;
-  gap: 16px;
-  align-content: start;
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-height: 0;
+}
+
+.column.drop-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.column > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.column h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 10px;
+}
+
+.task-card.selected {
+  border-color: var(--accent);
+}
+
+.task-card[draggable='true'] {
+  cursor: grab;
+}
+
+.task-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.add-task {
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  padding: 6px 4px;
+}
+
+.add-task:hover {
+  color: var(--text);
+}
+
+/* Side panel: people and activity, or the selected task */
+
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 16px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.side-panel > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.side-panel > header h2 {
+  margin: 0;
+}
+
+.activity ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.activity li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activity li.clickable {
+  cursor: pointer;
+}
+
+.activity li.clickable:hover span {
+  text-decoration: underline;
+}
+
+.activity time {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.popover {
+  position: absolute;
+  top: 52px;
+  right: 16px;
+  width: 460px;
+  z-index: 10;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
 }
 
 /* People and presence. People are circles, agents dashed squares (as in the mockup). */
@@ -211,8 +411,20 @@ textarea {
   border-color: var(--warn);
 }
 
-.avatar.presence-away {
+.avatar.presence-away,
+.avatar.presence-offline {
   border-color: var(--muted);
+}
+
+.avatar.presence-offline {
+  opacity: 0.6;
+}
+
+.avatar-small {
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+  border-width: 1.5px;
 }
 
 .people {
