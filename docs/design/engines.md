@@ -39,9 +39,15 @@ Decided 2026-10-25 (Martin): build the Unreal adapter on ChiR24/Unreal_mcp
 now, targeting UE 5.8. Switch to (or add) Epic's official MCP later, so the
 adapter is written against MCP generically with the server as a setting.
 
+## Build order (2026-10-25)
+
+Martin builds his own games in Godot; the shared project with his friend will
+likely start in Unreal (5.8). Unreal adapter first, since the collaboration
+features get their first real use there; Godot adapter second; Summer Engine
+after.
+
 ## Open
 
-- Which engine the first real game project uses, so that adapter is built first.
 
 Sources: https://docs.summerengine.com/index.md,
 https://www.summerengine.com/blog/summer-vs-orca-engine,
