@@ -1,28 +1,32 @@
 {
   "name": "@pct/desktop",
+  "productName": "Project Collaboration Tool",
   "version": "0.1.0",
   "private": true,
   "description": "Windows desktop app (Electron). Always a client of a session server, and can host one on this PC.",
+  "author": "lossa551",
   "main": "dist/main.cjs",
   "scripts": {
     "build": "node scripts/build.mjs && vite build",
     "dev": "node scripts/dev.mjs",
     "start": "electron .",
+    "package": "npm run build && electron-builder --win --publish never",
+    "release": "npm run build && electron-builder --win --publish always",
     "typecheck": "tsc -p tsconfig.json"
   },
-  "dependencies": {
+  "devDependencies": {
     "@pct/server": "0.1.0",
     "@pct/shared": "0.1.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "ws": "^8.18.3"
-  },
-  "devDependencies": {
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "electron": "^45.0.0",
+    "@types/ws": "^8.18.1",
+    "electron": "45.0.0",
+    "electron-builder": "~26.17.0",
+    "electron-updater": "~6.8.0",
     "esbuild": "^0.25.11",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "vite": "^7.1.12",
-    "@types/ws": "^8.18.1"
+    "ws": "^8.18.3"
   }
 }

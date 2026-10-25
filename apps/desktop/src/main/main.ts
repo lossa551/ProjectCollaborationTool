@@ -4,6 +4,7 @@ import WS from 'ws';
 import { PresenceStatus, SOCKET_PATH, SessionClient, decodeInvite, encodeInvite } from '@pct/shared';
 import { findShareableAddress, startServer, type RunningServer } from '@pct/server';
 import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
+import { applyUpdate, getUpdateState, startUpdater } from './updater';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. Later it will also run
@@ -121,9 +122,25 @@ ipcMain.on(Channel.setPresence, (_event, status: unknown, focus: unknown) => {
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
+const updateInfo = () => ({ version: app.getVersion(), state: getUpdateState() });
+ipcMain.handle(Channel.getUpdate, () => updateInfo());
+// Hosting stops cleanly before the restart, so the friend sees the host leave.
+ipcMain.handle(Channel.update, () => applyUpdate(leave));
+
+// A second launch (say, from the Start menu) focuses this window instead of
+// starting another copy that would fight over the session port.
+const firstInstance = app.requestSingleInstanceLock();
+if (!firstInstance) app.quit();
+app.on('second-instance', () => {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
 
 void app.whenReady().then(() => {
+  if (!firstInstance) return;
   createWindow();
+  startUpdater(() => window?.webContents.send(Channel.updateState, updateInfo()));
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
