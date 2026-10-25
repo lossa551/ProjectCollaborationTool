@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { Result } from '../common/api';
 import { recall, remember } from './storage';
+import { UpdateButton } from './UpdateButton';
 
 export function ConnectScreen({ error }: { error: string | null }) {
   const [name, setName] = useState(() => recall('name'));
@@ -33,6 +34,7 @@ export function ConnectScreen({ error }: { error: string | null }) {
       <header>
         <h1>Project Collaboration Tool</h1>
         <p className="muted">Start a live session on this PC, or join one with an invite code.</p>
+        <UpdateButton hosting={false} />
       </header>
 
       <label className="field">

@@ -1,0 +1,35 @@
+name: Release
+
+# Pushing a tag like v0.2.0 builds the Windows installer and publishes it as a
+# GitHub Release. Installed apps find it there and offer the update.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match apps/desktop version $version" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm test
+      - run: npm run release -w @pct/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

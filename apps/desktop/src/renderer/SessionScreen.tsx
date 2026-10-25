@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { Participant } from '@pct/shared';
 import type { AppState } from '../common/api';
+import { UpdateButton } from './UpdateButton';
 
 // Nav items from docs/design/interface.md. Only the session view exists so far.
 const NAV = ['Session board', 'Planning space', 'Locks and GitHub', 'Agents', 'Agent chat', 'Project memory'];
@@ -22,6 +23,7 @@ export function SessionScreen({ state }: { state: AppState }) {
       <header className="titlebar">
         <strong>{session.session?.name ?? 'Session'}</strong>
         <span className={`status status-${session.status}`}>{STATUS_LABEL[session.status]}</span>
+        <UpdateButton hosting={!!hosting} />
         <div className="avatars">
           {participants.map((p) => (
             <Avatar key={p.id} participant={p} />
