@@ -62,3 +62,21 @@ command-line tool or a web app). Nothing in the core assumes a game engine:
 - **New project setup:** pick the repo, optionally pick a template (Godot game,
   Unreal game, TypeScript tool, blank), which only pre-fills integrations and
   lock patterns.
+
+## Agent chat (added 2026-10-25)
+
+Screen 7 in the mockup. The app is also a harness: people chat with agents
+directly inside the shared session.
+
+- **API models** (Claude, DeepSeek, Ollama): the app runs the agent loop itself.
+  Every file edit, command or engine action is checked against locks, task
+  scope and approvals before it runs; out-of-scope actions show an approval
+  card in the chat.
+- **CLI agents** (Claude Code, Codex CLI and similar): run headless, output
+  streamed into the chat, file and tool access routed through the app via hooks
+  or MCP.
+- Chats are shared: both people can watch and post in the same agent chat.
+- Side panel shows exactly what context the agent has (task, plan, memory
+  entries, files) and context size.
+- A chat can become a task, a project memory entry, or a handoff to another
+  agent.
