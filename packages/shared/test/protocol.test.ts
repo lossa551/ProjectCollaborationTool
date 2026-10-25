@@ -4,9 +4,9 @@ import { parseClientMessage, parseServerMessage } from '@pct/shared';
 describe('protocol parsing', () => {
   it('accepts a valid hello', () => {
     const msg = parseClientMessage(
-      JSON.stringify({ type: 'hello', protocol: 1, secret: 'x', name: ' Martin ', kind: 'human' }),
+      JSON.stringify({ type: 'hello', protocol: 1, secret: 'x', name: ' Martin ', kind: 'human', identity: 'a'.repeat(32) }),
     );
-    expect(msg).toEqual({ type: 'hello', protocol: 1, secret: 'x', name: 'Martin', kind: 'human' });
+    expect(msg).toEqual({ type: 'hello', protocol: 1, secret: 'x', name: 'Martin', kind: 'human', identity: 'a'.repeat(32) });
   });
 
   it('rejects malformed or unknown messages', () => {

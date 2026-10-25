@@ -34,6 +34,14 @@ export interface JoinOptions {
   secret: string;
   name: string;
   kind?: ParticipantKind;
+  /** Secret kept on this machine; see HelloMessage.identity. Use newIdentity() to make one. */
+  identity: string;
+}
+
+/** A fresh identity secret for a person or agent that has none yet. */
+export function newIdentity(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(24));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 export interface SessionClientOptions {
@@ -69,7 +77,7 @@ export interface TaskChanges {
 }
 
 // Closing with these codes means retrying will not help.
-const FATAL_CLOSE_CODES = new Set<number>([CloseCode.badSecret, CloseCode.protocolMismatch]);
+const FATAL_CLOSE_CODES = new Set<number>([CloseCode.badSecret, CloseCode.protocolMismatch, CloseCode.replaced]);
 
 export class SessionClient {
   private state: SessionState = INITIAL_STATE;
@@ -157,6 +165,7 @@ export class SessionClient {
         secret: join.secret,
         name: join.name,
         kind: join.kind ?? 'human',
+        identity: join.identity,
       });
     });
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { SessionClient, type SessionState } from '@pct/shared';
+import { SessionClient, newIdentity, type SessionState } from '@pct/shared';
 import { LockTable, MemoryStorage, startServer, type RunningServer } from '@pct/server';
 
 const martin = { id: 'm', name: 'Martin', kind: 'human' as const };
@@ -92,7 +92,7 @@ function waitFor(client: SessionClient, check: (state: SessionState) => boolean,
 async function join(name: string) {
   const client = new SessionClient({ backoff: [50] });
   clients.push(client);
-  client.connect({ url: server!.localUrl, secret: server!.secret, name });
+  client.connect({ url: server!.localUrl, secret: server!.secret, name, identity: newIdentity() });
   await waitFor(client, (s) => s.status === 'connected');
   return client;
 }

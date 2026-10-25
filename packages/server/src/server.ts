@@ -1,8 +1,8 @@
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
-import { WebSocketServer, type WebSocket } from 'ws';
+import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -24,7 +24,7 @@ export interface ServerOptions {
   port?: number;
   /** Interface to bind; default 0.0.0.0 so Tailscale peers can connect. */
   host?: string;
-  /** Shared secret every participant must present. Generated when omitted. */
+  /** Shared secret every participant must present. Otherwise the stored one, or a new one that is then stored. */
   secret?: string;
   sessionName?: string;
   storage?: Storage;
@@ -69,7 +69,12 @@ function secretsMatch(given: string, expected: string): boolean {
 
 export async function startServer(options: ServerOptions = {}): Promise<RunningServer> {
   const storage = options.storage ?? new MemoryStorage();
-  const secret = options.secret ?? generateSecret();
+  let secret = options.secret ?? (await storage.loadSecret());
+  if (!secret) {
+    secret = generateSecret();
+    await storage.saveSecret(secret);
+  }
+  const sessionSecret = secret;
   const log = options.log ?? (() => {});
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
@@ -78,6 +83,9 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   let session = await storage.loadSession();
   if (!session) {
     session = { id: randomUUID(), name: options.sessionName ?? 'New session', createdAt: Date.now() };
+    await storage.saveSession(session);
+  } else if (options.sessionName && options.sessionName !== session.name) {
+    session = { ...session, name: options.sessionName };
     await storage.saveSession(session);
   }
   const currentSession = session;
@@ -148,7 +156,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       conn.alive = true;
     });
 
-    socket.on('message', (data, isBinary) => {
+    const handle = async (data: RawData, isBinary: boolean) => {
       const message = isBinary ? null : parseClientMessage(data.toString());
       if (!message) return fail(conn, 'bad_message', 'Could not read message');
 
@@ -162,19 +170,41 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
             CloseCode.protocolMismatch,
           );
         }
-        if (!secretsMatch(message.secret, secret)) {
+        if (!secretsMatch(message.secret, sessionSecret)) {
           return fail(conn, 'bad_secret', 'The invite code is wrong or out of date', CloseCode.badSecret);
         }
         clearTimeout(helloTimer);
-        const participant: Participant = {
-          id: randomUUID(),
+        const now = Date.now();
+        const tokenHash = createHash('sha256').update(message.identity).digest('hex');
+        const known = await storage.findIdentity(tokenHash);
+        const identity = {
+          id: known?.id ?? randomUUID(),
           name: message.name,
           kind: message.kind,
+          createdAt: known?.createdAt ?? now,
+          lastSeenAt: now,
+        };
+        void persist('identity', storage.saveIdentity(tokenHash, identity));
+        if (conn.socket.readyState !== conn.socket.OPEN) return;
+
+        // The same identity joining again (a second window, or a reconnect
+        // before the old socket timed out) takes over from the old connection.
+        for (const other of connections) {
+          if (other.participant?.id !== identity.id) continue;
+          other.participant = null;
+          fail(other, 'replaced', 'You joined this session from another window', CloseCode.replaced);
+        }
+
+        const participant: Participant = {
+          id: identity.id,
+          name: identity.name,
+          kind: identity.kind,
           status: 'active',
           focus: null,
-          connectedAt: Date.now(),
+          connectedAt: now,
         };
         conn.participant = participant;
+        for (const lock of locks.refresh(participant.id, now)) lockChanged(lock);
         send(conn, {
           type: 'welcome',
           protocol: PROTOCOL_VERSION,
@@ -259,13 +289,21 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
       }
+    };
+
+    // Handle one message at a time per connection, since joining waits on storage.
+    let queue = Promise.resolve();
+    socket.on('message', (data, isBinary) => {
+      queue = queue
+        .then(() => handle(data, isBinary))
+        .catch((err: unknown) => log(`failed to handle a message: ${String(err)}`));
     });
 
     socket.on('close', () => {
       clearTimeout(helloTimer);
       connections.delete(conn);
       const participant = conn.participant;
-      if (participant) {
+      if (participant && !joined().some((p) => p.id === participant.id)) {
         broadcast({ type: 'participant.left', participantId: participant.id });
         record(participant, 'left the session');
         log(`${participant.name} left`);
@@ -303,7 +341,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
 
   return {
     port,
-    secret,
+    secret: sessionSecret,
     session: currentSession,
     localUrl: `${scheme}://127.0.0.1:${port}${SOCKET_PATH}`,
     participants: joined,
