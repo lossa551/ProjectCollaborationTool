@@ -41,6 +41,6 @@ people do: they have a presence, hold locks, own tasks and go through review.
 ## Open questions
 
 - Tech stack: decided 2026-10-25, Electron + TypeScript.
-- How live sync works: one PC hosts and the other joins, or a small relay server.
+- Live sync: decided 2026-10-25, central server (runs on Martin's PC for now). See sync.md.
 - Which game engine the game uses (the mockup assumes Unity file names).
 - The friend's name and GitHub login.
