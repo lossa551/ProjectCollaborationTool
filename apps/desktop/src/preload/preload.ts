@@ -10,6 +10,10 @@ const api: PctApi = {
   createTask: (title, stage) => ipcRenderer.send(Channel.createTask, title, stage),
   updateTask: (taskId, changes) => ipcRenderer.send(Channel.updateTask, taskId, changes),
   deleteTask: (taskId) => ipcRenderer.send(Channel.deleteTask, taskId),
+  acquireLock: (path, options) => ipcRenderer.send(Channel.acquireLock, path, options),
+  releaseLock: (lockId) => ipcRenderer.send(Channel.releaseLock, lockId),
+  recoverLock: (lockId) => ipcRenderer.send(Channel.recoverLock, lockId),
+  setLockRules: (rules) => ipcRenderer.send(Channel.setLockRules, rules),
   copyText: (text) => ipcRenderer.send(Channel.copyText, text),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);

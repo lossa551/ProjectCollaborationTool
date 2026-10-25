@@ -2,6 +2,8 @@ import { app, BrowserWindow, clipboard, ipcMain, Notification, shell } from 'ele
 import { join } from 'node:path';
 import WS from 'ws';
 import {
+  LockAcquireMessage,
+  LockRules,
   PresenceStatus,
   SOCKET_PATH,
   SessionClient,
@@ -139,6 +141,20 @@ ipcMain.on(Channel.updateTask, (_event, taskId: unknown, changes: unknown) => {
 });
 ipcMain.on(Channel.deleteTask, (_event, taskId: unknown) => {
   if (typeof taskId === 'string') client.deleteTask(taskId);
+});
+ipcMain.on(Channel.acquireLock, (_event, path: unknown, options: unknown) => {
+  const parsed = LockAcquireMessage.safeParse({ type: 'lock.acquire', path, ...(options as object) });
+  if (parsed.success) client.acquireLock(parsed.data.path, parsed.data);
+});
+ipcMain.on(Channel.releaseLock, (_event, lockId: unknown) => {
+  if (typeof lockId === 'string') client.releaseLock(lockId);
+});
+ipcMain.on(Channel.recoverLock, (_event, lockId: unknown) => {
+  if (typeof lockId === 'string') client.recoverLock(lockId);
+});
+ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
+  const parsed = LockRules.safeParse(rules);
+  if (parsed.success) client.setLockRules(parsed.data);
 });
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);

@@ -9,12 +9,14 @@ import {
   SOCKET_PATH,
   parseClientMessage,
   type Activity,
+  type Lock,
   type ErrorCode,
   type Participant,
   type ServerMessage,
   type SessionInfo,
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
+import { LockTable } from './locks.js';
 import { MemoryStorage, type Storage } from './storage.js';
 
 export interface ServerOptions {
@@ -30,6 +32,8 @@ export interface ServerOptions {
   tls?: { key: string | Buffer; cert: string | Buffer };
   /** How often to ping clients and drop the ones that stopped answering. */
   heartbeatMs?: number;
+  /** How long a lock holder may be silent before the lock counts as abandoned. Default 60 s. */
+  lockStaleMs?: number;
   /** How long a new connection may take to send its hello. */
   helloTimeoutMs?: number;
   log?: (line: string) => void;
@@ -69,6 +73,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   const log = options.log ?? (() => {});
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
+  const lockStaleMs = options.lockStaleMs ?? 60_000;
 
   let session = await storage.loadSession();
   if (!session) {
@@ -77,6 +82,12 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   }
   const currentSession = session;
   const board = new TaskBoard(await storage.listTasks());
+  // Holders of locks saved before a restart get a fresh grace period to come back.
+  const startedAt = Date.now();
+  const locks = new LockTable(
+    (await storage.listLocks()).map((lock) => ({ ...lock, heartbeatAt: startedAt })),
+    (await storage.loadLockRules()) ?? undefined,
+  );
   /** Activity sent to clients when they join; storage keeps the full log. */
   const recentActivity = await storage.listActivity(ACTIVITY_ON_JOIN);
 
@@ -120,6 +131,11 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   };
 
   const findParticipant = (id: string) => joined().find((p) => p.id === id);
+
+  const lockChanged = (lock: Lock) => {
+    void persist('lock', storage.saveLock(lock));
+    broadcast({ type: 'lock.changed', lock });
+  };
 
   wss.on('connection', (socket) => {
     const conn: Connection = { socket, participant: null, alive: true };
@@ -166,6 +182,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           session: currentSession,
           participants: joined(),
           tasks: board.list(),
+          locks: locks.list(),
+          lockRules: locks.getRules(),
           activity: recentActivity,
         });
         broadcast({ type: 'participant.joined', participant }, conn);
@@ -209,6 +227,35 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           void persist('task', storage.deleteTask(result.task.id));
           broadcast({ type: 'task.removed', taskId: result.task.id });
           for (const text of result.descriptions) record(participant, text, null);
+          for (const lock of locks.detachTask(result.task.id)) lockChanged(lock);
+          break;
+        }
+        case 'lock.acquire': {
+          if (message.taskId && !board.get(message.taskId)) return fail(conn, 'not_found', 'That task no longer exists');
+          const holder = { id: participant.id, name: participant.name, kind: participant.kind };
+          const result = locks.acquire(message.path, holder, message);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          lockChanged(result.lock);
+          if (result.description) record(participant, result.description, result.lock.taskId);
+          break;
+        }
+        case 'lock.release':
+        case 'lock.recover': {
+          const result =
+            message.type === 'lock.release'
+              ? locks.release(message.lockId, participant.id)
+              : locks.recover(message.lockId, participant.id);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          void persist('lock', storage.deleteLock(result.lock.id));
+          broadcast({ type: 'lock.removed', lockId: result.lock.id });
+          if (result.description) record(participant, result.description, result.lock.taskId);
+          break;
+        }
+        case 'lock.rules.update': {
+          const rules = locks.setRules(message.rules);
+          void persist('lock rules', storage.saveLockRules(rules));
+          broadcast({ type: 'lock.rules.changed', rules });
+          record(participant, 'changed which files need an exclusive lock');
           break;
         }
       }
@@ -227,13 +274,20 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   });
 
   const heartbeat = setInterval(() => {
+    const now = Date.now();
     for (const conn of connections) {
       if (!conn.alive) {
         conn.socket.terminate();
         continue;
       }
+      // Answering pings is the heartbeat for everything this participant holds.
+      if (conn.participant) for (const lock of locks.refresh(conn.participant.id, now)) lockChanged(lock);
       conn.alive = false;
       conn.socket.ping();
+    }
+    for (const lock of locks.sweep(lockStaleMs, now)) {
+      lockChanged(lock);
+      record(null, `${lock.holder.name}'s lock on ${lock.path} was abandoned`, lock.taskId);
     }
   }, heartbeatMs);
 

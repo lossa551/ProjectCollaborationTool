@@ -1,4 +1,5 @@
-import type { Activity, Participant, ParticipantKind, PresenceStatus, SessionInfo, Task, TaskStage } from './model.js';
+import type { Activity, Lock, LockRules, Participant, ParticipantKind, PresenceStatus, SessionInfo, Task, TaskStage } from './model.js';
+import { DEFAULT_LOCK_RULES } from './model.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -21,6 +22,8 @@ export interface SessionState {
   session: SessionInfo | null;
   participants: Participant[];
   tasks: Task[];
+  locks: Lock[];
+  lockRules: LockRules;
   /** Most recent activity, oldest first. */
   activity: Activity[];
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
@@ -49,6 +52,8 @@ const INITIAL_STATE: SessionState = {
   session: null,
   participants: [],
   tasks: [],
+  locks: [],
+  lockRules: DEFAULT_LOCK_RULES,
   activity: [],
   error: null,
 };
@@ -123,6 +128,22 @@ export class SessionClient {
     this.send({ type: 'task.delete', taskId });
   }
 
+  acquireLock(path: string, options: { taskId?: string | null; exclusive?: boolean } = {}): void {
+    this.send({ type: 'lock.acquire', path, ...options });
+  }
+
+  releaseLock(lockId: string): void {
+    this.send({ type: 'lock.release', lockId });
+  }
+
+  recoverLock(lockId: string): void {
+    this.send({ type: 'lock.recover', lockId });
+  }
+
+  setLockRules(rules: LockRules): void {
+    this.send({ type: 'lock.rules.update', rules });
+  }
+
   private open(): void {
     const join = this.join;
     if (!join) return;
@@ -173,6 +194,8 @@ export class SessionClient {
           session: message.session,
           participants: message.participants,
           tasks: message.tasks,
+          locks: message.locks,
+          lockRules: message.lockRules,
           activity: message.activity.slice(-ACTIVITY_LIMIT),
           error: null,
         });
@@ -212,6 +235,22 @@ export class SessionClient {
       }
       case 'task.removed':
         this.setState({ ...this.state, tasks: this.state.tasks.filter((t) => t.id !== message.taskId) });
+        break;
+      case 'lock.changed': {
+        const exists = this.state.locks.some((l) => l.id === message.lock.id);
+        this.setState({
+          ...this.state,
+          locks: exists
+            ? this.state.locks.map((l) => (l.id === message.lock.id ? message.lock : l))
+            : [...this.state.locks, message.lock],
+        });
+        break;
+      }
+      case 'lock.removed':
+        this.setState({ ...this.state, locks: this.state.locks.filter((l) => l.id !== message.lockId) });
+        break;
+      case 'lock.rules.changed':
+        this.setState({ ...this.state, lockRules: message.rules });
         break;
       case 'activity':
         this.setState({ ...this.state, activity: [...this.state.activity, message.entry].slice(-ACTIVITY_LIMIT) });

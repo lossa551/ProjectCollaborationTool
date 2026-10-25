@@ -5,9 +5,11 @@ project in one live session: shared task board, locks, presence, GitHub status
 and agent chat. Design notes live in [docs/design](docs/design).
 
 Working so far: hosting a session on your PC or joining one by invite code,
-live presence, and a shared task board (five stages, drag to move, assign to a
-person or agent, allowed paths, activity feed). Locks, saved storage, offline
-sync, GitHub, agents and engine integrations come next; see the GitHub issues.
+live presence, a shared task board (five stages, drag to move, assign to a
+person or agent, allowed paths, activity feed), and file locks (exclusive for
+files matching the lock rules, soft for the rest, abandoned locks can be
+recovered). Saved storage, offline sync, GitHub, agents and engine
+integrations come next; see the GitHub issues.
 
 ## Layout
 

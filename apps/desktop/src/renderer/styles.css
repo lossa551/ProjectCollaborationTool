@@ -469,3 +469,145 @@ textarea:disabled {
   padding: 8px 10px;
   font-size: 12px;
 }
+
+/* Locks */
+
+.locks-screen {
+  display: grid;
+  gap: 16px;
+  max-width: 900px;
+}
+
+.lock-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.lock-form input:not([type='checkbox']) {
+  flex: 2 1 220px;
+  width: auto;
+}
+
+.lock-form select {
+  flex: 1 1 140px;
+  width: auto;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.check input {
+  width: auto;
+}
+
+.lock-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.lock-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lock-list li.abandoned {
+  border-color: var(--warn);
+}
+
+.lock-list li > button {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+
+.lock-list.compact li {
+  padding: 8px;
+}
+
+.lock-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.lock-path {
+  overflow-wrap: anywhere;
+}
+
+.lock-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge-exclusive {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.badge-abandoned,
+.badge-warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+button.link {
+  background: none;
+  padding: 0;
+  color: var(--accent);
+}
+
+.nav-count {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--warn);
+  color: #1b1b1b;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.section-title {
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+
+.task-detail .lock-form {
+  margin-top: 8px;
+}
+
+.task-detail .lock-form input:not([type='checkbox']) {
+  flex-basis: 100%;
+  min-width: 0;
+}
