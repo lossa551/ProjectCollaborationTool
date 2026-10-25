@@ -78,7 +78,7 @@ describe('task board', () => {
     expect(state.tasks[0]!.owner).toMatchObject({ name: 'Claude Opus', kind: 'agent' });
   });
 
-  it('refuses an owner who is not in the session and unknown tasks', async () => {
+  it('refuses an owner who is not in the session and updates to unknown tasks', async () => {
     server = await startServer({ port: 0, host: '127.0.0.1' });
     const martin = await join('Martin');
     martin.createTask('Inventory UI');
@@ -89,7 +89,7 @@ describe('task board', () => {
     expect(refused.error?.code).toBe('not_found');
     expect(refused.tasks[0]!.owner).toBeNull();
 
-    martin.deleteTask('missing');
+    martin.updateTask('missing', { title: 'Nope' });
     await waitFor(martin, (s) => s.error?.message === 'That task no longer exists');
   });
 

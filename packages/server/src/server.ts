@@ -237,14 +237,23 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         case 'task.create': {
           const result = board.create(message);
           if (!result.ok) return fail(conn, 'bad_message', result.message);
+          if (result.descriptions.length === 0) {
+            send(conn, { type: 'task.changed', task: result.task });
+            break;
+          }
           void persist('task', storage.saveTask(result.task));
           broadcast({ type: 'task.changed', task: result.task });
           for (const text of result.descriptions) record(participant, text, result.task.id);
           break;
         }
         case 'task.update': {
-          const result = board.update(message.taskId, message.changes, findParticipant);
+          const result = board.update(message.taskId, message.changes, findParticipant, message.expected);
           if (!result.ok) return fail(conn, 'not_found', result.message);
+          if (result.conflicts.length > 0) {
+            fail(conn, 'conflict', `Not applied: ${result.conflicts.join('; ')}.`);
+            // Send the current task so the client drops its own version.
+            send(conn, { type: 'task.changed', task: result.task });
+          }
           if (result.descriptions.length === 0) break;
           void persist('task', storage.saveTask(result.task));
           broadcast({ type: 'task.changed', task: result.task });
@@ -253,7 +262,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         }
         case 'task.delete': {
           const result = board.delete(message.taskId);
-          if (!result.ok) return fail(conn, 'not_found', result.message);
+          // Already gone (deleted by someone else, or a replayed delete): nothing to do.
+          if (!result.ok) break;
           void persist('task', storage.deleteTask(result.task.id));
           broadcast({ type: 'task.removed', taskId: result.task.id });
           for (const text of result.descriptions) record(participant, text, null);

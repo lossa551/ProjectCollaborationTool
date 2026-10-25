@@ -14,7 +14,7 @@ import {
 } from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -48,21 +48,35 @@ export const PingMessage = z.object({
 
 export const TaskCreateMessage = z.object({
   type: z.literal('task.create'),
+  /**
+   * Chosen by the client so changes made offline can refer to a task before
+   * the server has seen it. Creating an id that already exists does nothing,
+   * so replaying a create after a dropped connection is safe.
+   */
+  id: z.string().min(8).max(64).optional(),
   title: TaskTitle,
   stage: TaskStage.optional(),
+  scope: TaskScope.optional(),
+});
+
+const TaskFields = z.object({
+  title: TaskTitle.optional(),
+  stage: TaskStage.optional(),
+  /** A connected participant's id, or null to unassign. */
+  ownerId: z.string().nullable().optional(),
   scope: TaskScope.optional(),
 });
 
 export const TaskUpdateMessage = z.object({
   type: z.literal('task.update'),
   taskId: z.string(),
-  changes: z.object({
-    title: TaskTitle.optional(),
-    stage: TaskStage.optional(),
-    /** A connected participant's id, or null to unassign. */
-    ownerId: z.string().nullable().optional(),
-    scope: TaskScope.optional(),
-  }),
+  changes: TaskFields,
+  /**
+   * What the client saw before its change, per changed field. If someone else
+   * changed that field in the meantime (typically while this client was
+   * offline), the server keeps their value and reports a conflict.
+   */
+  expected: TaskFields.optional(),
 });
 
 export const TaskDeleteMessage = z.object({
@@ -185,6 +199,7 @@ export const ErrorCode = z.enum([
   'locked',
   'not_allowed',
   'replaced',
+  'conflict',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -233,3 +248,14 @@ function parse<T>(schema: z.ZodType<T>, raw: string): T | null {
 
 export const parseClientMessage = (raw: string) => parse(ClientMessage, raw);
 export const parseServerMessage = (raw: string) => parse(ServerMessage, raw);
+
+/** What a client saves about a session between runs (see SessionClient.getSnapshot). */
+export const SessionSnapshot = z.object({
+  session: SessionInfo,
+  tasks: z.array(Task),
+  locks: z.array(Lock),
+  lockRules: LockRules,
+  activity: z.array(Activity),
+  queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage])),
+});
+export type SessionSnapshot = z.infer<typeof SessionSnapshot>;
