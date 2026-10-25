@@ -1,0 +1,30 @@
+{
+  "name": "@pct/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Session server: holds shared state, hands out locks and relays live events. Runs on a home PC or a hosted server.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "@pct/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "pct-server": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@pct/shared": "0.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
+}

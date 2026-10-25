@@ -1,0 +1,25 @@
+{
+  "name": "project-collaboration-tool",
+  "private": true,
+  "description": "Live session app for two developers and their AI agents working on the same project.",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "apps/desktop"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "npm run build -w @pct/shared && npm run build -w @pct/server && npm run build -w @pct/desktop",
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "vitest run",
+    "server": "npm run build -w @pct/shared && npm run build -w @pct/server && npm start -w @pct/server",
+    "desktop": "npm run dev -w @pct/desktop"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}
