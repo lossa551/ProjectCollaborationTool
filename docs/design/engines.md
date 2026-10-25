@@ -35,15 +35,13 @@ is logged on the activity feed.
 | chongdashu/unreal-mcp | MIT | C++ plugin + Python server | Popular (~1.6k stars), Blueprint graph editing | Experimental, last updated Apr 2025, UE 5.6 unconfirmed |
 | StraySpark Unreal MCP | Paid, from $129 | Plugin | Claims 455 tools, transactional multi-step undo, Blueprint read-back, auth/scope gates | Claims are vendor-written, not verified |
 
-Recommendation: write the Unreal adapter against MCP generically so the server
-is a setting. Default to Epic's plugin for longevity; offer ChiR24 as the
-"more tools" option (needed for PIE testing and screenshots today).
+Decided 2026-10-25 (Martin): build the Unreal adapter on ChiR24/Unreal_mcp
+now, targeting UE 5.8. Switch to (or add) Epic's official MCP later, so the
+adapter is written against MCP generically with the server as a setting.
 
 ## Open
 
 - Which engine the first real game project uses, so that adapter is built first.
-- Which Unreal MCP to target first: Epic's official plugin (stable owner, fewer
-  tools) or a third-party server (more tools).
 
 Sources: https://docs.summerengine.com/index.md,
 https://www.summerengine.com/blog/summer-vs-orca-engine,
