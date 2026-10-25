@@ -38,7 +38,7 @@ the session until you host again.
 
 ## Develop
 
-Needs Node 22.12 or newer.
+Needs Node 22.13 or newer.
 
 ```sh
 npm install
@@ -54,10 +54,17 @@ Run a standalone server (for a hosted machine, or to test without the app):
 npm run server
 ```
 
-It prints an invite code. Settings are environment variables: `PCT_PORT`
-(7420), `PCT_HOST` (0.0.0.0), `PCT_SECRET` (generated each start if unset),
+It prints an invite code. The session (board, locks, activity, who has joined)
+is saved in `packages/server/data/session.sqlite`, so it and the invite code
+survive restarts. Settings are environment variables: `PCT_PORT` (7420),
+`PCT_HOST` (0.0.0.0), `PCT_DB` (path of the SQLite file, or `:memory:` to keep
+nothing), `PCT_SECRET` (generated once and saved if unset),
 `PCT_SESSION_NAME`, `PCT_PUBLIC_HOST` (address to put in the invite), and
 `PCT_TLS_KEY` / `PCT_TLS_CERT` to serve `wss://`.
+
+When you host from the app instead, the session is saved in the app's data
+folder (`%APPDATA%\Project Collaboration Tool\hosted-session.sqlite` on Windows), so hosting
+again brings back the same board and invite code.
 
 ## Playing together over Tailscale
 

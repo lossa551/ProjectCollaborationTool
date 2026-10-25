@@ -14,7 +14,7 @@ import {
 } from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -27,6 +27,12 @@ export const HelloMessage = z.object({
   secret: z.string(),
   name: z.string().trim().min(1).max(64),
   kind: ParticipantKind,
+  /**
+   * A random secret this person or agent keeps on their own machine. The same
+   * identity means the same participant id across reconnects and restarts,
+   * so tasks and locks stay theirs. Never shown to others.
+   */
+  identity: z.string().min(16).max(128),
 });
 
 export const PresenceUpdateMessage = z.object({
@@ -178,6 +184,7 @@ export const ErrorCode = z.enum([
   'not_found',
   'locked',
   'not_allowed',
+  'replaced',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -209,6 +216,8 @@ export const CloseCode = {
   protocolMismatch: 4002,
   helloTimeout: 4003,
   serverShutdown: 4004,
+  /** The same identity connected again from somewhere else. */
+  replaced: 4005,
 } as const;
 
 function parse<T>(schema: z.ZodType<T>, raw: string): T | null {

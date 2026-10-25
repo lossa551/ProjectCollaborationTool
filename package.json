@@ -8,7 +8,7 @@
     "apps/desktop"
   ],
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "npm run build -w @pct/shared && npm run build -w @pct/server && npm run build -w @pct/desktop",

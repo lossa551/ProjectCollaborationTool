@@ -12,8 +12,9 @@ import {
   decodeInvite,
   encodeInvite,
 } from '@pct/shared';
-import { findShareableAddress, startServer, type RunningServer } from '@pct/server';
+import { SqliteStorage, findShareableAddress, startServer, type RunningServer } from '@pct/server';
 import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
+import { hostedSessionPath, loadIdentity } from './identity';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 
 // The main process owns the session connection (and, when hosting, the
@@ -51,12 +52,20 @@ async function host({ name, sessionName }: HostRequest): Promise<Result> {
   try {
     client.disconnect();
     await stopHosting();
-    const options = { sessionName: sessionName || 'New session', log: console.log };
+    // The hosted session is saved on this PC: the board, locks and invite code
+    // are still there the next time you host.
+    const storage = new SqliteStorage(hostedSessionPath());
+    const options = { sessionName: sessionName || undefined, storage, log: console.log };
     try {
-      hosted = await startServer({ ...options, port: DEFAULT_PORT });
+      try {
+        hosted = await startServer({ ...options, port: DEFAULT_PORT });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
+        hosted = await startServer({ ...options, port: 0 });
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
-      hosted = await startServer({ ...options, port: 0 });
+      await storage.close();
+      throw error;
     }
     const shareable = findShareableAddress();
     const url = `ws://${shareable.address}:${hosted.port}${SOCKET_PATH}`;
@@ -66,7 +75,7 @@ async function host({ name, sessionName }: HostRequest): Promise<Result> {
       addressSource: shareable.source,
       port: hosted.port,
     };
-    client.connect({ url: hosted.localUrl, secret: hosted.secret, name });
+    client.connect({ url: hosted.localUrl, secret: hosted.secret, name, identity: loadIdentity() });
     return { ok: true };
   } catch (error) {
     await stopHosting();
@@ -78,7 +87,7 @@ async function joinSession({ name, invite }: JoinRequest): Promise<Result> {
   const decoded = decodeInvite(invite);
   if (!decoded) return { ok: false, error: 'That is not a valid invite code.' };
   await stopHosting();
-  client.connect({ url: decoded.url, secret: decoded.secret, name });
+  client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() });
   return { ok: true };
 }
 
