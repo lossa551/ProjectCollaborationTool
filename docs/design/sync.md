@@ -46,9 +46,19 @@ Run the same server package on a VPS or container, point both apps at its
 address. Nothing in the app changes. Things to add then: backups, real accounts
 instead of invite secrets, and running agents server-side if wanted.
 
-## Still open
+## Decided 2026-10-25
 
-- Whether the friend reaching Martin's PC through Tailscale is OK, or port
-  forwarding is preferred.
-- What happens when Martin's PC (the host) is off: friend works offline and
-  syncs later, or the session is simply unavailable.
+- **Reaching the host:** Tailscale. The friend joins Martin's tailnet and
+  connects to the server's Tailscale address. No router port forwarding.
+- **Host offline:** clients keep working from their local cache and sync when
+  the server is back.
+  - Planning docs and memory: edited offline in the local Yjs copy, merged
+    automatically on reconnect.
+  - Tasks and comments: queued as events, sent in order on reconnect; the
+    server rejects or flags any that conflict (e.g. a task moved by both).
+  - Locks: cannot be granted offline. Soft locks are recorded locally and
+    checked on reconnect; editing a binary asset that needs an exclusive lock
+    is blocked (or warned, with a clear "unlocked edit" flag) until the server
+    confirms the lock.
+  - Git work is unaffected; it goes to GitHub directly.
+  - The title bar shows "Offline, N changes waiting to sync".
