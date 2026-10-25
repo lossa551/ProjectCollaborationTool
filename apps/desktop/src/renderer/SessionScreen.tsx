@@ -3,11 +3,20 @@ import type { Activity, Participant } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
+import { LocksScreen } from './Locks';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
-// Nav items from docs/design/interface.md. Only the session board exists so far.
-const NAV = ['Session board', 'Planning space', 'Locks and GitHub', 'Agents', 'Agent chat', 'Project memory'];
+// Nav items from docs/design/interface.md; the ones without a view are still to come.
+type View = 'board' | 'locks';
+const NAV: { label: string; view?: View }[] = [
+  { label: 'Session board', view: 'board' },
+  { label: 'Planning space' },
+  { label: 'Locks and GitHub', view: 'locks' },
+  { label: 'Agents' },
+  { label: 'Agent chat' },
+  { label: 'Project memory' },
+];
 
 const STATUS_LABEL = {
   idle: 'Not connected',
@@ -23,6 +32,8 @@ export function SessionScreen({ state }: { state: AppState }) {
   const editable = session.status === 'connected';
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [view, setView] = useState<View>('board');
+  const abandoned = session.locks.filter((l) => l.abandoned).length;
   const selected = session.tasks.find((t) => t.id === selectedId) ?? null;
 
   return (
@@ -48,26 +59,55 @@ export function SessionScreen({ state }: { state: AppState }) {
       </header>
 
       <nav className="sidebar">
-        {NAV.map((item, i) => (
-          <button key={item} className={i === 0 ? 'nav active' : 'nav'} disabled={i !== 0} title={i === 0 ? undefined : 'Coming soon'}>
-            {item}
+        {NAV.map((item) => (
+          <button
+            key={item.label}
+            className={item.view === view ? 'nav active' : 'nav'}
+            disabled={!item.view}
+            title={item.view ? undefined : 'Coming soon'}
+            onClick={() => item.view && setView(item.view)}
+          >
+            {item.label}
+            {item.view === 'locks' && abandoned > 0 && <span className="nav-count">{abandoned}</span>}
           </button>
         ))}
       </nav>
 
       <main className="content">
         <Banner state={state} />
-        <Board
-          tasks={session.tasks}
-          participants={participants}
-          editable={editable}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
+        {view === 'board' ? (
+          <Board
+            tasks={session.tasks}
+            locks={session.locks}
+            participants={participants}
+            editable={editable}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
+        ) : (
+          <LocksScreen
+            locks={session.locks}
+            rules={session.lockRules}
+            tasks={session.tasks}
+            participants={participants}
+            youId={session.you?.id ?? null}
+            editable={editable}
+            onOpenTask={setSelectedId}
+          />
+        )}
       </main>
 
       {selected ? (
-        <TaskDetail task={selected} participants={participants} editable={editable} onClose={() => setSelectedId(null)} />
+        <TaskDetail
+          task={selected}
+          tasks={session.tasks}
+          participants={participants}
+          locks={session.locks}
+          lockRules={session.lockRules}
+          youId={session.you?.id ?? null}
+          editable={editable}
+          onClose={() => setSelectedId(null)}
+        />
       ) : (
         <aside className="side-panel">
           <People participants={participants} youId={session.you?.id ?? null} />

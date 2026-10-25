@@ -1,14 +1,31 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { STAGE_LABELS, TaskStage, type Participant, type Task, type TaskChanges } from '@pct/shared';
+import {
+  STAGE_LABELS,
+  TaskStage,
+  type Lock,
+  type LockRules,
+  type Participant,
+  type Task,
+  type TaskChanges,
+} from '@pct/shared';
+import { LockForm, LockList } from './Locks';
 
 export function TaskDetail({
   task,
+  tasks,
   participants,
+  locks,
+  lockRules,
+  youId,
   editable,
   onClose,
 }: {
   task: Task;
+  tasks: Task[];
   participants: Participant[];
+  locks: Lock[];
+  lockRules: LockRules;
+  youId: string | null;
   editable: boolean;
   onClose: () => void;
 }) {
@@ -33,6 +50,7 @@ export function TaskDetail({
     if (Object.keys(changes).length > 0) update(changes);
   };
 
+  const taskLocks = locks.filter((l) => l.taskId === task.id);
   const ownerOffline = task.owner && !participants.some((p) => p.id === task.owner!.id);
 
   return (
@@ -87,6 +105,23 @@ export function TaskDetail({
           />
         </label>
       </form>
+      <section>
+        <h3 className="section-title">Locks</h3>
+        {taskLocks.length > 0 ? (
+          <LockList
+            locks={taskLocks}
+            allLocks={locks}
+            tasks={tasks}
+            participants={participants}
+            youId={youId}
+            editable={editable}
+            compact
+          />
+        ) : (
+          <p className="muted small">No files locked for this task.</p>
+        )}
+        <LockForm key={task.id} tasks={tasks} rules={lockRules} editable={editable} taskId={task.id} />
+      </section>
       <p className="muted small">
         Created {new Date(task.createdAt).toLocaleString()} · changed {task.version - 1} times
       </p>

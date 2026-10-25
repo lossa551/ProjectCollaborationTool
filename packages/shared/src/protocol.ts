@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   Activity,
+  Lock,
+  LockRules,
   Participant,
   ParticipantKind,
   PresenceStatus,
@@ -12,7 +14,7 @@ import {
 } from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -62,6 +64,30 @@ export const TaskDeleteMessage = z.object({
   taskId: z.string(),
 });
 
+export const LockAcquireMessage = z.object({
+  type: z.literal('lock.acquire'),
+  path: z.string().min(1).max(260),
+  taskId: z.string().nullable().optional(),
+  /** Ask for an exclusive lock even if the rules would give a soft one. */
+  exclusive: z.boolean().optional(),
+});
+
+export const LockReleaseMessage = z.object({
+  type: z.literal('lock.release'),
+  lockId: z.string(),
+});
+
+/** Frees an abandoned lock held by someone else. */
+export const LockRecoverMessage = z.object({
+  type: z.literal('lock.recover'),
+  lockId: z.string(),
+});
+
+export const LockRulesUpdateMessage = z.object({
+  type: z.literal('lock.rules.update'),
+  rules: LockRules,
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PresenceUpdateMessage,
@@ -69,6 +95,10 @@ export const ClientMessage = z.discriminatedUnion('type', [
   TaskCreateMessage,
   TaskUpdateMessage,
   TaskDeleteMessage,
+  LockAcquireMessage,
+  LockReleaseMessage,
+  LockRecoverMessage,
+  LockRulesUpdateMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -81,6 +111,8 @@ export const WelcomeMessage = z.object({
   session: SessionInfo,
   participants: z.array(Participant),
   tasks: z.array(Task),
+  locks: z.array(Lock),
+  lockRules: LockRules,
   /** Most recent activity, oldest first. */
   activity: z.array(Activity),
 });
@@ -112,6 +144,21 @@ export const TaskRemovedMessage = z.object({
   taskId: z.string(),
 });
 
+export const LockChangedMessage = z.object({
+  type: z.literal('lock.changed'),
+  lock: Lock,
+});
+
+export const LockRemovedMessage = z.object({
+  type: z.literal('lock.removed'),
+  lockId: z.string(),
+});
+
+export const LockRulesChangedMessage = z.object({
+  type: z.literal('lock.rules.changed'),
+  rules: LockRules,
+});
+
 export const ActivityMessage = z.object({
   type: z.literal('activity'),
   entry: Activity,
@@ -129,6 +176,8 @@ export const ErrorCode = z.enum([
   'not_joined',
   'already_joined',
   'not_found',
+  'locked',
+  'not_allowed',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -145,6 +194,9 @@ export const ServerMessage = z.discriminatedUnion('type', [
   PresenceMessage,
   TaskChangedMessage,
   TaskRemovedMessage,
+  LockChangedMessage,
+  LockRemovedMessage,
+  LockRulesChangedMessage,
   ActivityMessage,
   PongMessage,
   ErrorMessage,

@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type FormEvent } from 'react';
-import { STAGE_LABELS, TaskStage, type Participant, type Task } from '@pct/shared';
+import { STAGE_LABELS, TaskStage, type Lock, type Participant, type Task } from '@pct/shared';
 import { Avatar } from './Avatar';
 
 const STAGES = TaskStage.options;
@@ -7,12 +7,14 @@ const DRAG_TYPE = 'application/x-pct-task';
 
 export function Board({
   tasks,
+  locks,
   participants,
   editable,
   selectedId,
   onSelect,
 }: {
   tasks: Task[];
+  locks: Lock[];
   participants: Participant[];
   editable: boolean;
   selectedId: string | null;
@@ -53,6 +55,7 @@ export function Board({
                 <TaskCard
                   key={task.id}
                   task={task}
+                  locks={locks.filter((l) => l.taskId === task.id)}
                   ownerOnline={!!task.owner && participants.some((p) => p.id === task.owner!.id)}
                   draggable={editable}
                   selected={task.id === selectedId}
@@ -70,12 +73,14 @@ export function Board({
 
 function TaskCard({
   task,
+  locks,
   ownerOnline,
   draggable,
   selected,
   onSelect,
 }: {
   task: Task;
+  locks: Lock[];
   ownerOnline: boolean;
   draggable: boolean;
   selected: boolean;
@@ -101,6 +106,11 @@ function TaskCard({
           </span>
         ) : (
           <span className="muted">Unassigned</span>
+        )}
+        {locks.length > 0 && (
+          <span className={locks.some((l) => l.abandoned) ? 'warning' : 'muted'} title={locks.map((l) => l.path).join('\n')}>
+            {locks.length} {locks.length === 1 ? 'lock' : 'locks'}
+          </span>
         )}
         {task.scope.length > 0 && (
           <span className="muted" title={task.scope.join('\n')}>

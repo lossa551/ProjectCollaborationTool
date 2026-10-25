@@ -1,4 +1,4 @@
-import type { SessionState, TaskChanges, TaskStage } from '@pct/shared';
+import type { LockRules, SessionState, TaskChanges, TaskStage } from '@pct/shared';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -53,6 +53,10 @@ export interface PctApi {
   createTask(title: string, stage: TaskStage): void;
   updateTask(taskId: string, changes: TaskChanges): void;
   deleteTask(taskId: string): void;
+  acquireLock(path: string, options: { taskId: string | null; exclusive: boolean }): void;
+  releaseLock(lockId: string): void;
+  recoverLock(lockId: string): void;
+  setLockRules(rules: LockRules): void;
   copyText(text: string): void;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
@@ -70,6 +74,10 @@ export const Channel = {
   createTask: 'pct:create-task',
   updateTask: 'pct:update-task',
   deleteTask: 'pct:delete-task',
+  acquireLock: 'pct:acquire-lock',
+  releaseLock: 'pct:release-lock',
+  recoverLock: 'pct:recover-lock',
+  setLockRules: 'pct:set-lock-rules',
   copyText: 'pct:copy-text',
   state: 'pct:state',
   getUpdate: 'pct:get-update',

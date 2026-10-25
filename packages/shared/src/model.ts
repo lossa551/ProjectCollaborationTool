@@ -77,20 +77,48 @@ export const Activity = z.object({
 });
 export type Activity = z.infer<typeof Activity>;
 
-// Lock shapes from docs/design. The server does not serve them yet (issue #3);
-// they are here so both sides agree on them from the start.
-
 /** Exclusive locks block others (binary assets); soft locks only warn (code). */
 export const LockKind = z.enum(['exclusive', 'soft']);
 export type LockKind = z.infer<typeof LockKind>;
 
 export const Lock = z.object({
+  id: z.string(),
+  /** Repo-relative path with forward slashes. */
   path: z.string(),
   kind: LockKind,
-  holderId: z.string(),
+  /** Snapshot like a task owner, so the lock reads right while the holder is away. */
+  holder: TaskOwner,
   taskId: z.string().nullable(),
   acquiredAt: z.number(),
-  /** Last heartbeat from the holder; a stale heartbeat makes the lock recoverable. */
+  /** Last time the holder was seen connected. */
   heartbeatAt: z.number(),
+  /** The holder stopped answering; anyone may recover the lock. */
+  abandoned: z.boolean(),
 });
 export type Lock = z.infer<typeof Lock>;
+
+export const LockRules = z.object({
+  /** Files matching these patterns need an exclusive lock; everything else gets a soft lock. */
+  exclusivePatterns: z.array(z.string().trim().min(1).max(200)).max(200),
+});
+export type LockRules = z.infer<typeof LockRules>;
+
+/**
+ * Binary formats that can never be merged. Engine integrations add their own
+ * (e.g. .tscn for Godot, .uasset for Unreal); users can edit the list.
+ */
+export const DEFAULT_LOCK_RULES: LockRules = {
+  exclusivePatterns: [
+    '*.psd',
+    '*.kra',
+    '*.blend',
+    '*.fbx',
+    '*.png',
+    '*.jpg',
+    '*.wav',
+    '*.ogg',
+    '*.mp3',
+    '*.sqlite',
+    '*.db',
+  ],
+};
