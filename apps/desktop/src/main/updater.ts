@@ -2,11 +2,12 @@ import { app } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import type { UpdateState } from '../common/api';
 
-// Keeps the installed app current from GitHub Releases. New versions download
-// in the background; the Update button restarts into them. Builds run from a
-// clone (npm run desktop) are not installed, so they cannot update this way.
+// Keeps the installed app current from GitHub Releases, which get a new
+// version on every push to main. New versions download in the background; the
+// Update button restarts into them. Builds run from a clone (npm run desktop)
+// are not installed, so they cannot update this way.
 
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 15 * 60 * 1000;
 
 let state: UpdateState = app.isPackaged
   ? { status: 'idle' }
@@ -20,7 +21,7 @@ const set = (next: UpdateState) => {
 
 export const getUpdateState = () => state;
 
-export function startUpdater(onChange: (state: UpdateState) => void) {
+export function startUpdater(onChange: (state: UpdateState) => void, onReady: (version: string) => void) {
   listener = onChange;
   if (!app.isPackaged) return;
 
@@ -32,7 +33,10 @@ export function startUpdater(onChange: (state: UpdateState) => void) {
   autoUpdater.on('download-progress', (progress) => {
     if (state.status === 'downloading') set({ ...state, percent: Math.round(progress.percent) });
   });
-  autoUpdater.on('update-downloaded', (info) => set({ status: 'ready', version: info.version }));
+  autoUpdater.on('update-downloaded', (info) => {
+    set({ status: 'ready', version: info.version });
+    onReady(info.version);
+  });
   autoUpdater.on('error', (error) => {
     // Before the first release is published there is nothing to update to.
     if (/404|no published versions/i.test(error.message)) set({ status: 'up-to-date' });

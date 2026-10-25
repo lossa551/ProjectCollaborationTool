@@ -29,7 +29,8 @@ Everything happens in the app: **Host session** starts the session server on
 your PC and shows the invite code to send; **Join session** takes a code.
 
 Updates download in the background from GitHub Releases. When one is ready,
-the button at the top of the window says **Restart to update**; until then it
+Windows shows a notification and the button at the top of the window says
+**Restart to update**; until then it
 shows your version and can check again. If you are hosting, restarting ends
 the session until you host again.
 
@@ -72,12 +73,15 @@ invite code contains the session secret: anyone with it can join.
 
 ## Releasing a new version
 
-1. Bump `version` in `apps/desktop/package.json` (for example to `0.2.0`) and
-   merge that to `main`.
-2. Tag the commit and push the tag: `git tag v0.2.0 && git push origin v0.2.0`.
+Every push to `main` (except docs-only changes) publishes a new release: the
+Release workflow builds the installer on Windows and puts it on GitHub
+Releases. Installed apps check every 15 minutes, download it, show a Windows
+notification and turn the button into **Restart to update**.
 
-The Release workflow builds the installer on Windows and publishes it as a
-GitHub Release, which installed apps pick up. Every PR also builds the
-installer; download it from the CI run's artifacts to try a change before
-releasing. To build one locally on Windows: `npm run package -w @pct/desktop`
-(output in `apps/desktop/release`).
+The version is the major.minor from `apps/desktop/package.json` plus the
+workflow's run number, for example `0.1.12`. Change major or minor there when
+you want a bigger step; the last number counts up on its own.
+
+Every PR also builds the installer; download it from the CI run's artifacts to
+try a change before merging. To build one locally on Windows:
+`npm run package -w @pct/desktop` (output in `apps/desktop/release`).
