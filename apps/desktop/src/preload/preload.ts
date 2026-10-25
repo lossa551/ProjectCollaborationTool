@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import { Channel, type AppState, type PctApi } from '../common/api';
+import { Channel, type AppState, type PctApi, type UpdateInfo } from '../common/api';
 
 const api: PctApi = {
   getState: () => ipcRenderer.invoke(Channel.getState),
@@ -15,6 +15,13 @@ const api: PctApi = {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);
     return () => ipcRenderer.off(Channel.state, handler);
+  },
+  getUpdate: () => ipcRenderer.invoke(Channel.getUpdate),
+  update: () => ipcRenderer.invoke(Channel.update),
+  onUpdate(listener) {
+    const handler = (_event: IpcRendererEvent, info: UpdateInfo) => listener(info);
+    ipcRenderer.on(Channel.updateState, handler);
+    return () => ipcRenderer.off(Channel.updateState, handler);
   },
 };
 

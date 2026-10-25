@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Notification, shell } from 'electron';
 import { join } from 'node:path';
 import WS from 'ws';
 import {
@@ -12,6 +12,7 @@ import {
 } from '@pct/shared';
 import { findShareableAddress, startServer, type RunningServer } from '@pct/server';
 import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
+import { applyUpdate, getUpdateState, startUpdater } from './updater';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. Later it will also run
@@ -142,9 +143,38 @@ ipcMain.on(Channel.deleteTask, (_event, taskId: unknown) => {
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
+const updateInfo = () => ({ version: app.getVersion(), state: getUpdateState() });
+ipcMain.handle(Channel.getUpdate, () => updateInfo());
+// Hosting stops cleanly before the restart, so the friend sees the host leave.
+ipcMain.handle(Channel.update, () => applyUpdate(leave));
+
+// A second launch (say, from the Start menu) focuses this window instead of
+// starting another copy that would fight over the session port.
+const firstInstance = app.requestSingleInstanceLock();
+if (!firstInstance) app.quit();
+function focusWindow() {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+}
+app.on('second-instance', focusWindow);
+// Windows shows notifications under this id; it matches the installer's appId.
+app.setAppUserModelId('com.lossa551.projectcollaborationtool');
 
 void app.whenReady().then(() => {
+  if (!firstInstance) return;
   createWindow();
+  startUpdater(
+    () => window?.webContents.send(Channel.updateState, updateInfo()),
+    (version) => {
+      const notice = new Notification({
+        title: 'Update ready',
+        body: `Version ${version} is downloaded. Click Restart to update in the app when it suits you.`,
+      });
+      notice.on('click', focusWindow);
+      notice.show();
+    },
+  );
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

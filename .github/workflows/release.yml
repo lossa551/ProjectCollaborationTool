@@ -1,0 +1,55 @@
+name: Release
+
+# Every push to main builds the Windows installer and publishes it as a GitHub
+# Release. Installed apps find it there, download it and offer the update.
+# The version is apps/desktop's major.minor plus this workflow's run number,
+# so it always goes up: bump major or minor in package.json by hand when you
+# want to, the patch takes care of itself.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Set the version
+        shell: bash
+        run: |
+          base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
+          npm version "$base.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
+          echo "VERSION=$base.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+      # The release is created here as a draft, on this exact commit, so that
+      # electron-builder's parallel uploads all find it instead of racing to
+      # create it, and installed apps only see it once every file is there.
+      - name: Create a draft release
+        shell: bash
+        run: gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npm run release -w @pct/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the release
+        shell: bash
+        run: gh release edit "v$VERSION" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

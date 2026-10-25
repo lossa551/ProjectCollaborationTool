@@ -4,6 +4,7 @@ import type { AppState, HostingInfo } from '../common/api';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
 import { TaskDetail } from './TaskDetail';
+import { UpdateButton } from './UpdateButton';
 
 // Nav items from docs/design/interface.md. Only the session board exists so far.
 const NAV = ['Session board', 'Planning space', 'Locks and GitHub', 'Agents', 'Agent chat', 'Project memory'];
@@ -29,6 +30,7 @@ export function SessionScreen({ state }: { state: AppState }) {
       <header className="titlebar">
         <strong>{session.session?.name ?? 'Session'}</strong>
         <span className={`status status-${session.status}`}>{STATUS_LABEL[session.status]}</span>
+        <UpdateButton hosting={!!hosting} />
         <div className="avatars">
           {participants.map((p) => (
             <Avatar key={p.id} name={p.name} kind={p.kind} status={p.status} />
