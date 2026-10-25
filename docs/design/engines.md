@@ -42,9 +42,8 @@ adapter is written against MCP generically with the server as a setting.
 ## Build order (2026-10-25)
 
 Martin builds his own games in Godot; the shared project with his friend will
-likely start in Unreal (5.8). Unreal adapter first, since the collaboration
-features get their first real use there; Godot adapter second; Summer Engine
-after.
+likely start in Unreal (5.8). Martin chose: Godot and Summer Engine adapters
+first (Summer is Godot-based, so they share most of the work), Unreal after.
 
 ## Open
 
