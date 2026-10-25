@@ -27,23 +27,58 @@ export const SessionInfo = z.object({
 });
 export type SessionInfo = z.infer<typeof SessionInfo>;
 
-// Task and lock shapes from docs/design. The server does not serve them yet;
-// they are here so both sides agree on them from the start.
-
 export const TaskStage = z.enum(['planning', 'implementing', 'review', 'testing', 'done']);
 export type TaskStage = z.infer<typeof TaskStage>;
 
+export const STAGE_LABELS: Record<TaskStage, string> = {
+  planning: 'Planning',
+  implementing: 'Implementing',
+  review: 'Review',
+  testing: 'Testing',
+  done: 'Done',
+};
+
+/**
+ * Who owns a task. Name and kind are kept so the card still reads right while
+ * the owner is offline. Participant ids are per connection until stable
+ * identities land (issue #4).
+ */
+export const TaskOwner = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: ParticipantKind,
+});
+export type TaskOwner = z.infer<typeof TaskOwner>;
+
+export const TaskTitle = z.string().trim().min(1).max(200);
+export const TaskScope = z.array(z.string().trim().min(1).max(260)).max(100);
+
 export const Task = z.object({
   id: z.string(),
-  title: z.string(),
+  title: TaskTitle,
   stage: TaskStage,
-  ownerId: z.string().nullable(),
+  owner: TaskOwner.nullable(),
   /** Paths the task is allowed to change (glob patterns). */
-  scope: z.array(z.string()),
+  scope: TaskScope,
   createdAt: z.number(),
   updatedAt: z.number(),
+  /** Bumped on every change; lets offline edits detect conflicts later. */
+  version: z.number().int(),
 });
 export type Task = z.infer<typeof Task>;
+
+/** One line in the activity feed. */
+export const Activity = z.object({
+  id: z.string(),
+  at: z.number(),
+  actorName: z.string().nullable(),
+  text: z.string(),
+  taskId: z.string().nullable(),
+});
+export type Activity = z.infer<typeof Activity>;
+
+// Lock shapes from docs/design. The server does not serve them yet (issue #3);
+// they are here so both sides agree on them from the start.
 
 /** Exclusive locks block others (binary assets); soft locks only warn (code). */
 export const LockKind = z.enum(['exclusive', 'soft']);

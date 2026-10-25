@@ -7,6 +7,9 @@ const api: PctApi = {
   join: (request) => ipcRenderer.invoke(Channel.join, request),
   leave: () => ipcRenderer.invoke(Channel.leave),
   setPresence: (status, focus) => ipcRenderer.send(Channel.setPresence, status, focus),
+  createTask: (title, stage) => ipcRenderer.send(Channel.createTask, title, stage),
+  updateTask: (taskId, changes) => ipcRenderer.send(Channel.updateTask, taskId, changes),
+  deleteTask: (taskId) => ipcRenderer.send(Channel.deleteTask, taskId),
   copyText: (text) => ipcRenderer.send(Channel.copyText, text),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);

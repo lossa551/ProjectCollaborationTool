@@ -1,4 +1,4 @@
-import type { Participant, ParticipantKind, PresenceStatus, SessionInfo } from './model.js';
+import type { Activity, Participant, ParticipantKind, PresenceStatus, SessionInfo, Task, TaskStage } from './model.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -20,6 +20,9 @@ export interface SessionState {
   you: Participant | null;
   session: SessionInfo | null;
   participants: Participant[];
+  tasks: Task[];
+  /** Most recent activity, oldest first. */
+  activity: Activity[];
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
 }
 
@@ -45,8 +48,20 @@ const INITIAL_STATE: SessionState = {
   you: null,
   session: null,
   participants: [],
+  tasks: [],
+  activity: [],
   error: null,
 };
+
+/** How many activity entries the client keeps. */
+export const ACTIVITY_LIMIT = 100;
+
+export interface TaskChanges {
+  title?: string;
+  stage?: TaskStage;
+  ownerId?: string | null;
+  scope?: string[];
+}
 
 // Closing with these codes means retrying will not help.
 const FATAL_CLOSE_CODES = new Set<number>([CloseCode.badSecret, CloseCode.protocolMismatch]);
@@ -94,6 +109,18 @@ export class SessionClient {
 
   setPresence(status: PresenceStatus, focus: string | null = null): void {
     this.send({ type: 'presence.update', status, focus });
+  }
+
+  createTask(title: string, options: { stage?: TaskStage; scope?: string[] } = {}): void {
+    this.send({ type: 'task.create', title, ...options });
+  }
+
+  updateTask(taskId: string, changes: TaskChanges): void {
+    this.send({ type: 'task.update', taskId, changes });
+  }
+
+  deleteTask(taskId: string): void {
+    this.send({ type: 'task.delete', taskId });
   }
 
   private open(): void {
@@ -145,6 +172,8 @@ export class SessionClient {
           you: message.you,
           session: message.session,
           participants: message.participants,
+          tasks: message.tasks,
+          activity: message.activity.slice(-ACTIVITY_LIMIT),
           error: null,
         });
         break;
@@ -170,6 +199,22 @@ export class SessionClient {
             p.id === message.participantId ? { ...p, status: message.status, focus: message.focus } : p,
           ),
         });
+        break;
+      case 'task.changed': {
+        const exists = this.state.tasks.some((t) => t.id === message.task.id);
+        this.setState({
+          ...this.state,
+          tasks: exists
+            ? this.state.tasks.map((t) => (t.id === message.task.id ? message.task : t))
+            : [...this.state.tasks, message.task],
+        });
+        break;
+      }
+      case 'task.removed':
+        this.setState({ ...this.state, tasks: this.state.tasks.filter((t) => t.id !== message.taskId) });
+        break;
+      case 'activity':
+        this.setState({ ...this.state, activity: [...this.state.activity, message.entry].slice(-ACTIVITY_LIMIT) });
         break;
       case 'error':
         this.setState({ ...this.state, error: { code: message.code, message: message.message } });

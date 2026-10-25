@@ -1,8 +1,18 @@
 import { z } from 'zod';
-import { Participant, ParticipantKind, PresenceStatus, SessionInfo } from './model.js';
+import {
+  Activity,
+  Participant,
+  ParticipantKind,
+  PresenceStatus,
+  SessionInfo,
+  Task,
+  TaskScope,
+  TaskStage,
+  TaskTitle,
+} from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -28,10 +38,37 @@ export const PingMessage = z.object({
   t: z.number(),
 });
 
+export const TaskCreateMessage = z.object({
+  type: z.literal('task.create'),
+  title: TaskTitle,
+  stage: TaskStage.optional(),
+  scope: TaskScope.optional(),
+});
+
+export const TaskUpdateMessage = z.object({
+  type: z.literal('task.update'),
+  taskId: z.string(),
+  changes: z.object({
+    title: TaskTitle.optional(),
+    stage: TaskStage.optional(),
+    /** A connected participant's id, or null to unassign. */
+    ownerId: z.string().nullable().optional(),
+    scope: TaskScope.optional(),
+  }),
+});
+
+export const TaskDeleteMessage = z.object({
+  type: z.literal('task.delete'),
+  taskId: z.string(),
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PresenceUpdateMessage,
   PingMessage,
+  TaskCreateMessage,
+  TaskUpdateMessage,
+  TaskDeleteMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -43,6 +80,9 @@ export const WelcomeMessage = z.object({
   you: Participant,
   session: SessionInfo,
   participants: z.array(Participant),
+  tasks: z.array(Task),
+  /** Most recent activity, oldest first. */
+  activity: z.array(Activity),
 });
 
 export const ParticipantJoinedMessage = z.object({
@@ -62,6 +102,21 @@ export const PresenceMessage = z.object({
   focus: z.string().nullable(),
 });
 
+export const TaskChangedMessage = z.object({
+  type: z.literal('task.changed'),
+  task: Task,
+});
+
+export const TaskRemovedMessage = z.object({
+  type: z.literal('task.removed'),
+  taskId: z.string(),
+});
+
+export const ActivityMessage = z.object({
+  type: z.literal('activity'),
+  entry: Activity,
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -73,6 +128,7 @@ export const ErrorCode = z.enum([
   'protocol_mismatch',
   'not_joined',
   'already_joined',
+  'not_found',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -87,6 +143,9 @@ export const ServerMessage = z.discriminatedUnion('type', [
   ParticipantJoinedMessage,
   ParticipantLeftMessage,
   PresenceMessage,
+  TaskChangedMessage,
+  TaskRemovedMessage,
+  ActivityMessage,
   PongMessage,
   ErrorMessage,
 ]);
