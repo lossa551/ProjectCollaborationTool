@@ -95,6 +95,7 @@ export interface AppState {
    * before taking in the shared text (see LiveText).
    */
   textEdits: number;
+  memoryExport: MemoryExportState | null;
 }
 
 export interface HandoffRequest {
@@ -136,6 +137,33 @@ export interface SavedSessionInfo {
   lastUsedAt: number;
 }
 
+/** A backup of a hosted session's database. */
+export interface BackupInfo {
+  /** File name: the day it was made, and whether it was saved before a restore. */
+  name: string;
+  /** daily: made on host start or while hosting; before-restore: the state just before a restore. */
+  kind: 'daily' | 'before-restore';
+  path: string;
+  madeAt: number;
+  bytes: number;
+}
+
+export interface BackupFolder {
+  folder: string;
+  /** False while backups go to the app's own data folder. */
+  custom: boolean;
+}
+
+/** Writing project memory to your project folder; null without one. */
+export interface MemoryExportState {
+  /** The file, relative to your project folder. */
+  path: string;
+  /** Rewritten whenever an entry changes. */
+  auto: boolean;
+  lastWrittenAt: number | null;
+  error: string | null;
+}
+
 export interface ResumeRequest {
   name: string;
   key: string;
@@ -167,6 +195,13 @@ export interface PctApi {
   resume(request: ResumeRequest): Promise<Result>;
   /** Asks, then removes the session from the list (and a hosted session's saved board). */
   forgetSession(key: string): Promise<Result>;
+  /** Backups of a hosted session, newest first. */
+  listBackups(key: string): Promise<BackupInfo[]>;
+  /** Asks, then puts a hosted session back to how it was in the backup. */
+  restoreBackup(key: string, path: string): Promise<Result>;
+  getBackupFolder(): Promise<BackupFolder>;
+  /** choose: asks for a folder (say, in OneDrive or on a second drive); otherwise goes back to the default. */
+  setBackupFolder(choose: boolean): Promise<Result>;
   leave(): Promise<void>;
   setPresence(status: 'active' | 'idle' | 'away', focus: string | null): void;
   createTask(title: string, stage: TaskStage): void;
@@ -212,6 +247,10 @@ export interface PctApi {
   approvePlan(approval: PlanApproval): Promise<Result>;
   /** Changes project memory; works offline and syncs later. */
   editMemory(op: MemoryOp): void;
+  /** Writes project memory to docs/project-memory.md in your project folder, and keeps it up to date from then on. */
+  exportMemory(): Promise<ResultWith<string>>;
+  /** Stops (or starts again) rewriting the file when an entry changes. */
+  setMemoryAutoExport(on: boolean): void;
   /** Records a test result for one of a task's acceptance criteria. */
   verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
   /** Scans your project folder for bloat and shares the result with the session. */
@@ -236,6 +275,12 @@ export const Channel = {
   listSessions: 'pct:list-sessions',
   resume: 'pct:resume',
   forgetSession: 'pct:forget-session',
+  listBackups: 'pct:list-backups',
+  restoreBackup: 'pct:restore-backup',
+  getBackupFolder: 'pct:get-backup-folder',
+  setBackupFolder: 'pct:set-backup-folder',
+  exportMemory: 'pct:export-memory',
+  setMemoryAutoExport: 'pct:set-memory-auto-export',
   leave: 'pct:leave',
   setPresence: 'pct:set-presence',
   createTask: 'pct:create-task',

@@ -39,6 +39,7 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
           <h1>Project memory</h1>
           <p className="muted">Shared with everyone in the session, and given to every agent with its instructions.</p>
         </div>
+        <MemoryExport state={state} />
       </header>
       <div className="tabs">
         {MemoryKind.options.map((kind) => {
@@ -64,6 +65,30 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
       ) : (
         <MemoryList key={tab} kind={tab} state={state} onOpenChat={onOpenChat} />
       )}
+    </div>
+  );
+}
+
+/** Writing project memory to docs/project-memory.md in your project folder. */
+function MemoryExport({ state }: { state: AppState }) {
+  const [error, setError] = useState<string | null>(null);
+  const info = state.memoryExport;
+  if (!info) return null;
+  const write = async () => {
+    const result = await window.pct.exportMemory();
+    setError(result.ok ? null : result.error);
+  };
+  const shown = error ?? info.error;
+  return (
+    <div className="memory-export small">
+      <button type="button" className="secondary" onClick={() => void write()} title={`Write every entry to ${info.path} in your project folder, for git and for agents that read repo files`}>
+        Write to {info.path}
+      </button>
+      <label className="check muted" title="Rewrite the file in your project folder whenever an entry changes">
+        <input type="checkbox" checked={info.auto} onChange={(e) => window.pct.setMemoryAutoExport(e.target.checked)} />
+        Keep it up to date
+      </label>
+      {shown && <span className="error">{shown}</span>}
     </div>
   );
 }

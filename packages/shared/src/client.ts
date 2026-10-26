@@ -304,6 +304,11 @@ export class SessionClient {
     return applyMemoryOp(this.docs.memory, op, this.authorName());
   }
 
+  /** Whether a shared document has been merged with the server's copy since connecting. */
+  hasSynced(docId: DocId): boolean {
+    return this.synced.has(docId);
+  }
+
   /** Shares the result of a bloat check with the session. */
   shareBloat(report: BloatReport): void {
     this.send({ type: 'bloat.report', report });

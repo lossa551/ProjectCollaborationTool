@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { SqliteStorage } from '@pct/server';
+import { SqliteStorage, inspectBackup } from '@pct/server';
 import type { Lock, Task } from '@pct/shared';
 
 const dirs: string[] = [];
@@ -103,5 +103,35 @@ describe('SqliteStorage', () => {
     expect(await storage.listTasks()).toEqual([]);
     await storage.close();
     await storage.close();
+  });
+
+  it('backs up while open, and the copy holds everything', async () => {
+    const path = tempDb();
+    const live = new SqliteStorage(path);
+    await live.saveSession({ id: 's', name: 'Godot jam', createdAt: 1 });
+    await live.saveTask(task);
+    await live.saveDoc('memory', new Uint8Array([7, 8]));
+    const copy = join(path, '..', 'backups', 'one.sqlite');
+    await live.backup(copy);
+    // Still usable after the backup.
+    await live.saveTask({ ...task, id: 't2' });
+    await live.close();
+
+    expect(inspectBackup(copy)).toEqual({ id: 's', name: 'Godot jam', createdAt: 1 });
+    expect(existsSync(`${copy}.partial`)).toBe(false);
+    const restored = new SqliteStorage(copy);
+    expect(await restored.listTasks()).toEqual([task]);
+    expect((await restored.loadDocs()).memory).toEqual(new Uint8Array([7, 8]));
+    await restored.close();
+  });
+
+  it('refuses a backup that is not a session database', async () => {
+    const path = tempDb();
+    const empty = new SqliteStorage(path);
+    await empty.close();
+    expect(() => inspectBackup(path)).toThrow(/no session/);
+    const junk = join(path, '..', 'junk.sqlite');
+    writeFileSync(junk, 'not a database at all, just some text that is long enough');
+    expect(() => inspectBackup(junk)).toThrow();
   });
 });
