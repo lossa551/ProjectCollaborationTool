@@ -8,8 +8,10 @@ Working so far: hosting a session on your PC or joining one by invite code,
 live presence, a shared task board (five stages, drag to move, assign to a
 person or agent, allowed paths, activity feed), and file locks (exclusive for
 files matching the lock rules, soft for the rest, abandoned locks can be
-recovered). Saved storage, offline sync, GitHub, agents and engine
-integrations come next; see the GitHub issues.
+recovered). Sessions are saved, everyone keeps the same identity across
+reconnects, and tasks can be edited while the host is offline (changes sync
+when it is back). GitHub, agents and engine integrations come next; see the
+GitHub issues.
 
 ## Layout
 

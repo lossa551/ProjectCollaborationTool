@@ -7,6 +7,7 @@ import {
   type ClientMessage,
   type ErrorCode,
   type ServerMessage,
+  type SessionSnapshot,
 } from './protocol.js';
 
 // Connects one participant to a session server and keeps a live copy of the
@@ -26,6 +27,8 @@ export interface SessionState {
   lockRules: LockRules;
   /** Most recent activity, oldest first. */
   activity: Activity[];
+  /** Task changes made while offline, waiting to be sent. */
+  pending: number;
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
 }
 
@@ -49,6 +52,8 @@ export interface SessionClientOptions {
   createSocket?: (url: string) => WebSocket;
   /** Reconnect delays in ms; the last one repeats. */
   backoff?: number[];
+  /** How long to wait for a connection to open before trying again. Default 8 s. */
+  connectTimeoutMs?: number;
 }
 
 type Listener = (state: SessionState) => void;
@@ -63,8 +68,11 @@ const INITIAL_STATE: SessionState = {
   locks: [],
   lockRules: DEFAULT_LOCK_RULES,
   activity: [],
+  pending: 0,
   error: null,
 };
+
+type TaskMessage = SessionSnapshot['queue'][number];
 
 /** How many activity entries the client keeps. */
 export const ACTIVITY_LIMIT = 100;
@@ -88,10 +96,14 @@ export class SessionClient {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly createSocket: (url: string) => WebSocket;
   private readonly backoff: number[];
+  private readonly connectTimeoutMs: number;
+  /** Offline task changes, in the order they were made. */
+  private queue: TaskMessage[] = [];
 
   constructor(options: SessionClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
     this.backoff = options.backoff ?? [500, 1000, 2000, 4000, 8000];
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 8000;
   }
 
   getState(): SessionState {
@@ -103,12 +115,42 @@ export class SessionClient {
     return () => this.listeners.delete(listener);
   }
 
-  connect(options: JoinOptions): void {
+  /**
+   * Joins a session. With a snapshot from an earlier run, the board shows
+   * right away (even if the server is unreachable) and changes made offline
+   * are sent once the server answers.
+   */
+  connect(options: JoinOptions, snapshot?: SessionSnapshot): void {
     this.disconnect();
     this.join = options;
     this.attempt = 0;
-    this.setState({ ...INITIAL_STATE, status: 'connecting', url: options.url });
+    this.queue = snapshot ? [...snapshot.queue] : [];
+    this.setState({
+      ...INITIAL_STATE,
+      ...(snapshot && {
+        session: snapshot.session,
+        tasks: snapshot.tasks,
+        locks: snapshot.locks,
+        lockRules: snapshot.lockRules,
+        activity: snapshot.activity,
+      }),
+      pending: this.queue.length,
+      status: 'connecting',
+      url: options.url,
+    });
     this.open();
+  }
+
+  /** What to save so the next connect can start from here; null before the first join. */
+  getSnapshot(): SessionSnapshot | null {
+    const { session, tasks, locks, lockRules, activity } = this.state;
+    if (!session) return null;
+    return { session, tasks, locks, lockRules, activity, queue: [...this.queue] };
+  }
+
+  /** Task changes are allowed while connected, and offline once we know the session. */
+  canEditTasks(): boolean {
+    return this.state.status === 'connected' || (this.join !== null && this.state.session !== null);
   }
 
   disconnect(): void {
@@ -125,15 +167,36 @@ export class SessionClient {
   }
 
   createTask(title: string, options: { stage?: TaskStage; scope?: string[] } = {}): void {
-    this.send({ type: 'task.create', title, ...options });
+    this.sendTask({ type: 'task.create', id: crypto.randomUUID(), title, ...options });
   }
 
   updateTask(taskId: string, changes: TaskChanges): void {
-    this.send({ type: 'task.update', taskId, changes });
+    const task = this.state.tasks.find((t) => t.id === taskId);
+    const expected: TaskChanges = {};
+    if (task) {
+      if (changes.title !== undefined) expected.title = task.title;
+      if (changes.stage !== undefined) expected.stage = task.stage;
+      if (changes.ownerId !== undefined) expected.ownerId = task.owner?.id ?? null;
+      if (changes.scope !== undefined) expected.scope = task.scope;
+    }
+    this.sendTask({ type: 'task.update', taskId, changes, expected });
   }
 
   deleteTask(taskId: string): void {
-    this.send({ type: 'task.delete', taskId });
+    this.sendTask({ type: 'task.delete', taskId });
+  }
+
+  /** Sends now when connected; otherwise applies the change locally and queues it. */
+  private sendTask(message: TaskMessage): void {
+    if (this.state.status === 'connected') {
+      this.send(message);
+      return;
+    }
+    if (!this.canEditTasks()) return;
+    // Owners need the server to check who is connected, so they wait for it.
+    if (message.type === 'task.update' && message.changes.ownerId !== undefined) return;
+    this.queue.push(message);
+    this.setState({ ...this.state, tasks: applyLocally(this.state.tasks, message), pending: this.queue.length });
   }
 
   acquireLock(path: string, options: { taskId?: string | null; exclusive?: boolean } = {}): void {
@@ -175,27 +238,48 @@ export class SessionClient {
       if (message) this.handle(message);
     });
 
-    socket.addEventListener('close', (event) => {
+    // Called once per socket however it goes down: a close, an error (Node's
+    // WebSocket reports a refused connection only as an error), or a timeout.
+    const down = (code: number, reason: string) => {
+      clearTimeout(connectTimer);
       if (socket !== this.socket) return;
       this.socket = null;
       if (!this.join) return;
-      if (FATAL_CLOSE_CODES.has(event.code)) {
+      if (FATAL_CLOSE_CODES.has(code)) {
         this.join = null;
         this.setState({
           ...this.state,
           status: 'closed',
-          error: this.state.error ?? { code: 'connection_lost', message: event.reason || 'Connection refused' },
+          error: this.state.error ?? { code: 'connection_lost', message: reason || 'Connection refused' },
         });
         return;
       }
       this.scheduleReconnect();
+    };
+
+    // An unreachable host (say, the host PC is off) can leave a connect attempt hanging.
+    const connectTimer = setTimeout(() => {
+      if (socket.readyState !== 0) return;
+      down(1006, 'Timed out');
+      socket.close();
+    }, this.connectTimeoutMs);
+
+    socket.addEventListener('open', () => clearTimeout(connectTimer));
+    socket.addEventListener('error', () => {
+      if (socket.readyState !== 1) down(1006, '');
     });
+    socket.addEventListener('close', (event) => down(event.code, event.reason));
   }
 
   private handle(message: ServerMessage): void {
     switch (message.type) {
-      case 'welcome':
+      case 'welcome': {
         this.attempt = 0;
+        // Changes queued for a different session (the invite now points
+        // somewhere else) must not be sent here.
+        if (this.state.session && this.state.session.id !== message.session.id) this.queue = [];
+        const queue = this.queue;
+        this.queue = [];
         this.setState({
           ...this.state,
           status: 'connected',
@@ -206,9 +290,13 @@ export class SessionClient {
           locks: message.locks,
           lockRules: message.lockRules,
           activity: message.activity.slice(-ACTIVITY_LIMIT),
+          pending: 0,
           error: null,
         });
+        // Replay offline changes in order; the server checks each for conflicts.
+        for (const queued of queue) this.send(queued);
         break;
+      }
       case 'participant.joined':
         this.setState({
           ...this.state,
@@ -300,5 +388,40 @@ export class SessionClient {
   private setState(next: SessionState): void {
     this.state = next;
     for (const listener of this.listeners) listener(next);
+  }
+}
+
+/** The local effect of a task change, shown until the server confirms it. */
+function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
+  switch (message.type) {
+    case 'task.create': {
+      const now = Date.now();
+      return [
+        ...tasks,
+        {
+          id: message.id ?? crypto.randomUUID(),
+          title: message.title,
+          stage: message.stage ?? 'planning',
+          owner: null,
+          scope: message.scope ?? [],
+          createdAt: now,
+          updatedAt: now,
+          version: 0,
+        },
+      ];
+    }
+    case 'task.update':
+      return tasks.map((t) =>
+        t.id === message.taskId
+          ? {
+              ...t,
+              title: message.changes.title ?? t.title,
+              stage: message.changes.stage ?? t.stage,
+              scope: message.changes.scope ?? t.scope,
+            }
+          : t,
+      );
+    case 'task.delete':
+      return tasks.filter((t) => t.id !== message.taskId);
   }
 }

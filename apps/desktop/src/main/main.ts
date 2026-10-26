@@ -14,6 +14,7 @@ import {
 } from '@pct/shared';
 import { SqliteStorage, findShareableAddress, startServer, type RunningServer } from '@pct/server';
 import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
+import { loadSnapshot, saveSnapshot } from './cache';
 import { hostedSessionPath, loadIdentity } from './identity';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 
@@ -32,9 +33,30 @@ let hosted: RunningServer | null = null;
 let hosting: HostingInfo | null = null;
 let window: BrowserWindow | null = null;
 
-const appState = (): AppState => ({ session: client.getState(), hosting });
+const appState = (): AppState => ({ session: client.getState(), hosting, canEditTasks: client.canEditTasks() });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 client.subscribe(pushState);
+
+// Keep the cache of a joined session up to date (hosted sessions are saved by
+// the server itself). Writes are batched, and flushed when the app quits.
+let cachedUrl: string | null = null;
+let cacheTimer: ReturnType<typeof setTimeout> | null = null;
+const flushCache = () => {
+  if (cacheTimer) clearTimeout(cacheTimer);
+  cacheTimer = null;
+  const snapshot = client.getSnapshot();
+  if (!cachedUrl || !snapshot) return;
+  try {
+    saveSnapshot(cachedUrl, snapshot);
+  } catch (error) {
+    console.error('Could not save the session cache', error);
+  }
+};
+client.subscribe(() => {
+  if (cachedUrl && !cacheTimer) cacheTimer = setTimeout(flushCache, 500);
+});
+// Quitting from the tray, an update or the system skips window-all-closed.
+app.on('before-quit', flushCache);
 
 const failure = (error: unknown): Result => ({
   ok: false,
@@ -50,6 +72,8 @@ async function stopHosting() {
 
 async function host({ name, sessionName }: HostRequest): Promise<Result> {
   try {
+    flushCache();
+    cachedUrl = null;
     client.disconnect();
     await stopHosting();
     // The hosted session is saved on this PC: the board, locks and invite code
@@ -87,11 +111,16 @@ async function joinSession({ name, invite }: JoinRequest): Promise<Result> {
   const decoded = decodeInvite(invite);
   if (!decoded) return { ok: false, error: 'That is not a valid invite code.' };
   await stopHosting();
-  client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() });
+  flushCache();
+  cachedUrl = decoded.url;
+  client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() }, loadSnapshot(decoded.url));
   return { ok: true };
 }
 
 async function leave() {
+  // Keep the cache: changes not sent yet go out the next time you join.
+  flushCache();
+  cachedUrl = null;
   client.disconnect();
   await stopHosting();
   pushState();

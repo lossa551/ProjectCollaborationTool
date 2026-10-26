@@ -18,6 +18,7 @@ export function TaskDetail({
   lockRules,
   youId,
   editable,
+  online,
   onClose,
 }: {
   task: Task;
@@ -27,6 +28,8 @@ export function TaskDetail({
   lockRules: LockRules;
   youId: string | null;
   editable: boolean;
+  /** Owners and locks need the server; the rest can change offline. */
+  online: boolean;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
@@ -81,7 +84,7 @@ export function TaskDetail({
           <select
             value={task.owner?.id ?? ''}
             onChange={(e) => update({ ownerId: e.target.value || null })}
-            disabled={!editable}
+            disabled={!online}
           >
             <option value="">Unassigned</option>
             {ownerOffline && <option value={task.owner!.id}>{task.owner!.name} (offline)</option>}
@@ -114,13 +117,13 @@ export function TaskDetail({
             tasks={tasks}
             participants={participants}
             youId={youId}
-            editable={editable}
+            editable={online}
             compact
           />
         ) : (
           <p className="muted small">No files locked for this task.</p>
         )}
-        <LockForm key={task.id} tasks={tasks} rules={lockRules} editable={editable} taskId={task.id} />
+        <LockForm key={task.id} tasks={tasks} rules={lockRules} editable={online} taskId={task.id} />
       </section>
       <p className="muted small">
         Created {new Date(task.createdAt).toLocaleString()} · changed {task.version - 1} times

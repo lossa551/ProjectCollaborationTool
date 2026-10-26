@@ -14,6 +14,8 @@ export interface HostingInfo {
 export interface AppState {
   session: SessionState;
   hosting: HostingInfo | null;
+  /** Tasks can be changed: connected, or offline in a session we know (changes sync later). */
+  canEditTasks: boolean;
 }
 
 export interface HostRequest {

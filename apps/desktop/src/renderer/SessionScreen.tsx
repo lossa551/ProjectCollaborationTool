@@ -26,10 +26,16 @@ const STATUS_LABEL = {
   closed: 'Disconnected',
 } as const;
 
+function statusLabel(status: keyof typeof STATUS_LABEL, pending: number): string {
+  if (status === 'connected' || pending === 0) return STATUS_LABEL[status];
+  return `Offline, ${pending} ${pending === 1 ? 'change' : 'changes'} waiting to sync`;
+}
+
 export function SessionScreen({ state }: { state: AppState }) {
   const { session, hosting } = state;
   const participants = [...session.participants].sort((a, b) => a.connectedAt - b.connectedAt);
-  const editable = session.status === 'connected';
+  const online = session.status === 'connected';
+  const editable = state.canEditTasks;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [view, setView] = useState<View>('board');
@@ -40,7 +46,7 @@ export function SessionScreen({ state }: { state: AppState }) {
     <div className="shell">
       <header className="titlebar">
         <strong>{session.session?.name ?? 'Session'}</strong>
-        <span className={`status status-${session.status}`}>{STATUS_LABEL[session.status]}</span>
+        <span className={`status status-${session.status}`}>{statusLabel(session.status, session.pending)}</span>
         <UpdateButton hosting={!!hosting} />
         <div className="avatars">
           {participants.map((p) => (
@@ -91,7 +97,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             tasks={session.tasks}
             participants={participants}
             youId={session.you?.id ?? null}
-            editable={editable}
+            editable={online}
             onOpenTask={setSelectedId}
           />
         )}
@@ -106,6 +112,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           lockRules={session.lockRules}
           youId={session.you?.id ?? null}
           editable={editable}
+          online={online}
           onClose={() => setSelectedId(null)}
         />
       ) : (
@@ -128,8 +135,13 @@ function Banner({ state }: { state: AppState }) {
     return () => clearTimeout(timer);
   }, [error, dismissed]);
 
-  if (status === 'reconnecting') {
-    return <p className="banner warning">The session server is unreachable. The board is read-only until it is back.</p>;
+  if ((status === 'reconnecting' || status === 'connecting') && state.canEditTasks) {
+    return (
+      <p className="banner warning">
+        The session server is unreachable. You can keep working on tasks; your changes sync when it is back. Locks and
+        owners need the server.
+      </p>
+    );
   }
   if (status === 'connected' && error && error !== dismissed) {
     return (

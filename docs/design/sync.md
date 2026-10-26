@@ -62,3 +62,16 @@ instead of invite secrets, and running agents server-side if wanted.
     confirms the lock.
   - Git work is unaffected; it goes to GitHub directly.
   - The title bar shows "Offline, N changes waiting to sync".
+
+## Offline, as built (2026-10-25)
+
+- The app caches each joined session (board, locks, rules, activity) and the
+  changes it has not sent yet, so the board shows and stays editable when the
+  host is off, even after restarting the app.
+- Offline you can add, rename, move and delete tasks and change their paths.
+  Owners and locks wait for the server.
+- On reconnect the queued changes go out in order. Each update carries the
+  values the client saw; if someone else changed that field meanwhile, the
+  server keeps their value and tells you which change was not applied.
+  Creates carry a client-made id, so a replayed create never doubles a task.
+- Soft locks recorded offline are not built yet; locking needs the server.
