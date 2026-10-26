@@ -1,6 +1,7 @@
 // Bundles the Electron main and preload scripts into CommonJS. Workspace
 // packages are pulled straight from their TypeScript sources.
 import { build } from 'esbuild';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -22,3 +23,8 @@ await Promise.all([
   build({ ...common, entryPoints: ['src/main/main.ts'], outfile: 'dist/main.cjs' }),
   build({ ...common, entryPoints: ['src/preload/preload.ts'], outfile: 'dist/preload.cjs' }),
 ]);
+
+// Claude Code runs this hook script itself (through Electron as Node), so it
+// ships as a plain file next to main.cjs rather than inside the bundle.
+mkdirSync(`${root}dist`, { recursive: true });
+copyFileSync(`${root}../../packages/agents/bin/pct-hook.cjs`, `${root}dist/pct-hook.cjs`);

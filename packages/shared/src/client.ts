@@ -1,5 +1,11 @@
 import type {
   Activity,
+  AgentProfile,
+  ChatAgentState,
+  ChatContext,
+  ChatInfo,
+  ChatMessage,
+  Handoff,
   GitHubStatus,
   Lock,
   LockRules,
@@ -17,6 +23,8 @@ import {
   CloseCode,
   PROTOCOL_VERSION,
   parseServerMessage,
+  type AgentSaveMessage,
+  type ChatPostMessage,
   type ClientMessage,
   type ErrorCode,
   type ServerMessage,
@@ -43,6 +51,10 @@ export interface SessionState {
   github: GitHubStatus;
   /** Local checkouts by participant id, as each one's app reports them. */
   workspaces: Record<string, Workspace>;
+  agents: AgentProfile[];
+  chats: ChatInfo[];
+  /** Messages of the chats this client opened (or saw messages in), oldest first. */
+  messages: Record<string, ChatMessage[]>;
   /** Task changes made while offline, waiting to be sent. */
   pending: number;
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
@@ -53,6 +65,8 @@ export interface JoinOptions {
   secret: string;
   name: string;
   kind?: ParticipantKind;
+  /** For an agent runner: the agent profile it runs and who started it. */
+  agent?: { profileId: string; startedBy: string };
   /** Secret kept on this machine; see HelloMessage.identity. Use newIdentity() to make one. */
   identity: string;
 }
@@ -73,6 +87,7 @@ export interface SessionClientOptions {
 }
 
 type Listener = (state: SessionState) => void;
+type MessageListener = (message: ServerMessage) => void;
 
 const INITIAL_STATE: SessionState = {
   status: 'idle',
@@ -86,9 +101,15 @@ const INITIAL_STATE: SessionState = {
   activity: [],
   github: EMPTY_GITHUB_STATUS,
   workspaces: {},
+  agents: [],
+  chats: [],
+  messages: {},
   pending: 0,
   error: null,
 };
+
+/** How many messages the client keeps per chat. */
+export const CHAT_MESSAGE_LIMIT = 500;
 
 type TaskMessage = SessionSnapshot['queue'][number];
 
@@ -104,11 +125,17 @@ export interface TaskChanges {
 }
 
 // Closing with these codes means retrying will not help.
-const FATAL_CLOSE_CODES = new Set<number>([CloseCode.badSecret, CloseCode.protocolMismatch, CloseCode.replaced]);
+const FATAL_CLOSE_CODES = new Set<number>([
+  CloseCode.badSecret,
+  CloseCode.protocolMismatch,
+  CloseCode.replaced,
+  CloseCode.agentRunning,
+]);
 
 export class SessionClient {
   private state: SessionState = INITIAL_STATE;
   private readonly listeners = new Set<Listener>();
+  private readonly messageListeners = new Set<MessageListener>();
   private socket: WebSocket | null = null;
   private join: JoinOptions | null = null;
   private attempt = 0;
@@ -136,6 +163,12 @@ export class SessionClient {
     return () => this.listeners.delete(listener);
   }
 
+  /** Every message from the server, after the state has been updated with it. */
+  onMessage(listener: MessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => this.messageListeners.delete(listener);
+  }
+
   /**
    * Joins a session. With a snapshot from an earlier run, the board shows
    * right away (even if the server is unreachable) and changes made offline
@@ -155,6 +188,8 @@ export class SessionClient {
         lockRules: snapshot.lockRules,
         activity: snapshot.activity,
         github: snapshot.github,
+        agents: snapshot.agents,
+        chats: snapshot.chats,
       }),
       pending: this.queue.length,
       status: 'connecting',
@@ -165,9 +200,9 @@ export class SessionClient {
 
   /** What to save so the next connect can start from here; null before the first join. */
   getSnapshot(): SessionSnapshot | null {
-    const { session, tasks, locks, lockRules, activity, github } = this.state;
+    const { session, tasks, locks, lockRules, activity, github, agents, chats } = this.state;
     if (!session) return null;
-    return { session, tasks, locks, lockRules, activity, github, queue: [...this.queue] };
+    return { session, tasks, locks, lockRules, activity, github, agents, chats, queue: [...this.queue] };
   }
 
   /** Task changes are allowed while connected, and offline once we know the session. */
@@ -189,8 +224,11 @@ export class SessionClient {
     this.send({ type: 'presence.update', status, focus });
   }
 
-  createTask(title: string, options: { stage?: TaskStage; scope?: string[] } = {}): void {
-    this.sendTask({ type: 'task.create', id: crypto.randomUUID(), title, ...options });
+  /** Returns the new task's id. */
+  createTask(title: string, options: { stage?: TaskStage; scope?: string[] } = {}): string {
+    const id = crypto.randomUUID();
+    this.sendTask({ type: 'task.create', id, title, ...options });
+    return id;
   }
 
   updateTask(taskId: string, changes: TaskChanges): void {
@@ -249,6 +287,57 @@ export class SessionClient {
     this.send({ type: 'workspace.update', workspace });
   }
 
+  saveAgent(agent: AgentSaveMessage['agent']): void {
+    this.send({ type: 'agent.save', agent });
+  }
+
+  deleteAgent(agentId: string): void {
+    this.send({ type: 'agent.delete', agentId });
+  }
+
+  /** Starts a chat with an agent; returns the chat's id. */
+  createChat(options: { agentId: string; title: string; taskId?: string | null; handoff?: Handoff | null }): string {
+    const id = crypto.randomUUID();
+    this.send({ type: 'chat.create', id, ...options });
+    return id;
+  }
+
+  updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void {
+    this.send({ type: 'chat.update', chatId, ...changes });
+  }
+
+  deleteChat(chatId: string): void {
+    this.send({ type: 'chat.delete', chatId });
+  }
+
+  /** Loads a chat's messages into state.messages. */
+  openChat(chatId: string): void {
+    this.send({ type: 'chat.open', chatId });
+  }
+
+  /** Posts a message, or updates one you posted earlier with the same id. Returns the id. */
+  postChat(
+    chatId: string,
+    message: Omit<ChatPostMessage['message'], 'id'> & { id?: string },
+  ): string {
+    const id = message.id ?? crypto.randomUUID();
+    this.send({ type: 'chat.post', chatId, message: { ...message, id } });
+    return id;
+  }
+
+  decideApproval(chatId: string, messageId: string, approve: boolean): void {
+    this.send({ type: 'chat.decide', chatId, messageId, approve });
+  }
+
+  /** For the chat's agent: whether it is working, and what it has in context. */
+  setChatAgentState(chatId: string, state: ChatAgentState, context?: ChatContext | null): void {
+    this.send({ type: 'chat.agent', chatId, state, ...(context !== undefined && { context }) });
+  }
+
+  stopChat(chatId: string): void {
+    this.send({ type: 'chat.stop', chatId });
+  }
+
   private open(): void {
     const join = this.join;
     if (!join) return;
@@ -263,13 +352,16 @@ export class SessionClient {
         name: join.name,
         kind: join.kind ?? 'human',
         identity: join.identity,
+        ...(join.agent && { agent: join.agent }),
       });
     });
 
     socket.addEventListener('message', (event) => {
       if (socket !== this.socket || typeof event.data !== 'string') return;
       const message = parseServerMessage(event.data);
-      if (message) this.handle(message);
+      if (!message) return;
+      this.handle(message);
+      for (const listener of this.messageListeners) listener(message);
     });
 
     // Called once per socket however it goes down: a close, an error (Node's
@@ -326,6 +418,12 @@ export class SessionClient {
           activity: message.activity.slice(-ACTIVITY_LIMIT),
           github: message.github,
           workspaces: Object.fromEntries(message.workspaces.map((w) => [w.participantId, w.workspace])),
+          agents: message.agents,
+          chats: message.chats,
+          // Keep loaded messages of chats that still exist; chat.open fetches what was missed.
+          messages: Object.fromEntries(
+            Object.entries(this.state.messages).filter(([chatId]) => message.chats.some((c) => c.id === chatId)),
+          ),
           pending: 0,
           error: null,
         });
@@ -403,6 +501,39 @@ export class SessionClient {
         });
         break;
       }
+      case 'agent.changed':
+        this.setState({ ...this.state, agents: upsert(this.state.agents, message.agent) });
+        break;
+      case 'agent.removed':
+        this.setState({ ...this.state, agents: this.state.agents.filter((a) => a.id !== message.agentId) });
+        break;
+      case 'chat.changed':
+        this.setState({ ...this.state, chats: upsert(this.state.chats, message.chat) });
+        break;
+      case 'chat.removed': {
+        const { [message.chatId]: _gone, ...messages } = this.state.messages;
+        this.setState({ ...this.state, chats: this.state.chats.filter((c) => c.id !== message.chatId), messages });
+        break;
+      }
+      case 'chat.message': {
+        const list = this.state.messages[message.message.chatId] ?? [];
+        this.setState({
+          ...this.state,
+          messages: {
+            ...this.state.messages,
+            [message.message.chatId]: upsert(list, message.message).slice(-CHAT_MESSAGE_LIMIT),
+          },
+        });
+        break;
+      }
+      case 'chat.history':
+        this.setState({
+          ...this.state,
+          messages: { ...this.state.messages, [message.chatId]: message.messages.slice(-CHAT_MESSAGE_LIMIT) },
+        });
+        break;
+      case 'chat.stopped':
+        break;
       case 'error':
         this.setState({ ...this.state, error: { code: message.code, message: message.message } });
         break;
@@ -441,6 +572,11 @@ export class SessionClient {
     this.state = next;
     for (const listener of this.listeners) listener(next);
   }
+}
+
+/** Replaces the item with the same id, or adds it at the end. */
+function upsert<T extends { id: string }>(items: T[], item: T): T[] {
+  return items.some((i) => i.id === item.id) ? items.map((i) => (i.id === item.id ? item : i)) : [...items, item];
 }
 
 /** The local effect of a task change, shown until the server confirms it. */

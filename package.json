@@ -5,13 +5,14 @@
   "workspaces": [
     "packages/shared",
     "packages/server",
+    "packages/agents",
     "apps/desktop"
   ],
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "npm run build -w @pct/shared && npm run build -w @pct/server && npm run build -w @pct/desktop",
+    "build": "npm run build -w @pct/shared && npm run build -w @pct/server && npm run build -w @pct/agents && npm run build -w @pct/desktop",
     "typecheck": "npm run typecheck --workspaces",
     "test": "vitest run",
     "server": "npm run build -w @pct/shared && npm run build -w @pct/server && npm start -w @pct/server",

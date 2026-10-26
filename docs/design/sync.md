@@ -103,3 +103,41 @@ instead of invite secrets, and running agents server-side if wanted.
 - PR events (opened, checks failed or passed, conflicts, approved, changes
   requested, merged, closed) go into the activity feed, linked to the task
   whose branch it is.
+
+## Agents and agent chat, as built (2026-10-26)
+
+- **Agent profiles** (name, connection, responsibilities, allowed paths,
+  approval rules) are stored by the server and shared, so both people see
+  what every agent may do. API keys are not part of a profile: each PC keeps
+  its own, encrypted with the OS key store, or reads the provider's usual
+  environment variable.
+- **Running an agent**: anyone presses Start; the agent joins from that
+  person's app as its own participant (kind agent, with a stable identity per
+  PC) and works in that person's project folder. The server lets one runner
+  per agent into the session at a time.
+- **Model APIs** run in our own loop with six tools (list, read, search,
+  write, edit, run a command). Claude goes through the Anthropic SDK; DeepSeek,
+  OpenAI, Ollama and other OpenAI-compatible APIs through the chat completions
+  format.
+- **Claude Code** runs headless (`claude -p`, stream-json). A PreToolUse hook
+  asks the app before every tool use and is denied if the app cannot be
+  reached. **Codex** has no such hook, so after each run the app checks the
+  files it changed.
+- **The guard**: edits to files someone else holds an exclusive lock on are
+  refused; soft locks held by others ask first; edits outside the agent's or
+  the task's paths (or the handoff's, without a task) follow the agent's
+  rule (allow, ask, deny), as do commands. Before writing, the agent takes the
+  lock the rules call for. After a command or CLI run, changed files it may
+  not change are put to a person and undone unless someone keeps them.
+- **Chats** are server-owned: every chat and message is shared live. Agents
+  stream an answer by updating their own message; it is stored once
+  finished. Only the chat's agent posts tool lines and approval cards, and
+  only people decide them. When an agent leaves, its open requests expire.
+- **Context panel**: the runner reports what it gave the model (role and
+  rules, task, handoff, files read, conversation) with rough token counts.
+- **Handoffs**: a new chat with another agent that starts from a package of
+  plan, decisions, acceptance criteria, allowed paths and notes; the task
+  moves to the chosen stage and is assigned to that agent if it is running.
+- Not yet: plugins as a connection type, saving a chat to project memory
+  (with #9), and separate worktrees per agent (agents share their starter's
+  folder for now).

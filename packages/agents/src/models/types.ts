@@ -1,0 +1,58 @@
+import { z } from 'zod';
+
+// One shape for every model API, so the agent loop does not care which
+// provider runs it. Adapters translate to and from their API's format.
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+export interface ToolResult {
+  id: string;
+  content: string;
+  isError: boolean;
+}
+
+export type LoopMessage =
+  | { role: 'user'; text: string }
+  /** raw: the provider's own content (e.g. thinking blocks), passed back unchanged to the same provider. */
+  | { role: 'assistant'; text: string; toolCalls: ToolCall[]; raw?: unknown }
+  | { role: 'tool'; results: ToolResult[] };
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  /** JSON schema of the input. */
+  schema: Record<string, unknown>;
+}
+
+export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'refusal' | 'other';
+
+export interface ModelTurn {
+  text: string;
+  toolCalls: ToolCall[];
+  stop: StopReason;
+  raw?: unknown;
+}
+
+export interface ModelRequest {
+  system: string;
+  messages: LoopMessage[];
+  tools: ToolSpec[];
+  signal: AbortSignal;
+  /** Text as it streams in. */
+  onText: (delta: string) => void;
+}
+
+export interface ModelAdapter {
+  complete(request: ModelRequest): Promise<ModelTurn>;
+}
+
+/** Tool inputs come from the model: check them before use. */
+export function parseInput<T>(schema: z.ZodType<T>, input: unknown): { ok: true; value: T } | { ok: false; error: string } {
+  const result = schema.safeParse(input);
+  if (result.success) return { ok: true, value: result.data };
+  return { ok: false, error: `Invalid input: ${result.error.issues.map((i) => `${i.path.join('.') || 'input'} ${i.message}`).join('; ')}` };
+}

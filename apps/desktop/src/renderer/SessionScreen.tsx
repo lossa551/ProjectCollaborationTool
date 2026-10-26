@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { findOverlaps, type Activity, type Participant } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
+import { ChatScreen, ChatSidePanel } from './AgentChat';
+import { AgentsScreen } from './Agents';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
 import { GitHubScreen, WorkspaceCard } from './GitHub';
@@ -9,13 +11,13 @@ import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
 // Nav items from docs/design/interface.md; the ones without a view are still to come.
-type View = 'board' | 'locks';
+type View = 'board' | 'locks' | 'agents' | 'chat';
 const NAV: { label: string; view?: View }[] = [
   { label: 'Session board', view: 'board' },
   { label: 'Planning space' },
   { label: 'Locks and GitHub', view: 'locks' },
-  { label: 'Agents' },
-  { label: 'Agent chat' },
+  { label: 'Agents', view: 'agents' },
+  { label: 'Agent chat', view: 'chat' },
   { label: 'Project memory' },
 ];
 
@@ -41,6 +43,12 @@ export function SessionScreen({ state }: { state: AppState }) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [view, setView] = useState<View>('board');
   const [locksTab, setLocksTab] = useState<'github' | 'locks'>('github');
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null);
+  const openChat = chatId ? session.chats.find((c) => c.id === chatId) : undefined;
+  const pendingApprovals = Object.values(session.messages)
+    .flat()
+    .filter((m) => m.approval?.state === 'pending').length;
   const abandoned = session.locks.filter((l) => l.abandoned).length;
   const selected = session.tasks.find((t) => t.id === selectedId) ?? null;
   const overlaps = useMemo(
@@ -90,6 +98,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           >
             {item.label}
             {item.view === 'locks' && abandoned > 0 && <span className="nav-count">{abandoned}</span>}
+            {item.view === 'chat' && pendingApprovals > 0 && <span className="nav-count">{pendingApprovals}</span>}
           </button>
         ))}
         <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} />
@@ -97,7 +106,27 @@ export function SessionScreen({ state }: { state: AppState }) {
 
       <main className="content">
         <Banner state={state} />
-        {view === 'board' ? (
+        {view === 'agents' ? (
+          <AgentsScreen
+            state={state}
+            onOpenChat={(agentId) => {
+              const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
+              setChatId(existing?.id ?? null);
+              setNewChatAgentId(existing ? null : agentId);
+              setView('chat');
+            }}
+          />
+        ) : view === 'chat' ? (
+          <ChatScreen
+            state={state}
+            chatId={chatId}
+            newChatAgentId={newChatAgentId}
+            onSelect={(id) => {
+              setNewChatAgentId(null);
+              setChatId(id);
+            }}
+          />
+        ) : view === 'board' ? (
           <Board
             tasks={session.tasks}
             locks={session.locks}
@@ -135,7 +164,9 @@ export function SessionScreen({ state }: { state: AppState }) {
         )}
       </main>
 
-      {selected ? (
+      {view === 'chat' && openChat && !selected ? (
+        <ChatSidePanel state={state} chat={openChat} onSelect={setChatId} />
+      ) : selected ? (
         <TaskDetail
           task={selected}
           tasks={session.tasks}
