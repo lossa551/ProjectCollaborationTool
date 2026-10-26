@@ -18,6 +18,14 @@ describe('bloat check', () => {
         file('src/menu.ts', '', 'm1'),
         file('test/menu.test.ts', '', 'm2'),
         file('scenes/main.tscn', '[ext_resource path="res://art/hero.png"]\n[ext_resource path="res://art/old/hero_copy.png"]'),
+        // Separate packages may mirror each other's names, and each has its own tsconfig.
+        file('packages/server/package.json', '{}'),
+        file('packages/server/src/storage.ts', '', 's1'),
+        file('packages/server/tsconfig.json', '', 'tsc', 200),
+        file('packages/app/package.json', '{}'),
+        file('packages/app/src/storage.ts', '', 's2'),
+        file('packages/app/tsconfig.json', '', 'tsc', 200),
+        file('packages/app/src/Storage.tsx', '', 's3'),
       ],
       { ranBy: 'Martin', branch: 'main', truncated: false },
     );

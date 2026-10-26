@@ -68,6 +68,12 @@ const COMMON_NAMES = new Set([
   'app', 'lib', 'build', 'vite.config', 'vitest.config', 'env.d', 'cli', 'server', 'client', 'model', 'models',
 ]);
 
+/** Boilerplate that every package or folder is expected to have a copy of. */
+const BOILERPLATE = /(?:^|\/)(?:tsconfig[^/]*\.json|\.gitignore|\.gitattributes|\.editorconfig|\.prettierrc[^/]*|LICENSE[^/]*|\.gdignore)$/i;
+
+/** Files that mark the root of a package or project; names may repeat across packages on purpose. */
+const PACKAGE_MARKERS = /(?:^|\/)(?:package\.json|project\.godot|[^/]+\.uproject|[^/]+\.csproj|Cargo\.toml|go\.mod|pyproject\.toml)$/i;
+
 /** Text that never counts as a reference: lockfiles and Godot's generated import notes. */
 const IGNORED_FOR_REFERENCES = /(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$|\.import$/i;
 
@@ -93,7 +99,7 @@ export function findDuplicates(files: ScannedFile[]): BloatDuplicate[] {
   const byHash = new Map<string, string[]>();
   for (const file of files) {
     // Tiny files (empty placeholders, one-line configs) are expected to repeat.
-    if (!file.hash || file.size < 64) continue;
+    if (!file.hash || file.size < 64 || BOILERPLATE.test(file.path)) continue;
     byHash.set(file.hash, [...(byHash.get(file.hash) ?? []), file.path]);
   }
   const identical = new Set<string>();
@@ -103,13 +109,19 @@ export function findDuplicates(files: ScannedFile[]): BloatDuplicate[] {
     for (const p of paths) identical.add(p);
   }
 
+  // Each package of a monorepo may have its own "storage.ts"; only the same package counts.
+  const roots = files.filter((f) => PACKAGE_MARKERS.test(f.path)).map((f) => dirName(f.path));
+  const packageOf = (path: string) =>
+    roots.filter((root) => root === '' || path.startsWith(`${root}/`)).sort((a, b) => b.length - a.length)[0] ?? '';
   const byName = new Map<string, string[]>();
   for (const file of files) {
-    if (!CODE_EXTENSIONS.has(extensionOf(file.path)) || isTestFile(file.path)) continue;
+    const ext = extensionOf(file.path);
+    if (!CODE_EXTENSIONS.has(ext) || isTestFile(file.path)) continue;
     const stem = normalizedStem(file.path);
     const plain = baseName(file.path).toLowerCase().replace(/\.[^.]+$/, '');
     if (!stem || COMMON_NAMES.has(plain)) continue;
-    byName.set(stem, [...(byName.get(stem) ?? []), file.path]);
+    const key = `${packageOf(file.path)}\n${ext}\n${stem}`;
+    byName.set(key, [...(byName.get(key) ?? []), file.path]);
   }
   for (const paths of byName.values()) {
     if (paths.length < 2 || paths.every((p) => identical.has(p))) continue;
@@ -122,13 +134,24 @@ export function findDuplicates(files: ScannedFile[]): BloatDuplicate[] {
 const ASSET_REFERENCE = new RegExp(`([^\\s"'\`()/\\\\:<>|*?=,;{}\\[\\]]+)\\.(${ASSET_EXTENSIONS.join('|')})(?![a-z0-9])`, 'gi');
 
 export function findUnusedAssets(files: ScannedFile[]): string[] {
+  const texts = files.filter((f) => f.text !== null && !IGNORED_FOR_REFERENCES.test(f.path));
   const referenced = new Set<string>();
-  for (const file of files) {
-    if (file.text === null || IGNORED_FOR_REFERENCES.test(file.path)) continue;
-    for (const match of file.text.matchAll(ASSET_REFERENCE)) referenced.add(`${match[1]}.${match[2]}`.toLowerCase());
+  for (const file of texts) {
+    for (const match of file.text!.matchAll(ASSET_REFERENCE)) referenced.add(`${match[1]}.${match[2]}`.toLowerCase());
   }
+  let lowered: string[] | null = null;
   return files
-    .filter((f) => ASSET_EXTENSIONS.includes(extensionOf(f.path)) && !referenced.has(baseName(f.path).toLowerCase()))
+    .filter((f) => {
+      if (!ASSET_EXTENSIONS.includes(extensionOf(f.path))) return false;
+      const name = baseName(f.path).toLowerCase();
+      if (referenced.has(name)) return false;
+      // Names with spaces or brackets do not come out of the pattern whole; look for them as they are.
+      if (/[\s"'`()<>|*?=,;{}[\]]/.test(name)) {
+        lowered ??= texts.map((t) => t.text!.toLowerCase());
+        return !lowered.some((text) => text.includes(name));
+      }
+      return true;
+    })
     .map((f) => f.path);
 }
 
@@ -162,7 +185,11 @@ export function findUnusedDependencies(files: ScannedFile[]): UnusedDependency[]
     const inside = files.filter(
       (f) => f.text !== null && f !== manifest && !IGNORED_FOR_REFERENCES.test(f.path) && (dir === '' || f.path.startsWith(`${dir}/`)),
     );
-    const scripts = Object.values(pkg.scripts ?? {}).join('\n');
+    // A workspace root's tools are often run from its packages' scripts.
+    const scripts = manifests
+      .filter((m) => m === manifest || dir === '' || m.path.startsWith(`${dir}/`))
+      .flatMap((m) => Object.values(parse(m.text!)?.scripts ?? {}))
+      .join('\n');
     const used = (name: string) => {
       if (IMPLICIT.test(name) || workspaceNames.has(name)) return true;
       const commands = PACKAGE_COMMANDS[name] ?? [name.slice(name.lastIndexOf('/') + 1)];

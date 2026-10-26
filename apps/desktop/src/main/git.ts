@@ -77,6 +77,12 @@ export async function repositoryRoot(folder: string): Promise<string> {
   }
 }
 
+/** Files in the project as git sees them: tracked ones and new ones that are not ignored. */
+export async function listProjectFiles(cwd: string): Promise<string[]> {
+  const out = await run(['-c', 'core.quotepath=off', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd, timeout: 60_000 });
+  return [...new Set(out.split('\0').filter(Boolean))];
+}
+
 /** Tells git to trust a folder owned by another user (git's safe.directory setting). */
 export async function trustFolder(folder: string): Promise<void> {
   await run(['config', '--global', '--add', 'safe.directory', folder.replace(/\\/g, '/')], { cwd: folder });
