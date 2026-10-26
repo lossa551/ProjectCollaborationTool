@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import {
+  MEMORY_KIND_SINGULAR,
+  MemoryKind,
   STAGE_LABELS,
   TaskStage,
   describeConnection,
@@ -400,8 +402,8 @@ export function ChatSidePanel({ state, chat, onSelect }: { state: AppState; chat
               Hand off to another agent
             </button>
             <p className="muted small">The next agent gets the plan, decisions, paths and acceptance criteria.</p>
-            <p className="muted small">Saving a chat to project memory comes with the planning space.</p>
           </section>
+          <SaveToMemory state={state} chat={chat} />
           {error && <p className="error small">{error}</p>}
           <button
             className="danger"
@@ -415,6 +417,82 @@ export function ChatSidePanel({ state, chat, onSelect }: { state: AppState; chat
         </>
       )}
     </aside>
+  );
+}
+
+/** Keeps what a chat settled (a decision, a convention, a known issue) in project memory. */
+function SaveToMemory({ state, chat }: { state: AppState; chat: ChatInfo }) {
+  const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<MemoryKind>('decision');
+  const [title, setTitle] = useState('');
+  const [body, setBody] = useState('');
+  const [saved, setSaved] = useState(false);
+  const saveable = state.canEditTasks;
+
+  const start = () => {
+    // Prefilled from the agent's last answer; edit it down to what is worth keeping.
+    const messages = state.session.messages[chat.id] ?? [];
+    const last = [...messages].reverse().find((m) => m.author.kind === 'agent' && m.kind === 'text' && m.text.trim());
+    setTitle(chat.title);
+    setBody(last?.text.trim().slice(0, 20_000) ?? '');
+    setSaved(false);
+    setOpen(true);
+  };
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    if (!title.trim()) return;
+    window.pct.editMemory({
+      op: 'create',
+      id: crypto.randomUUID(),
+      kind,
+      title: title.trim().slice(0, 200),
+      body: body.trim(),
+      source: { kind: 'chat', id: chat.id, title: chat.title },
+    });
+    setOpen(false);
+    setSaved(true);
+  };
+
+  if (!open) {
+    return (
+      <section>
+        <button className="secondary" disabled={!saveable} onClick={start}>
+          Save to project memory
+        </button>
+        <p className="muted small">{saved ? 'Saved. Every agent gets it from now on.' : 'Keep a decision or finding from this chat for everyone, agents included.'}</p>
+      </section>
+    );
+  }
+  return (
+    <form className="handoff-form" onSubmit={save}>
+      <h2>Save to project memory</h2>
+      <label className="field">
+        <span>As</span>
+        <select value={kind} onChange={(e) => setKind(e.target.value as MemoryKind)}>
+          {MemoryKind.options.map((k) => (
+            <option key={k} value={k}>
+              {MEMORY_KIND_SINGULAR[k]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        <span>Title</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} />
+      </label>
+      <label className="field">
+        <span>What to remember</span>
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={8} maxLength={20_000} />
+      </label>
+      <div className="row">
+        <button type="submit" disabled={!title.trim()}>
+          Save
+        </button>
+        <button type="button" className="secondary" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -445,7 +523,9 @@ function HandoffForm({
   const [stage, setStage] = useState<TaskStage | ''>(task ? (NEXT_STAGE[task.stage] ?? task.stage) : '');
   const [plan, setPlan] = useState(chat.handoff?.plan || lastAgentText);
   const [decisions, setDecisions] = useState(chat.handoff?.decisions.join('\n') ?? '');
-  const [criteria, setCriteria] = useState(chat.handoff?.criteria.join('\n') ?? '');
+  const [criteria, setCriteria] = useState(
+    (task?.criteria.length ? task.criteria.map((c) => c.text) : (chat.handoff?.criteria ?? [])).join('\n'),
+  );
   const [scope, setScope] = useState((task?.scope.length ? task.scope : (chat.handoff?.scope ?? [])).join('\n'));
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);

@@ -3,7 +3,11 @@ import type {
   CliTool,
   FileChange,
   Handoff,
+  CriterionState,
   LockRules,
+  MemoryOp,
+  PlanApproval,
+  PlanOp,
   RepoRef,
   SessionState,
   TaskChanges,
@@ -92,6 +96,8 @@ export interface HandoffRequest {
   taskId: string | null;
   /** The agent profile that takes over. */
   agentId: string;
+  /** Title of the new chat; made from the task or the sender otherwise. */
+  title?: string;
   handoff: Omit<Handoff, 'fromChatId' | 'fromName'>;
 }
 
@@ -193,6 +199,16 @@ export interface PctApi {
   chatToTask(chatId: string): Promise<Result>;
   /** Starts a chat with another agent carrying the handoff package; returns the new chat's id. */
   handOff(request: HandoffRequest): Promise<ResultWith<string>>;
+  /** Changes the planning space; works offline and syncs later. */
+  editPlanning(op: PlanOp): void;
+  /** Creates the feature's tasks (with their acceptance criteria) and marks the plan approved. */
+  approvePlan(approval: PlanApproval): Promise<Result>;
+  /** Changes project memory; works offline and syncs later. */
+  editMemory(op: MemoryOp): void;
+  /** Records a test result for one of a task's acceptance criteria. */
+  verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
+  /** Scans your project folder for bloat and shares the result with the session. */
+  runBloatCheck(): Promise<Result>;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -237,6 +253,11 @@ export const Channel = {
   stopChat: 'pct:stop-chat',
   chatToTask: 'pct:chat-to-task',
   handOff: 'pct:hand-off',
+  editPlanning: 'pct:edit-planning',
+  approvePlan: 'pct:approve-plan',
+  editMemory: 'pct:edit-memory',
+  verifyCriterion: 'pct:verify-criterion',
+  runBloatCheck: 'pct:run-bloat-check',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

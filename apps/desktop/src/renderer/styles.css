@@ -1138,3 +1138,340 @@ a {
 .git-changes summary {
   cursor: pointer;
 }
+
+.bad {
+  color: var(--bad);
+}
+
+/* Planning space */
+
+.planning-screen {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+}
+
+.plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.plan-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plan-new input {
+  margin-bottom: 0;
+}
+
+.plan-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 8px;
+}
+
+.plan-item.active {
+  background: var(--panel-2);
+}
+
+.plan-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 820px;
+  min-width: 0;
+}
+
+.plan-editor .field {
+  margin-bottom: 4px;
+}
+
+.plan-head {
+  display: flex;
+  gap: 8px;
+}
+
+.plan-head select {
+  width: auto;
+}
+
+input.plan-title {
+  font-size: 18px;
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  padding-left: 4px;
+}
+
+input.plan-title:hover,
+input.plan-title:focus {
+  border-color: var(--border);
+}
+
+.plan-editor > p.muted {
+  margin: 0 0 4px 4px;
+}
+
+.feature-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.feature-in-progress {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.feature-blocked {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.feature-unverified {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.feature-ready {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.stage-tracker ol {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.stage-tracker li {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  padding: 4px 0;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.stage-tracker li.done {
+  color: var(--good);
+  border-color: color-mix(in srgb, var(--good) 50%, var(--border));
+}
+
+.stage-tracker li.current {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+}
+
+.stage-tracker p {
+  margin: 0;
+}
+
+.feature-tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.feature-tasks li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.approve-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.approve-form h3 {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.approve-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.approve-criterion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.approve-criterion select {
+  width: 240px;
+}
+
+.discuss {
+  align-items: center;
+}
+
+.discuss select {
+  width: auto;
+}
+
+/* Acceptance criteria on a task */
+
+.criteria-list {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.criterion-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.criterion-icon {
+  width: 14px;
+  color: var(--muted);
+}
+
+.criterion-verified .criterion-icon {
+  color: var(--good);
+}
+
+.criterion-failing .criterion-icon {
+  color: var(--bad);
+}
+
+.criterion-evidence {
+  margin: 2px 0 0 22px;
+}
+
+.criterion-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0 22px;
+}
+
+.criterion-form .row {
+  margin-top: 0;
+}
+
+/* Project memory */
+
+.memory-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 900px;
+}
+
+.memory-list > p {
+  margin: 0;
+}
+
+.memory-list ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.memory-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.memory-card .row {
+  margin-top: 0;
+}
+
+.memory-card .row select {
+  width: 160px;
+}
+
+.memory-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 0;
+}
+
+.memory-summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-meta {
+  margin: 0;
+}
+
+.bloat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bloat-run {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bloat-run p {
+  margin: 0 0 4px;
+}
+
+.bloat-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}

@@ -13,6 +13,7 @@ import {
 } from '@pct/shared';
 import { Avatar } from './Avatar';
 import { PullBadge } from './GitHub';
+import { CriteriaSummary } from './Planning';
 
 const STAGES = TaskStage.options;
 const DRAG_TYPE = 'application/x-pct-task';
@@ -140,6 +141,7 @@ function TaskCard({
           </span>
         )}
         {pull ? <PullBadge pull={pull} link={false} /> : task.branch && <code className="muted small">{task.branch}</code>}
+        <CriteriaSummary task={task} />
         {overlaps.length > 0 && (
           <span className="warning" title={overlaps.map((o) => o.path).join('\n')}>
             {overlaps.length} {overlaps.length === 1 ? 'overlap' : 'overlaps'}

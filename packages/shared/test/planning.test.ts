@@ -37,6 +37,19 @@ describe('planning space', () => {
     expect(b.getText('t').toString()).toBe('hello big world!');
   });
 
+  it('moves an edit made against an older text around changes that arrived since', () => {
+    const doc = new Y.Doc();
+    const text = doc.getText('t');
+    setText(text, 'jump high');
+    // Someone else's change lands first; the editor still shows "jump high".
+    setText(text, 'Players jump high');
+    setText(text, 'jump very high', 'jump high');
+    expect(text.toString()).toBe('Players jump very high');
+    setText(text, 'Players jump very high!', 'Players jump very high');
+    setText(text, 'Players can jump very high', 'Players jump very high');
+    expect(text.toString()).toBe('Players can jump very high!');
+  });
+
   it('applies plan changes and refuses items that are gone', () => {
     const doc = new Y.Doc();
     applyPlanOp(doc, { op: 'create', id: 'feature-1', kind: 'idea', title: 'Grapple' }, 'Martin', 5);

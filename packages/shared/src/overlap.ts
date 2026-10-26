@@ -1,4 +1,4 @@
-import type { GitHubStatus, Lock, Task, Workspace } from './model.js';
+import { pullForBranch, type GitHubStatus, type Lock, type Task, type Workspace } from './model.js';
 import { matchesAny } from './paths.js';
 
 // Who else is changing the same file: local workspaces, pushed branches, open
@@ -106,6 +106,21 @@ export function overlapsForTask(overlaps: Overlap[], task: Task): Overlap[] {
 }
 
 /** Files a task is not supposed to change. A task without a scope allows everything. */
+/** Files changed for a task: in anyone's workspace on its branch, its open pull request, or its branch on GitHub. */
+export function taskChangedFiles(task: Task, workspaces: Record<string, Workspace>, github: GitHubStatus): string[] {
+  if (!task.branch) return [];
+  const pull = pullForBranch(github, task.branch);
+  return [
+    ...new Set([
+      ...Object.values(workspaces)
+        .filter((w) => w.branch === task.branch)
+        .flatMap((w) => w.files.map((f) => f.path)),
+      ...(pull?.state === 'open' ? pull.files : []),
+      ...(github.branches.find((b) => b.name === task.branch)?.files ?? []),
+    ]),
+  ];
+}
+
 export function filesOutsideScope(paths: string[], scope: string[]): string[] {
   return scope.length === 0 ? [] : paths.filter((path) => !matchesAny(path, scope));
 }

@@ -59,7 +59,13 @@ export const MemoryOp = z.discriminatedUnion('op', [
     source: MemorySource.nullable().optional(),
   }),
   z.object({ op: z.literal('set'), id: EntryId, kind: MemoryKind.optional(), title: MemoryTitle.optional() }),
-  z.object({ op: z.literal('text'), id: EntryId, value: z.string().max(MEMORY_TEXT_LIMIT) }),
+  z.object({
+    op: z.literal('text'),
+    id: EntryId,
+    value: z.string().max(MEMORY_TEXT_LIMIT),
+    /** The text the editor started from; see setText. */
+    base: z.string().max(MEMORY_TEXT_LIMIT).optional(),
+  }),
   z.object({ op: z.literal('delete'), id: EntryId }),
 ]);
 export type MemoryOp = z.infer<typeof MemoryOp>;
@@ -97,7 +103,7 @@ export function applyMemoryOp(doc: Y.Doc, op: MemoryOp, by: string, now = Date.n
         if (op.title) entry.set('title', op.title);
         break;
       case 'text':
-        setItemText(entry, 'body', op.value);
+        setItemText(entry, 'body', op.value, op.base);
         break;
       case 'delete':
         entries.delete(op.id);

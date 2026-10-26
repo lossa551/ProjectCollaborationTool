@@ -41,22 +41,40 @@ export function itemsOf(doc: Y.Doc, docId: DocId): Y.Map<Y.Map<unknown>> {
   return doc.getMap(docId === 'planning' ? 'items' : 'entries');
 }
 
+/** The one edit that turns `a` into `b`: keep the common start and end, replace the middle. */
+export function spliceOf(a: string, b: string): { start: number; removed: number; inserted: string } {
+  let start = 0;
+  const max = Math.min(a.length, b.length);
+  while (start < max && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < max - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  return { start, removed: a.length - start - end, inserted: b.slice(start, b.length - end) };
+}
+
 /**
- * Turns `text` into `next` with the smallest single edit (common start and end
- * kept), so a concurrent edit elsewhere in the text survives the merge.
+ * Turns `text` into `next` with the smallest single edit, so a concurrent edit
+ * elsewhere in the text survives the merge.
+ *
+ * With `base` (the text the editor started from), an edit made against an
+ * older version still lands in the right place: if someone else's change
+ * arrived in the meantime, it is kept and this edit moves around it.
  */
-export function setText(text: Y.Text, next: string): void {
+export function setText(text: Y.Text, next: string, base?: string): void {
   const current = text.toString();
   if (current === next) return;
-  let start = 0;
-  const max = Math.min(current.length, next.length);
-  while (start < max && current[start] === next[start]) start++;
-  let end = 0;
-  while (end < max - start && current[current.length - 1 - end] === next[next.length - 1 - end]) end++;
-  const removed = current.length - start - end;
-  if (removed > 0) text.delete(start, removed);
-  const inserted = next.slice(start, next.length - end);
-  if (inserted) text.insert(start, inserted);
+  let edit = spliceOf(current, next);
+  if (base !== undefined && base !== current) {
+    const mine = spliceOf(base, next);
+    const theirs = spliceOf(base, current);
+    if (theirs.start + theirs.removed <= mine.start) {
+      edit = { ...mine, start: mine.start + theirs.inserted.length - theirs.removed };
+    } else if (theirs.start >= mine.start + mine.removed) {
+      edit = mine;
+    }
+    // Overlapping edits: this one wins, as if it came last.
+  }
+  if (edit.removed > 0) text.delete(edit.start, edit.removed);
+  if (edit.inserted) text.insert(edit.start, edit.inserted);
 }
 
 /** A plain object of an item map, with Y.Text values read as strings. */
@@ -80,13 +98,13 @@ export function readItems<T>(doc: Y.Doc, docId: DocId, schema: z.ZodType<T>): T[
 }
 
 /** Sets a text field, creating the Y.Text the first time. */
-export function setItemText(item: Y.Map<unknown>, field: string, value: string): void {
+export function setItemText(item: Y.Map<unknown>, field: string, value: string, base?: string): void {
   let text = item.get(field);
   if (!(text instanceof Y.Text)) {
     text = new Y.Text();
     item.set(field, text);
   }
-  setText(text as Y.Text, value);
+  setText(text as Y.Text, value, base);
 }
 
 export { Y };

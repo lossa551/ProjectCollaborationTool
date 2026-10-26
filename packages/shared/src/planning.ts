@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { z } from 'zod';
 import { itemsOf, readItems, setItemText } from './docs.js';
-import { STAGE_LABELS, TaskStage, type Task } from './model.js';
+import { CRITERIA_LIMIT, CriterionText, STAGE_LABELS, TaskScope, TaskStage, TaskTitle, type Task } from './model.js';
 import { normalizePath } from './paths.js';
 
 // The planning space (screen 4): features, ideas and notes in one shared Yjs
@@ -49,11 +49,28 @@ const ItemId = z.string().min(8).max(64);
 export const PlanOp = z.discriminatedUnion('op', [
   z.object({ op: z.literal('create'), id: ItemId, kind: PlanKind, title: PlanTitle }),
   z.object({ op: z.literal('set'), id: ItemId, kind: PlanKind.optional(), title: PlanTitle.optional() }),
-  z.object({ op: z.literal('text'), id: ItemId, field: PlanTextField, value: z.string().max(PLAN_TEXT_LIMIT) }),
+  z.object({
+    op: z.literal('text'),
+    id: ItemId,
+    field: PlanTextField,
+    value: z.string().max(PLAN_TEXT_LIMIT),
+    /** The text the editor started from; see setText. */
+    base: z.string().max(PLAN_TEXT_LIMIT).optional(),
+  }),
   z.object({ op: z.literal('approve'), id: ItemId }),
   z.object({ op: z.literal('delete'), id: ItemId }),
 ]);
 export type PlanOp = z.infer<typeof PlanOp>;
+
+/** Approving a feature: the tasks to create, each with its acceptance criteria. */
+export const PlanApproval = z.object({
+  featureId: ItemId,
+  tasks: z
+    .array(z.object({ title: TaskTitle, scope: TaskScope, criteria: z.array(CriterionText).max(CRITERIA_LIMIT) }))
+    .min(1)
+    .max(50),
+});
+export type PlanApproval = z.infer<typeof PlanApproval>;
 
 export function readPlanning(doc: Y.Doc): PlanItem[] {
   return readItems(doc, 'planning', PlanItem).sort((a, b) => a.createdAt - b.createdAt);
@@ -87,7 +104,7 @@ export function applyPlanOp(doc: Y.Doc, op: PlanOp, by: string, now = Date.now()
         if (op.title) item.set('title', op.title);
         break;
       case 'text':
-        setItemText(item, op.field, op.value);
+        setItemText(item, op.field, op.value, op.base);
         break;
       case 'approve':
         item.set('approvedAt', now);
