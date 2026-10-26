@@ -7,7 +7,7 @@ import { clone, parseStatus, readGitInfo, repositoryRoot, runGitAction } from '.
 
 const dirs: string[] = [];
 afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
 const temp = () => {
@@ -72,7 +72,8 @@ describe('parseStatus', () => {
   });
 });
 
-describe('git actions', () => {
+// Each test runs dozens of git commands, which take a while on Windows.
+describe('git actions', { timeout: 30_000 }, () => {
   it('says plainly when a folder is not a repository', async () => {
     await expect(repositoryRoot(temp())).rejects.toMatchObject({ code: 'not-a-repo', message: 'That folder is not inside a git repository.' });
   });
