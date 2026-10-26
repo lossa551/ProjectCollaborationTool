@@ -766,6 +766,20 @@ ipcMain.handle(Channel.createChat, (_event, request: { agentId?: unknown; title?
   const taskId = typeof request.taskId === 'string' ? request.taskId : null;
   return { ok: true, value: client.createChat({ agentId: request.agentId, title: title.data, taskId }) };
 });
+ipcMain.handle(
+  Channel.branchChat,
+  (_event, request: { fromChatId?: unknown; fromMessageId?: unknown; title?: unknown; agentId?: unknown }): ResultWith<string> => {
+    const title = ChatTitle.safeParse(request?.title);
+    if (typeof request?.fromChatId !== 'string' || typeof request.fromMessageId !== 'string') return { ok: false, error: 'Pick a message to branch from.' };
+    if (!title.success) return { ok: false, error: 'Give the new chat a title.' };
+    if (client.getState().status !== 'connected') return { ok: false, error: 'Chats need the session server.' };
+    const agentId = typeof request.agentId === 'string' ? request.agentId : undefined;
+    return {
+      ok: true,
+      value: client.branchChat({ fromChatId: request.fromChatId, fromMessageId: request.fromMessageId, title: title.data, agentId }),
+    };
+  },
+);
 ipcMain.on(Channel.updateChat, (_event, chatId: unknown, changes: { title?: unknown; taskId?: unknown }) => {
   if (typeof chatId !== 'string' || !changes) return;
   const title = changes.title === undefined ? undefined : ChatTitle.safeParse(changes.title);

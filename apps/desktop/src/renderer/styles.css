@@ -1076,6 +1076,45 @@ a {
   overflow-wrap: anywhere;
 }
 
+.msg-branch {
+  margin-left: auto;
+  font-size: 12px;
+  visibility: hidden;
+}
+
+.msg:hover .msg-branch,
+.msg-branch:focus-visible {
+  visibility: visible;
+}
+
+.msg-branches {
+  margin-top: 2px;
+}
+
+.branched-from {
+  display: block;
+}
+
+.branch-form {
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.branch-form p {
+  margin: 0 0 8px;
+}
+
+.branch-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.branch-form select {
+  flex: 0 1 220px;
+}
+
 .msg-handoff .msg-body {
   background: var(--panel-2);
   border: 1px solid var(--border);

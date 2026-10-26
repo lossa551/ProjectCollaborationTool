@@ -21,7 +21,7 @@ import {
   type Workspace,
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
-import { AgentChats } from './chats.js';
+import { AgentChats, CHAT_HISTORY_LIMIT } from './chats.js';
 import { SharedDocs } from './docs.js';
 import { GitHubWatcher, describeGitHubChanges, type GitHubOptions } from './github.js';
 import { LockTable } from './locks.js';
@@ -463,6 +463,22 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           }
           chatChanged(result.value);
           record(participant, result.description, result.value.taskId);
+          break;
+        }
+        case 'chat.branch': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people branch chats');
+          const result = await chats.branchChat(message, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          const { chat, messages } = result.value;
+          if (!result.description) {
+            send(conn, { type: 'chat.changed', chat });
+            break;
+          }
+          chatChanged(chat);
+          for (const m of messages) void persist('chat message', storage.saveChatMessage(m));
+          // Everyone gets the copied messages at once, so the chat's agent can pick up where it left off.
+          broadcast({ type: 'chat.history', chatId: chat.id, messages: messages.slice(-CHAT_HISTORY_LIMIT) });
+          record(participant, result.description, chat.taskId);
           break;
         }
         case 'chat.update': {

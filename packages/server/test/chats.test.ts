@@ -100,6 +100,65 @@ describe('agent chats', () => {
     await waitFor(martin, (s) => s.messages[chatId]?.[0]?.approval?.state === 'expired');
   });
 
+  it('branches a chat from a message, copying the conversation up to it and keeping it across a restart', async () => {
+    const dir = mkdtempSync(joinPath(tmpdir(), 'pct-'));
+    dirs.push(dir);
+    const path = joinPath(dir, 'session.sqlite');
+    server = await startServer({ port: 0, host: '127.0.0.1', storage: new SqliteStorage(path) });
+    const martin = await join('Martin');
+    const friend = await join('Friend');
+    martin.saveAgent(builder);
+    const { agents } = await waitFor(martin, (s) => s.agents.length === 1);
+    const chatId = martin.createChat({ agentId: agents[0]!.id, title: 'Menu' });
+    await waitFor(martin, (s) => s.chats.length === 1);
+    martin.openChat(chatId);
+    const agent = await join('Builder', { profileId: agents[0]!.id, startedBy: 'Martin' });
+    // Each post waits for the last, so the order is the same for everyone.
+    const first = martin.postChat(chatId, { kind: 'text', text: 'Plan the menu' });
+    await waitFor(agent, (s) => s.messages[chatId]?.length === 1);
+    const answer = agent.postChat(chatId, { kind: 'text', text: 'Use a grid' });
+    agent.postChat(chatId, { kind: 'approval', text: 'Edit a', approval: { action: 'Edit a', reason: 'outside', state: 'pending' } });
+    await waitFor(martin, (s) => s.messages[chatId]?.length === 3);
+    martin.postChat(chatId, { kind: 'text', text: 'No, use a list' });
+    await waitFor(martin, (s) => s.messages[chatId]?.length === 4);
+
+    // Agents cannot branch, and the message must be in the chat.
+    agent.branchChat({ fromChatId: chatId, fromMessageId: answer, title: 'x' });
+    await waitFor(agent, (s) => s.error?.code === 'not_allowed');
+    martin.branchChat({ fromChatId: chatId, fromMessageId: 'gone', title: 'x' });
+    await waitFor(martin, (s) => s.error?.code === 'not_found');
+
+    const branchId = friend.branchChat({ fromChatId: chatId, fromMessageId: answer, title: 'Menu (grid)' });
+    const state = await waitFor(martin, (s) => s.chats.length === 2 && (s.messages[branchId]?.length ?? 0) === 3);
+    const branch = state.chats.find((c) => c.id === branchId)!;
+    expect(branch.branchedFrom).toEqual({ chatId, messageId: answer, title: 'Menu' });
+    expect(branch.agentId).toBe(agents[0]!.id);
+    const copied = state.messages[branchId]!;
+    expect(copied.map((m) => m.text.split('.')[0])).toEqual(['Plan the menu', 'Use a grid', 'Friend branched this chat from "Menu"']);
+    expect(copied.every((m) => m.chatId === branchId && m.id !== first && m.id !== answer)).toBe(true);
+    expect(copied[2]!.kind).toBe('notice');
+    // The original is untouched.
+    expect(state.messages[chatId]!.map((m) => m.text)).toEqual(['Plan the menu', 'Use a grid', 'Edit a', 'No, use a list']);
+    await waitFor(martin, (s) => s.activity.some((a) => a.text === 'branched "Menu" into "Menu (grid)"'));
+
+    // A pending request is closed in the copy, and the chat's agent can post in the branch.
+    const later = martin.getState().messages[chatId]![2]!.id;
+    const second = martin.branchChat({ fromChatId: chatId, fromMessageId: later, title: 'Menu (asked)' });
+    const withApproval = await waitFor(martin, (s) => (s.messages[second]?.length ?? 0) === 4);
+    expect(withApproval.messages[second]![2]!.approval?.state).toBe('expired');
+    expect(withApproval.messages[chatId]![2]!.approval?.state).toBe('pending');
+    agent.postChat(branchId, { kind: 'text', text: 'Grid it is' });
+    await waitFor(martin, (s) => s.messages[branchId]?.length === 4);
+
+    await server.close();
+    server = await startServer({ port: 0, host: '127.0.0.1', storage: new SqliteStorage(path) });
+    const back = await join('Martin');
+    expect(back.getState().chats.find((c) => c.id === branchId)?.branchedFrom?.chatId).toBe(chatId);
+    back.openChat(branchId);
+    const reloaded = await waitFor(back, (s) => (s.messages[branchId]?.length ?? 0) === 4);
+    expect(reloaded.messages[branchId]!.map((m) => m.text)[3]).toBe('Grid it is');
+  });
+
   it('turns away a runner for an agent that is not set up', async () => {
     server = await startServer({ port: 0, host: '127.0.0.1' });
     const ghost = await join('Ghost', { profileId: 'nope', startedBy: 'Martin' });

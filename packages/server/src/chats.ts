@@ -101,6 +101,7 @@ export class AgentChats {
       taskId: input.taskId ?? null,
       createdBy: owner(by),
       handoff: input.handoff ?? null,
+      branchedFrom: null,
       state: 'idle',
       activity: null,
       context: null,
@@ -113,6 +114,74 @@ export class AgentChats {
       ? `handed off to ${agent.name}${chat.handoff.fromName ? ` from ${chat.handoff.fromName}` : ''}`
       : `started a chat with ${agent.name}: "${chat.title}"`;
     return { ok: true, value: chat, description };
+  }
+
+  /**
+   * Starts a new chat with a copy of another chat's messages, up to and
+   * including one of them, and a notice saying where it came from. The copies
+   * get new ids; the original chat is not changed. Only the conversation is
+   * branched, not the files the agent changed.
+   */
+  async branchChat(
+    input: { id: string; fromChatId: string; fromMessageId: string; agentId?: string; title: string },
+    by: Participant,
+    now = Date.now(),
+  ): Promise<ChatResult<{ chat: ChatInfo; messages: ChatMessage[] }>> {
+    const existing = this.chats.get(input.id);
+    // A replayed branch changes nothing.
+    if (existing) return { ok: true, value: { chat: existing, messages: await this.history(existing.id) }, description: null };
+    const parent = this.chats.get(input.fromChatId);
+    if (!parent) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
+    const agent = this.agents.get(input.agentId ?? parent.agentId);
+    if (!agent) return { ok: false, code: 'not_found', message: 'That agent no longer exists' };
+    const source = await this.history(parent.id);
+    const end = source.findIndex((m) => m.id === input.fromMessageId);
+    if (end < 0) return { ok: false, code: 'not_found', message: 'That message is no longer in the chat' };
+    // The chat may have been created by a replay while loading.
+    const raced = this.chats.get(input.id);
+    if (raced) return { ok: true, value: { chat: raced, messages: await this.history(raced.id) }, description: null };
+
+    const chat: ChatInfo = {
+      id: input.id,
+      title: input.title,
+      agentId: agent.id,
+      taskId: parent.taskId,
+      createdBy: owner(by),
+      handoff: parent.handoff,
+      branchedFrom: { chatId: parent.id, messageId: input.fromMessageId, title: parent.title },
+      state: 'idle',
+      activity: null,
+      context: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const messages: ChatMessage[] = source.slice(0, end + 1).map((m) => ({
+      ...m,
+      id: randomUUID(),
+      chatId: chat.id,
+      // Nothing is still being written or waiting for an answer in the copy.
+      streaming: false,
+      approval: m.approval?.state === 'pending' ? { ...m.approval, state: 'expired' } : m.approval,
+      tool: m.tool?.status === 'running' ? { ...m.tool, status: 'failed' } : m.tool,
+    }));
+    const switched = agent.id === parent.agentId ? '' : ` It continues with ${agent.name}.`;
+    messages.push({
+      id: randomUUID(),
+      chatId: chat.id,
+      author: owner(by),
+      kind: 'notice',
+      text:
+        `${by.name} branched this chat from "${parent.title}".${switched} ` +
+        'Only the conversation was branched: files changed later in the original chat are still changed in the project folder.',
+      streaming: false,
+      tool: null,
+      approval: null,
+      at: now,
+      updatedAt: now,
+    });
+    this.chats.set(chat.id, chat);
+    this.messages.set(chat.id, messages.slice(-CHAT_HISTORY_LIMIT));
+    return { ok: true, value: { chat, messages }, description: `branched "${parent.title}" into "${chat.title}"` };
   }
 
   updateChat(chatId: string, changes: { title?: string; taskId?: string | null }, now = Date.now()): ChatResult<ChatInfo> {

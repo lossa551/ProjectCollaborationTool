@@ -398,6 +398,13 @@ export class SessionClient {
     return id;
   }
 
+  /** Starts a new chat with the messages of another chat up to and including one of them. */
+  branchChat(options: { fromChatId: string; fromMessageId: string; title: string; agentId?: string }): string {
+    const id = crypto.randomUUID();
+    this.send({ type: 'chat.branch', id, ...options });
+    return id;
+  }
+
   updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void {
     this.send({ type: 'chat.update', chatId, ...changes });
   }

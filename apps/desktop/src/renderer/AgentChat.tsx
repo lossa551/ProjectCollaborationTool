@@ -100,7 +100,7 @@ export function ChatScreen({
           onCancel={session.chats.length > 0 ? () => setComposing(false) : undefined}
         />
       ) : chat ? (
-        <Conversation key={chat.id} state={state} chat={chat} />
+        <Conversation key={chat.id} state={state} chat={chat} onSelect={onSelect} />
       ) : (
         <div className="chat-empty muted">Pick a chat, or start a new one.</div>
       )}
@@ -180,14 +180,16 @@ function NewChat({
   );
 }
 
-function Conversation({ state, chat }: { state: AppState; chat: ChatInfo }) {
+function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatInfo; onSelect: (chatId: string) => void }) {
   const { session } = state;
   const agent = session.agents.find((a) => a.id === chat.agentId);
   const runner = agent ? runnerOf(agent, session.participants) : undefined;
   const messages = session.messages[chat.id];
   const online = session.status === 'connected';
   const [text, setText] = useState('');
+  const [branchFrom, setBranchFrom] = useState<ChatMessage | null>(null);
   const end = useRef<HTMLDivElement>(null);
+  const parent = chat.branchedFrom ? session.chats.find((c) => c.id === chat.branchedFrom!.chatId) : undefined;
   const last = messages?.[messages.length - 1];
 
   useEffect(() => {
@@ -216,6 +218,19 @@ function Conversation({ state, chat }: { state: AppState; chat: ChatInfo }) {
             {agent ? `${agent.name} · ${describeConnection(agent.connection)}` : 'This agent was removed'}
             {runner ? ` · on ${runner.agent!.startedBy}’s PC` : ' · not running'}
           </span>
+          {chat.branchedFrom && (
+            <span className="branched-from small muted">
+              Branched from{' '}
+              {parent ? (
+                <button className="link" onClick={() => onSelect(parent.id)}>
+                  {parent.title}
+                </button>
+              ) : (
+                <span>{chat.branchedFrom.title} (deleted)</span>
+              )}{' '}
+              at {time(chat.createdAt)}
+            </span>
+          )}
           {chat.state !== 'idle' && (
             <span className="agent-now small">
               <span className={`dot dot-${chat.state}`} />
@@ -233,7 +248,17 @@ function Conversation({ state, chat }: { state: AppState; chat: ChatInfo }) {
       <div className="messages">
         {messages === undefined && <p className="muted">Loading…</p>}
         {messages?.length === 0 && <p className="muted">No messages yet. Everyone in the session can see and post in this chat.</p>}
-        {messages?.map((m) => <Message key={m.id} message={m} youId={session.you?.id ?? null} online={online} />)}
+        {messages?.map((m) => (
+          <Message
+            key={m.id}
+            message={m}
+            youId={session.you?.id ?? null}
+            online={online}
+            branches={session.chats.filter((c) => c.branchedFrom?.chatId === chat.id && c.branchedFrom.messageId === m.id)}
+            onBranch={() => setBranchFrom(m)}
+            onSelect={onSelect}
+          />
+        ))}
         <div ref={end} />
       </div>
       {!runner && agent && (
@@ -241,26 +266,53 @@ function Conversation({ state, chat }: { state: AppState; chat: ChatInfo }) {
           {agent.name} is not running. Start it on the Agents screen; it answers what was posted here once it is up.
         </p>
       )}
-      <form className="composer" onSubmit={send}>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKey}
-          rows={2}
-          placeholder={agent ? `Message ${agent.name} (Enter sends, Shift+Enter for a new line)` : 'Message'}
-          disabled={!online}
+      {branchFrom ? (
+        <BranchForm
+          state={state}
+          chat={chat}
+          from={branchFrom}
+          onDone={(next) => {
+            setBranchFrom(null);
+            if (next) onSelect(next);
+          }}
         />
-        <button type="submit" disabled={!online || !text.trim()}>
-          Send
-        </button>
-      </form>
+      ) : (
+        <form className="composer" onSubmit={send}>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKey}
+            rows={2}
+            placeholder={agent ? `Message ${agent.name} (Enter sends, Shift+Enter for a new line)` : 'Message'}
+            disabled={!online}
+          />
+          <button type="submit" disabled={!online || !text.trim()}>
+            Send
+          </button>
+        </form>
+      )}
     </section>
   );
 }
 
 const TOOL_ICON = { running: '…', done: '✓', failed: '✗', blocked: '⛔' } as const;
 
-function Message({ message: m, youId, online }: { message: ChatMessage; youId: string | null; online: boolean }) {
+function Message({
+  message: m,
+  youId,
+  online,
+  branches,
+  onBranch,
+  onSelect,
+}: {
+  message: ChatMessage;
+  youId: string | null;
+  online: boolean;
+  /** Chats branched from this message. */
+  branches: ChatInfo[];
+  onBranch: () => void;
+  onSelect: (chatId: string) => void;
+}) {
   if (m.kind === 'notice') return <p className="msg-notice">{m.text}</p>;
   if (m.kind === 'tool' && m.tool) {
     return (
@@ -305,13 +357,77 @@ function Message({ message: m, youId, online }: { message: ChatMessage; youId: s
         <div className="msg-meta small">
           <strong>{mine ? 'You' : m.author.name}</strong> <span className="muted">{time(m.at)}</span>
           {m.kind === 'handoff' && <span className="badge">Handoff</span>}
+          {!m.streaming && (
+            <button className="link msg-branch" disabled={!online} onClick={onBranch} title="Start a new chat with the conversation up to here">
+              Branch from here
+            </button>
+          )}
         </div>
         <div className="msg-text">
           {m.text}
           {m.streaming && <span className="cursor">▍</span>}
         </div>
+        {branches.length > 0 && (
+          <div className="msg-branches small muted">
+            Branched into{' '}
+            {branches.map((b, i) => (
+              <span key={b.id}>
+                {i > 0 && ', '}
+                <button className="link" onClick={() => onSelect(b.id)}>
+                  {b.title}
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+/** Starts a new chat with the conversation up to one message, with the same agent or another one. */
+function BranchForm({ state, chat, from, onDone }: { state: AppState; chat: ChatInfo; from: ChatMessage; onDone: (chatId: string | null) => void }) {
+  const { session } = state;
+  const [title, setTitle] = useState(`${chat.title} (branch)`.slice(0, 200));
+  const [agentId, setAgentId] = useState(session.agents.some((a) => a.id === chat.agentId) ? chat.agentId : (session.agents[0]?.id ?? ''));
+  const [error, setError] = useState<string | null>(null);
+  const answers = from.author.kind === 'human';
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const result = await window.pct.branchChat({ fromChatId: chat.id, fromMessageId: from.id, title: title.trim() || chat.title, agentId });
+    if (result.ok) onDone(result.value);
+    else setError(result.error);
+  };
+
+  return (
+    <form className="branch-form" onSubmit={(e) => void submit(e)}>
+      <p className="small">
+        <strong>
+          Branch from {from.author.name}’s message at {time(from.at)}.
+        </strong>{' '}
+        The new chat gets the conversation up to here; this chat stays as it is.
+        {answers ? ' The agent answers this message again in the new chat.' : ''} Files are not branched.
+      </p>
+      <div className="row">
+        <input className="grow" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} aria-label="Title" />
+        <select value={agentId} onChange={(e) => setAgentId(e.target.value)} aria-label="Agent">
+          {session.agents.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+              {runnerOf(a, session.participants) ? '' : ' (not running)'}
+            </option>
+          ))}
+        </select>
+        <button type="submit" disabled={!agentId || session.status !== 'connected'}>
+          Start branch
+        </button>
+        <button type="button" className="secondary" onClick={() => onDone(null)}>
+          Cancel
+        </button>
+      </div>
+      {error && <p className="error small">{error}</p>}
+    </form>
   );
 }
 

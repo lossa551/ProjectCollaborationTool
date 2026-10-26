@@ -30,6 +30,7 @@ const api: PctApi = {
   stopAgent: (agentId) => ipcRenderer.send(Channel.stopAgent, agentId),
   setApiKey: (name, key) => ipcRenderer.invoke(Channel.setApiKey, name, key),
   createChat: (request) => ipcRenderer.invoke(Channel.createChat, request),
+  branchChat: (request) => ipcRenderer.invoke(Channel.branchChat, request),
   updateChat: (chatId, changes) => ipcRenderer.send(Channel.updateChat, chatId, changes),
   deleteChat: (chatId) => ipcRenderer.send(Channel.deleteChat, chatId),
   openChat: (chatId) => ipcRenderer.send(Channel.openChat, chatId),
