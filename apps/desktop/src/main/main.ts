@@ -64,6 +64,8 @@ let workspace: LocalWorkspace | null = null;
 /** Where this app is connected, so agents started here can join the same session. */
 let joined: { url: string; secret: string } | null = null;
 let cliTools: Record<CliTool, boolean> = { 'claude-code': false, codex: false };
+/** Live text edits from the window applied so far; see AppState.textEdits. */
+let textEdits = 0;
 /** The sessions hosted or joined on this PC, and the one in use now. */
 let history: SessionHistory | null = null;
 const sessions = () => (history ??= new SessionHistory(app.getPath('userData')));
@@ -78,6 +80,7 @@ const appState = (): AppState => ({
   localAgents: localAgents.list(),
   apiKeys: apiKeyStatus(),
   cliTools,
+  textEdits,
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
@@ -725,14 +728,20 @@ ipcMain.handle(Channel.handOff, (_event, request: HandoffRequest) => {
   if (!request || typeof request.agentId !== 'string') return { ok: false, error: 'Pick an agent to hand off to.' };
   return handOff(request);
 });
+// Every live text edit is counted, applied or not, and the window hears about it.
+const isTextEdit = (op: unknown) => (op as { op?: unknown } | null)?.op === 'text' && typeof (op as { base?: unknown }).base === 'string';
 ipcMain.on(Channel.editPlanning, (_event, op: unknown) => {
+  if (isTextEdit(op)) textEdits++;
   const parsed = PlanOp.safeParse(op);
   if (parsed.success) client.editPlanning(parsed.data);
+  pushState();
 });
 ipcMain.handle(Channel.approvePlan, (_event, approval: unknown) => approvePlan(approval));
 ipcMain.on(Channel.editMemory, (_event, op: unknown) => {
+  if (isTextEdit(op)) textEdits++;
   const parsed = MemoryOp.safeParse(op);
   if (parsed.success) client.editMemory(parsed.data);
+  pushState();
 });
 ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unknown, state: unknown, evidence: unknown) => {
   const parsed = TaskVerifyMessage.safeParse({ type: 'task.verify', taskId, criterionId, state, evidence });

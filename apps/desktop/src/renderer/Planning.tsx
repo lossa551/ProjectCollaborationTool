@@ -199,13 +199,14 @@ function PlanEditor({
       </p>
 
       {status && <StageTracker status={status} />}
+      {status && <FeatureTasks tasks={status.tasks} onOpenTask={onOpenTask} />}
 
       {FIELDS.filter((f) => isFeature || !f.featureOnly).map((f) => (
         <label key={f.field} className="field">
           <span>
             {f.label} <span className="muted">· {f.hint}</span>
           </span>
-          <LiveText value={item[f.field]} onEdit={editText(f.field)} rows={f.rows} disabled={!editable} maxLength={PLAN_TEXT_LIMIT} spellCheck={f.field !== 'tasks'} />
+          <LiveText value={item[f.field]} applied={state.textEdits} onEdit={editText(f.field)} rows={f.rows} disabled={!editable} maxLength={PLAN_TEXT_LIMIT} spellCheck={f.field !== 'tasks'} />
           {f.field === 'dependencies' && linked.length > 0 && (
             <span className="small">
               Linked:{' '}
@@ -228,7 +229,6 @@ function PlanEditor({
 
       {status && (
         <>
-          <FeatureTasks tasks={status.tasks} onOpenTask={onOpenTask} />
           {approving ? (
             <ApproveForm item={item} existing={status.tasks} onDone={() => setApproving(false)} />
           ) : (
@@ -271,7 +271,7 @@ function StageTracker({ status }: { status: FeatureStatus }) {
         ))}
       </ol>
       <p className="small">
-        <FeatureBadge status={status} />
+        {status.state !== 'planning' && <FeatureBadge status={status} />}
         {status.reason && <span className="muted"> {status.reason}</span>}
         {status.tasks.length > 0 && (
           <span className="muted">

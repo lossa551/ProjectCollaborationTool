@@ -138,6 +138,47 @@ instead of invite secrets, and running agents server-side if wanted.
 - **Handoffs**: a new chat with another agent that starts from a package of
   plan, decisions, acceptance criteria, allowed paths and notes; the task
   moves to the chosen stage and is assigned to that agent if it is running.
-- Not yet: plugins as a connection type, saving a chat to project memory
-  (with #9), and separate worktrees per agent (agents share their starter's
-  folder for now).
+- Not yet: plugins as a connection type, and separate worktrees per agent
+  (agents share their starter's folder for now).
+
+## Planning space, project memory and bloat check, as built (2026-10-26)
+
+- **Shared documents**: the planning space and project memory are two Yjs
+  documents (`planning`, `memory`). Each client keeps a full copy; on every
+  connect it sends its state vector (`doc.sync`), the server answers with what
+  the client is missing plus its own state vector (`doc.state`), and the
+  client sends back what the server is missing. After that, edits go out as
+  Yjs updates (`doc.update`) and are relayed to everyone (`doc.changed`). The
+  server stores each document's merged state in SQLite (schema 3, `docs`
+  table), saving at most once a second while people type.
+- **Offline**: edits made while the server is unreachable stay in the local
+  copy, which is part of the offline cache, and merge on reconnect.
+- **Text fields** are Y.Text. The window sends each edit with the text it was
+  made on, so an edit made just before someone else's change arrived still
+  lands in the right place.
+- **Features**: kind (feature, idea, note), title, description,
+  requirements, dependencies, acceptance criteria and implementation tasks,
+  one per line. Approving a feature creates its tasks (with allowed paths
+  after a "|" and the criteria each task gets) linked by `featureId`. From
+  then on the feature's stage is that of its least finished task; it is
+  blocked by a failing criterion or by a dependency line naming another
+  feature that is not done, and "not verified" while criteria in testing or
+  done are untested.
+- **Acceptance criteria and test results** are server-owned task records:
+  each criterion has a state (not tested, verified, failing), evidence, who
+  recorded it and when. Rewording a criterion resets it to not tested.
+  Results can be recorded offline and are replayed in order. API agents
+  record them with a `record_test_result` tool; CLI agents are asked to
+  report them in the chat.
+- **Project memory** entries (decision, convention, known issue, plan) are
+  given to every agent as part of its context and listed in the context
+  panel. An agent chat can be saved to memory; the entry links back to it.
+- **Bloat check** runs on the PC of whoever presses it, over the files git
+  sees in their project folder (ignored files left out): identical files,
+  code files with the same name in different folders of one package, assets
+  no text file refers to by name, and package.json dependencies nothing
+  imports or runs. The report is shared with the session. Changes outside a
+  task's paths are worked out live from workspaces, branches and pull
+  requests. Findings can be noted as known issues in memory.
+- Not yet: Unreal's binary assets in the unused-asset check, and references
+  between scenes and scripts (with the engine integrations).

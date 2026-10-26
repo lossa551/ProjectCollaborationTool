@@ -88,6 +88,12 @@ export interface AppState {
   apiKeys: Record<string, 'saved' | 'env'>;
   /** Command-line agents installed on this PC. */
   cliTools: Record<CliTool, boolean>;
+  /**
+   * How many live text edits from the window have been applied to the shared
+   * documents. An editor whose own edits are still on the way waits for them
+   * before taking in the shared text (see LiveText).
+   */
+  textEdits: number;
 }
 
 export interface HandoffRequest {

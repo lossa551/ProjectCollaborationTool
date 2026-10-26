@@ -93,6 +93,7 @@ function MemoryList({ kind, state, onOpenChat }: { kind: MemoryKind; state: AppS
             entry={entry}
             open={entry.id === openId}
             editable={editable}
+            textEdits={state.textEdits}
             chatExists={entry.source?.kind === 'chat' && state.session.chats.some((c) => c.id === entry.source!.id)}
             onToggle={() => setOpenId(entry.id === openId ? null : entry.id)}
             onOpenChat={onOpenChat}
@@ -107,6 +108,7 @@ function MemoryCard({
   entry,
   open,
   editable,
+  textEdits,
   chatExists,
   onToggle,
   onOpenChat,
@@ -114,6 +116,7 @@ function MemoryCard({
   entry: MemoryEntry;
   open: boolean;
   editable: boolean;
+  textEdits: number;
   chatExists: boolean;
   onToggle: () => void;
   onOpenChat: (chatId: string) => void;
@@ -142,6 +145,7 @@ function MemoryCard({
           </div>
           <LiveText
             value={entry.body}
+            applied={textEdits}
             onEdit={(value, base) => window.pct.editMemory({ op: 'text', id: entry.id, value, base })}
             rows={Math.min(14, Math.max(4, entry.body.split('\n').length + 1))}
             maxLength={MEMORY_TEXT_LIMIT}
