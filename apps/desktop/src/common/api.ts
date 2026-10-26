@@ -1,6 +1,7 @@
 import type {
   AgentSaveMessage,
   CliTool,
+  FileChange,
   Handoff,
   LockRules,
   RepoRef,
@@ -27,8 +28,38 @@ export interface LocalWorkspace {
   /** The GitHub repository of the origin remote, if it is on GitHub. */
   remote: RepoRef | null;
   workspace: Workspace | null;
+  git: GitInfo | null;
   error: string | null;
 }
+
+/** What the Git card on the GitHub page needs about your checkout. */
+export interface GitInfo {
+  /** The remote branch this one tracks, e.g. "origin/main". */
+  upstream: string | null;
+  /** Commits you have that the upstream does not, and the other way round (as of the last fetch). */
+  ahead: number;
+  behind: number;
+  /** Changes not committed yet. */
+  uncommitted: { path: string; change: FileChange }[];
+  /** Files with merge conflicts. */
+  conflicted: string[];
+  /** A merge (e.g. from a pull) is in progress. */
+  merging: boolean;
+  /** Local branches. */
+  branches: string[];
+  /** Branches on GitHub (as of the last fetch) that you do not have locally. */
+  remoteBranches: string[];
+}
+
+export type GitAction =
+  | { type: 'fetch' }
+  | { type: 'pull' }
+  | { type: 'push' }
+  | { type: 'commit'; message: string }
+  | { type: 'switch'; branch: string }
+  /** from: start from the latest version of this GitHub branch; null starts from the current branch. */
+  | { type: 'create-branch'; branch: string; from: string | null }
+  | { type: 'abort-merge' };
 
 /** An agent started on this PC. */
 export interface LocalAgent {
@@ -110,6 +141,10 @@ export interface PctApi {
   /** Asks for your project folder and starts sharing its branch and changed files. */
   chooseWorkspace(): Promise<Result>;
   stopWorkspace(): void;
+  /** Asks where to put the linked repository, clones it there and makes it your project folder. */
+  cloneRepo(): Promise<Result>;
+  /** Runs a git action in your project folder; the value says what happened. */
+  gitAction(action: GitAction): Promise<ResultWith<string>>;
   /** "owner/name" or a GitHub URL; null unlinks. */
   linkRepo(repo: string | null): Promise<Result>;
   /** Host only: saves (or with null removes) the token the session server uses for GitHub. */
@@ -155,6 +190,8 @@ export const Channel = {
   setLockRules: 'pct:set-lock-rules',
   chooseWorkspace: 'pct:choose-workspace',
   stopWorkspace: 'pct:stop-workspace',
+  cloneRepo: 'pct:clone-repo',
+  gitAction: 'pct:git-action',
   linkRepo: 'pct:link-repo',
   setGitHubToken: 'pct:set-github-token',
   copyText: 'pct:copy-text',

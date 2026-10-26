@@ -1,5 +1,6 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron';
-import { join } from 'node:path';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
+import { existsSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import {
   AgentSaveMessage,
   ChatTitle,
@@ -21,6 +22,7 @@ import { SqliteStorage, findShareableAddress, startServer, tokenFromGitHubCli, t
 import {
   Channel,
   type AppState,
+  type GitAction,
   type HandoffRequest,
   type HostRequest,
   type HostingInfo,
@@ -34,7 +36,8 @@ import { loadSnapshot, saveSnapshot } from './cache';
 import { hostedSessionPath, loadIdentity } from './identity';
 import { loadGitHubToken, saveApiKey, saveGitHubToken, saveWorkspaceFolder, workspaceFolder } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { WorkspaceWatcher, repositoryRoot } from './workspace';
+import { GitError, clone, repositoryRoot, runGitAction, trustFolder } from './git';
+import { WorkspaceWatcher } from './workspace';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. It also runs the
@@ -103,20 +106,142 @@ client.subscribe((state) => {
   }
 });
 
+const openDialog = (options: OpenDialogOptions) => (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
+const messageBox = (options: MessageBoxOptions) => (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
+
+function useWorkspace(sessionId: string, root: string) {
+  saveWorkspaceFolder(sessionId, root);
+  watchFolder(root);
+}
+
 async function chooseWorkspace(): Promise<Result> {
   const sessionId = client.getState().session?.id;
   if (!sessionId) return { ok: false, error: 'Join a session first.' };
-  const options = { title: 'Choose your project folder', properties: ['openDirectory' as const] };
-  const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  for (;;) {
+    const picked = await openDialog({ title: 'Choose your project folder (where you cloned the project)', properties: ['openDirectory'] });
+    const folder = picked.filePaths[0];
+    if (picked.canceled || !folder) return { ok: true };
+    try {
+      useWorkspace(sessionId, await repositoryRoot(folder));
+      return { ok: true };
+    } catch (error) {
+      if (!(error instanceof GitError)) return failure(error);
+      if (error.code === 'dubious') {
+        const repoFolder = error.folder ?? folder;
+        const { response } = await messageBox({
+          type: 'question',
+          message: 'Git does not trust this folder',
+          detail: `${repoFolder} belongs to another Windows user (often because it was copied, or made by an installer or as administrator), so git refuses to read it. Trust it? This adds it to git's safe.directory setting.`,
+          buttons: ['Trust this folder', 'Choose another folder', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+        });
+        if (response === 2) return { ok: true };
+        if (response === 1) continue;
+        try {
+          await trustFolder(repoFolder);
+          useWorkspace(sessionId, await repositoryRoot(folder));
+          return { ok: true };
+        } catch (again) {
+          return failure(again);
+        }
+      }
+      if (error.code !== 'not-a-repo') return failure(error);
+      const repo = client.getState().github.repo;
+      const target = repo ? cloneTarget(folder, repo.name) : null;
+      const { response } = await messageBox({
+        type: 'question',
+        message: 'This folder is not a git repository',
+        detail: repo
+          ? `Your project folder must be a clone of the repository. The app can clone ${repo.owner}/${repo.name} from GitHub into ${target} and use that.`
+          : 'Your project folder must be a git clone of the project. Pick the folder you cloned it into, or link the GitHub repository on the GitHub page and the app can clone it for you.',
+        buttons: repo ? [`Clone ${repo.owner}/${repo.name}`, 'Choose another folder', 'Cancel'] : ['Choose another folder', 'Cancel'],
+        defaultId: 0,
+        cancelId: repo ? 2 : 1,
+      });
+      if (repo && response === 0) return cloneInto(folder);
+      if (response === (repo ? 2 : 1)) return { ok: true };
+    }
+  }
+}
+
+const isEmptyFolder = (folder: string) => {
+  try {
+    return readdirSync(folder).length === 0;
+  } catch {
+    return false;
+  }
+};
+
+/** An empty folder is used as it is; otherwise the clone goes into a new folder inside it. */
+const cloneTarget = (folder: string, name: string) => (isEmptyFolder(folder) ? folder : join(folder, name));
+
+let cloning = false;
+
+async function cloneRepo(): Promise<Result> {
+  const repo = client.getState().github.repo;
+  if (!repo) return { ok: false, error: 'Link the GitHub repository first.' };
+  if (!client.getState().session?.id) return { ok: false, error: 'Join a session first.' };
+  const picked = await openDialog({ title: `Choose where to put ${repo.name}`, properties: ['openDirectory', 'createDirectory'] });
   const folder = picked.filePaths[0];
   if (picked.canceled || !folder) return { ok: true };
+  return cloneInto(folder);
+}
+
+async function cloneInto(folder: string): Promise<Result> {
+  const sessionId = client.getState().session?.id;
+  const repo = client.getState().github.repo;
+  if (!sessionId || !repo) return { ok: false, error: 'Join a session and link the repository first.' };
+  if (cloning) return { ok: false, error: 'A clone is already running.' };
+  const target = cloneTarget(folder, repo.name);
+  if (existsSync(target) && !isEmptyFolder(target)) {
+    // Already cloned there before? Then just use it.
+    const root = await repositoryRoot(target).catch(() => null);
+    if (root) {
+      useWorkspace(sessionId, root);
+      return { ok: true };
+    }
+    return { ok: false, error: `${target} already exists and is not empty. Choose another folder.` };
+  }
+  cloning = true;
   try {
-    const root = await repositoryRoot(folder);
-    saveWorkspaceFolder(sessionId, root);
-    watchFolder(root);
+    await clone(`https://github.com/${repo.owner}/${repo.name}.git`, target, existsSync(target) ? target : dirname(target), await gitToken());
+    useWorkspace(sessionId, await repositoryRoot(target));
     return { ok: true };
   } catch (error) {
     return failure(error);
+  } finally {
+    cloning = false;
+  }
+}
+
+/** The token git uses for github.com: the one saved in the app, else the GitHub CLI's. */
+async function gitToken(): Promise<string | null> {
+  return loadGitHubToken() ?? (await tokenFromGitHubCli());
+}
+
+const GIT_ACTIONS = new Set(['fetch', 'pull', 'push', 'commit', 'switch', 'create-branch', 'abort-merge']);
+let gitBusy = false;
+
+async function gitAction(input: unknown): Promise<ResultWith<string>> {
+  const action = input as GitAction;
+  if (!action || typeof action !== 'object' || !GIT_ACTIONS.has(action.type)) return { ok: false, error: 'Unknown git action.' };
+  if ('message' in action && typeof action.message !== 'string') return { ok: false, error: 'Unknown git action.' };
+  if ('branch' in action && (typeof action.branch !== 'string' || action.branch.startsWith('-'))) return { ok: false, error: 'That is not a valid branch name.' };
+  if ('from' in action && action.from !== null && (typeof action.from !== 'string' || action.from.startsWith('-'))) {
+    return { ok: false, error: 'That is not a valid branch name.' };
+  }
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
+  if (gitBusy || cloning) return { ok: false, error: 'Git is still busy with the last action.' };
+  gitBusy = true;
+  try {
+    return { ok: true, value: await runGitAction(folder, action, await gitToken()) };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    gitBusy = false;
+    void watcher?.poll();
   }
 }
 
@@ -147,7 +272,7 @@ client.subscribe(() => {
 // Quitting from the tray, an update or the system skips window-all-closed.
 app.on('before-quit', flushCache);
 
-const failure = (error: unknown): Result => ({
+const failure = (error: unknown): { ok: false; error: string } => ({
   ok: false,
   error: error instanceof Error ? error.message : String(error),
 });
@@ -363,6 +488,8 @@ ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
 });
 ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
 ipcMain.on(Channel.stopWorkspace, () => stopWorkspace());
+ipcMain.handle(Channel.cloneRepo, () => cloneRepo());
+ipcMain.handle(Channel.gitAction, (_event, action: unknown) => gitAction(action));
 ipcMain.handle(Channel.linkRepo, (_event, input: unknown): Result => {
   if (input === null) {
     client.linkRepo(null);
