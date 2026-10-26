@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import {
   CLI_TOOLS,
+  approvalActivity,
+  lockWaitActivity,
   notesForPaths,
   samePath,
   type AgentProfile,
@@ -428,7 +430,7 @@ export class AgentRunner {
       signal.addEventListener('abort', abort, { once: true });
     });
     card('pending');
-    this.setState(chatId, 'waiting', `Waiting for approval: ${action}`);
+    this.setState(chatId, 'waiting', approvalActivity(action));
     const state = await decided;
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);
@@ -508,7 +510,7 @@ export class AgentRunner {
       chatId,
       `Waiting for ${names} to release ${path}${why ? ` (locked for "${why}")` : ''}. It goes on by itself once the lock is free; press Stop to give up.`,
     );
-    this.setState(chatId, 'waiting', `Waiting for ${names} to release ${path}`);
+    this.setState(chatId, 'waiting', lockWaitActivity(names, path));
     const result = await new Promise<'free' | 'abandoned' | 'timeout' | 'stopped'>((resolve) => {
       const check = () => {
         const current = this.client.getState().locks.filter((l) => ids.has(l.id));

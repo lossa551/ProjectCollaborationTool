@@ -139,15 +139,7 @@ function TaskCard({
         </span>
       ))}
       <span className="task-meta">
-        {task.owner ? (
-          <span className="owner">
-            <Avatar name={task.owner.name} kind={task.owner.kind} status={ownerOnline ? 'active' : 'offline'} small />
-            {task.owner.name}
-            {!ownerOnline && <span className="muted"> (offline)</span>}
-          </span>
-        ) : (
-          <span className="muted">Unassigned</span>
-        )}
+        <TaskPeople task={task} ownerOnline={ownerOnline} agents={[...new Set(working.map(agentName))]} />
         {locks.length > 0 && (
           <span className={locks.some((l) => l.abandoned) ? 'warning' : 'muted'} title={locks.map((l) => l.path).join('\n')}>
             {locks.length} {locks.length === 1 ? 'lock' : 'locks'}
@@ -167,6 +159,21 @@ function TaskCard({
         )}
       </span>
     </button>
+  );
+}
+
+/** Who is accountable and which agent is on it: "Martin · Builder working", not "Unassigned" while an agent works. */
+function TaskPeople({ task, ownerOnline, agents }: { task: Task; ownerOnline: boolean; agents: string[] }) {
+  const working = agents.length > 0 && <span className="agent-working">{agents.join(', ')} working</span>;
+  if (!task.owner) return working ? <span className="owner">{working}</span> : <span className="muted">Unassigned</span>;
+  return (
+    <span className="owner">
+      <Avatar name={task.owner.name} kind={task.owner.kind} status={ownerOnline ? 'active' : 'offline'} small />
+      {task.owner.name}
+      {!ownerOnline && <span className="muted"> (offline)</span>}
+      {working && <span className="muted"> · </span>}
+      {working}
+    </span>
   );
 }
 

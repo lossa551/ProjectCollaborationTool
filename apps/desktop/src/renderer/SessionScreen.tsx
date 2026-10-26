@@ -1,27 +1,32 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { findOverlaps, type Activity, type ChatInfo, type Lock, type Participant } from '@pct/shared';
+import { findOverlaps, needsYou, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
-import { GitHubScreen, WorkspaceCard } from './GitHub';
+import { GitHubScreen, OverlapsScreen, WorkspaceCard } from './GitHub';
+import { HomeScreen } from './Home';
 import { LocksScreen } from './Locks';
 import { MemoryScreen } from './Memory';
 import { PlanningScreen } from './Planning';
+import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
-// Nav items from docs/design/interface.md.
-type View = 'board' | 'planning' | 'locks' | 'agents' | 'chat' | 'memory';
+// Nav from issue #34: Home first, agent setup behind the Settings gear, and
+// GitHub, locks and overlaps together under Code.
+type View = 'home' | 'board' | 'planning' | 'agents' | 'code' | 'memory' | 'settings';
 const NAV: { label: string; view: View }[] = [
-  { label: 'Session board', view: 'board' },
-  { label: 'Planning space', view: 'planning' },
-  { label: 'Locks and GitHub', view: 'locks' },
+  { label: 'Home', view: 'home' },
+  { label: 'Board', view: 'board' },
+  { label: 'Planning', view: 'planning' },
   { label: 'Agents', view: 'agents' },
-  { label: 'Agent chat', view: 'chat' },
-  { label: 'Project memory', view: 'memory' },
+  { label: 'Code', view: 'code' },
+  { label: 'Memory', view: 'memory' },
 ];
+
+type CodeTab = 'github' | 'locks' | 'overlaps';
 
 const STATUS_LABEL = {
   idle: 'Not connected',
@@ -36,29 +41,71 @@ function statusLabel(status: keyof typeof STATUS_LABEL, pending: number): string
   return `Offline, ${pending} ${pending === 1 ? 'change' : 'changes'} waiting to sync`;
 }
 
+/** When you were last here, as it was when this window opened the session. */
+const visitStart = new Map<string, number | null>();
+
+/** Away this long before "Since you were last here" starts over from when you left. */
+const AWAY_MS = 30 * 60_000;
+
+/**
+ * When you were last here in this session, for the Home digest. Recorded each
+ * minute while the window has focus; coming back after a while away moves the
+ * digest to cover that time.
+ */
+function useLastSeen(sessionId: string | null): [number | null, () => void] {
+  const [since, setSince] = useState<number | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    const key = `lastSeen.${sessionId}`;
+    const stored = () => Number(recall(key)) || null;
+    // Read before this visit marks anything, once per session per window.
+    if (!visitStart.has(sessionId)) visitStart.set(sessionId, stored());
+    setSince(visitStart.get(sessionId)!);
+    const mark = () => {
+      if (document.hasFocus()) remember(key, String(Date.now()));
+    };
+    const back = () => {
+      const last = stored();
+      if (last && Date.now() - last > AWAY_MS) setSince(last);
+      mark();
+    };
+    mark();
+    const timer = setInterval(mark, 60_000);
+    window.addEventListener('focus', back);
+    window.addEventListener('beforeunload', mark);
+    return () => {
+      mark();
+      clearInterval(timer);
+      window.removeEventListener('focus', back);
+      window.removeEventListener('beforeunload', mark);
+    };
+  }, [sessionId]);
+  return [since, () => setSince(Date.now())];
+}
+
 export function SessionScreen({ state }: { state: AppState }) {
   const { session, hosting } = state;
   const participants = [...session.participants].sort((a, b) => a.connectedAt - b.connectedAt);
   const online = session.status === 'connected';
   const editable = state.canEditTasks;
+  const youId = session.you?.id ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
-  const [view, setView] = useState<View>('board');
-  const [locksTab, setLocksTab] = useState<'github' | 'locks'>('github');
+  const [view, setView] = useState<View>('home');
+  const [codeTab, setCodeTab] = useState<CodeTab>('github');
+  const [planFocus, setPlanFocus] = useState<{ id: string | null; filter: FeatureState | null }>({ id: null, filter: null });
   const [chatId, setChatId] = useState<string | null>(null);
   const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null);
+  const [sideHidden, setSideHidden] = useState(false);
+  const [since, markSeen] = useLastSeen(session.session?.id ?? null);
   const openChat = chatId ? session.chats.find((c) => c.id === chatId) : undefined;
   const showChat = (id: string) => {
     setNewChatAgentId(null);
     setChatId(id);
     setSelectedId(null);
-    setView('chat');
+    setView('agents');
   };
-  const pendingApprovals = Object.values(session.messages)
-    .flat()
-    .filter((m) => m.approval?.state === 'pending').length;
-  const abandoned = session.locks.filter((l) => l.abandoned).length;
   const selected = session.tasks.find((t) => t.id === selectedId) ?? null;
   const overlaps = useMemo(
     () =>
@@ -73,17 +120,53 @@ export function SessionScreen({ state }: { state: AppState }) {
       }),
     [session.workspaces, session.participants, session.github, session.locks],
   );
+  // One "needs you" list for the Home nav count, Home itself and (later) notifications.
+  const needs = useMemo(() => needsYou(session, youId, overlaps), [session, youId, overlaps]);
+  const approvals = needs.filter((n) => n.kind === 'approval').length;
+  const doing = useMemo(() => new Map(whoIsDoing(session).map((d) => [d.participant.id, d])), [session]);
+
+  const go = (target: NeedTarget) => {
+    switch (target.screen) {
+      case 'chat':
+        return showChat(target.chatId);
+      case 'task':
+        return setSelectedId(target.taskId);
+      case 'planning':
+        setPlanFocus({ id: target.itemId, filter: null });
+        return setView('planning');
+      case 'overlaps':
+        setCodeTab('overlaps');
+        return setView('code');
+      case 'url':
+        window.open(target.url);
+    }
+  };
+  const openCode = (tab: CodeTab) => {
+    setCodeTab(tab);
+    setView('code');
+  };
+  const showSide = !!selected || (view === 'agents' && !!openChat);
 
   return (
-    <div className="shell">
+    <div className={`shell${showSide && !(sideHidden && !selected) ? '' : ' no-side'}`}>
       <header className="titlebar">
         <strong>{session.session?.name ?? 'Session'}</strong>
         <span className={`status status-${session.status}`}>{statusLabel(session.status, session.pending)}</span>
         <UpdateButton hosting={!!hosting} />
         <div className="avatars">
-          {participants.map((p) => (
-            <Avatar key={p.id} name={p.name} kind={p.kind} status={p.status} />
-          ))}
+          {participants.map((p) => {
+            const d = doing.get(p.id);
+            const what = [d?.task?.title, d?.activity ?? (p.kind === 'agent' ? 'idle' : null)].filter(Boolean).join(' · ');
+            return (
+              <Avatar
+                key={p.id}
+                name={p.name}
+                kind={p.kind}
+                status={p.status}
+                title={`${p.name}${p.id === youId ? ' (you)' : ''}, ${p.status}${what ? `\n${what}` : ''}`}
+              />
+            );
+          })}
         </div>
         {hosting && (
           <button className="secondary" onClick={() => setSnapshotOpen((open) => !open)} title="Save the board, planning and memory as they are now, say before a big change">
@@ -95,6 +178,14 @@ export function SessionScreen({ state }: { state: AppState }) {
             Invite
           </button>
         )}
+        <button
+          className={view === 'settings' ? 'secondary gear active' : 'secondary gear'}
+          onClick={() => setView('settings')}
+          title="Settings: agents and API keys"
+          aria-label="Settings"
+        >
+          ⚙
+        </button>
         <button className="secondary" onClick={() => void window.pct.leave()}>
           {hosting ? 'Stop hosting' : 'Leave'}
         </button>
@@ -104,10 +195,17 @@ export function SessionScreen({ state }: { state: AppState }) {
 
       <nav className="sidebar">
         {NAV.map((item) => (
-          <button key={item.label} className={item.view === view ? 'nav active' : 'nav'} onClick={() => setView(item.view)}>
+          <button
+            key={item.label}
+            className={item.view === view ? 'nav active' : 'nav'}
+            onClick={() => {
+              if (item.view === 'planning') setPlanFocus({ id: null, filter: null });
+              setView(item.view);
+            }}
+          >
             {item.label}
-            {item.view === 'locks' && abandoned > 0 && <span className="nav-count">{abandoned}</span>}
-            {item.view === 'chat' && pendingApprovals > 0 && <span className="nav-count">{pendingApprovals}</span>}
+            {item.view === 'home' && needs.length > 0 && <span className="nav-count">{needs.length}</span>}
+            {item.view === 'agents' && approvals > 0 && <span className="nav-count">{approvals}</span>}
           </button>
         ))}
         <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} />
@@ -115,21 +213,43 @@ export function SessionScreen({ state }: { state: AppState }) {
 
       <main className="content">
         <Banner state={state} />
-        {view === 'planning' ? (
-          <PlanningScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
+        {view === 'home' ? (
+          <HomeScreen
+            state={state}
+            needs={needs}
+            since={since}
+            onMarkSeen={markSeen}
+            go={go}
+            onFeatures={(filter) => {
+              setPlanFocus({ id: null, filter });
+              setView('planning');
+            }}
+            onInvite={() => setInviteOpen(true)}
+            onSettings={() => setView('settings')}
+            onCode={openCode}
+          />
+        ) : view === 'planning' ? (
+          <PlanningScreen
+            state={state}
+            onOpenTask={setSelectedId}
+            onOpenChat={showChat}
+            focusId={planFocus.id}
+            filter={planFocus.filter}
+            onClearFilter={() => setPlanFocus({ id: null, filter: null })}
+          />
         ) : view === 'memory' ? (
           <MemoryScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
-        ) : view === 'agents' ? (
+        ) : view === 'settings' ? (
           <AgentsScreen
             state={state}
             onOpenChat={(agentId) => {
               const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
               setChatId(existing?.id ?? null);
               setNewChatAgentId(existing ? null : agentId);
-              setView('chat');
+              setView('agents');
             }}
           />
-        ) : view === 'chat' ? (
+        ) : view === 'agents' ? (
           <ChatScreen
             state={state}
             chatId={chatId}
@@ -138,6 +258,7 @@ export function SessionScreen({ state }: { state: AppState }) {
               setNewChatAgentId(null);
               setChatId(id);
             }}
+            onSetup={() => setView('settings')}
           />
         ) : view === 'board' ? (
           <Board
@@ -154,34 +275,37 @@ export function SessionScreen({ state }: { state: AppState }) {
         ) : (
           <>
             <div className="tabs">
-              <button className={locksTab === 'github' ? 'nav active' : 'nav'} onClick={() => setLocksTab('github')}>
-                GitHub{overlaps.length > 0 && <span className="nav-count">{overlaps.length}</span>}
+              <button className={codeTab === 'github' ? 'nav active' : 'nav'} onClick={() => setCodeTab('github')}>
+                GitHub
               </button>
-              <button className={locksTab === 'locks' ? 'nav active' : 'nav'} onClick={() => setLocksTab('locks')}>
-                Locks{abandoned > 0 && <span className="nav-count">{abandoned}</span>}
+              <button className={codeTab === 'locks' ? 'nav active' : 'nav'} onClick={() => setCodeTab('locks')}>
+                Locks{session.locks.some((l) => l.abandoned) && <span className="nav-count">{session.locks.filter((l) => l.abandoned).length}</span>}
+              </button>
+              <button className={codeTab === 'overlaps' ? 'nav active' : 'nav'} onClick={() => setCodeTab('overlaps')}>
+                Overlaps{overlaps.length > 0 && <span className="nav-count">{overlaps.length}</span>}
               </button>
             </div>
-            {locksTab === 'github' ? (
-              <GitHubScreen state={state} participants={participants} overlaps={overlaps} onOpenTask={setSelectedId} />
+            {codeTab === 'github' ? (
+              <GitHubScreen state={state} participants={participants} onOpenTask={setSelectedId} />
+            ) : codeTab === 'overlaps' ? (
+              <OverlapsScreen overlaps={overlaps} youId={youId} />
             ) : (
-          <LocksScreen
-            locks={session.locks}
-            rules={session.lockRules}
-            tasks={session.tasks}
-            participants={participants}
-            youId={session.you?.id ?? null}
-            editable={online}
-            onOpenTask={setSelectedId}
-            onOpenChat={showChat}
-          />
+              <LocksScreen
+                locks={session.locks}
+                rules={session.lockRules}
+                tasks={session.tasks}
+                participants={participants}
+                youId={youId}
+                editable={online}
+                onOpenTask={setSelectedId}
+                onOpenChat={showChat}
+              />
             )}
           </>
         )}
       </main>
 
-      {view === 'chat' && openChat && !selected ? (
-        <ChatSidePanel state={state} chat={openChat} onSelect={setChatId} />
-      ) : selected ? (
+      {selected ? (
         <TaskDetail
           task={selected}
           tasks={session.tasks}
@@ -192,30 +316,28 @@ export function SessionScreen({ state }: { state: AppState }) {
           overlaps={overlaps}
           workspaces={session.workspaces}
           planning={session.planning}
-          youId={session.you?.id ?? null}
+          youId={youId}
           editable={editable}
           online={online}
           onClose={() => setSelectedId(null)}
         />
-      ) : (
-        <aside className="side-panel">
-          <People participants={participants} youId={session.you?.id ?? null} chats={session.chats} locks={session.locks} onOpenChat={showChat} />
-          <ActivityFeed activity={session.activity} onSelect={setSelectedId} taskIds={new Set(session.tasks.map((t) => t.id))} />
-        </aside>
-      )}
+      ) : view === 'agents' && openChat ? (
+        sideHidden ? (
+          <button className="side-show" onClick={() => setSideHidden(false)} title="Show the chat's context, handoff and locks">
+            ‹
+          </button>
+        ) : (
+          <ChatSidePanel state={state} chat={openChat} onSelect={setChatId} onCollapse={() => setSideHidden(true)} />
+        )
+      ) : null}
     </div>
   );
 }
 
-/** Offline notice, or the last thing the server refused. */
+/** Offline notice, or the last thing the server refused; an error stays until you dismiss it. */
 function Banner({ state }: { state: AppState }) {
   const { status, error } = state.session;
   const [dismissed, setDismissed] = useState<typeof error>(null);
-  useEffect(() => {
-    if (!error || error === dismissed) return;
-    const timer = setTimeout(() => setDismissed(error), 5000);
-    return () => clearTimeout(timer);
-  }, [error, dismissed]);
 
   if ((status === 'reconnecting' || status === 'connecting') && state.canEditTasks) {
     return (
@@ -227,111 +349,15 @@ function Banner({ state }: { state: AppState }) {
   }
   if (status === 'connected' && error && error !== dismissed) {
     return (
-      <p className="banner error" onClick={() => setDismissed(error)}>
-        {error.message}
+      <p className="banner error">
+        <span className="grow">{error.message}</span>
+        <button className="link" onClick={() => setDismissed(error)} aria-label="Dismiss">
+          ✕
+        </button>
       </p>
     );
   }
   return null;
-}
-
-function People({
-  participants,
-  youId,
-  chats,
-  locks,
-  onOpenChat,
-}: {
-  participants: Participant[];
-  youId: string | null;
-  chats: ChatInfo[];
-  locks: Lock[];
-  onOpenChat: (chatId: string) => void;
-}) {
-  return (
-    <section>
-      <h2>Who is here</h2>
-      <ul className="people">
-        {participants.map((p) => (
-          <li key={p.id}>
-            <Avatar name={p.name} kind={p.kind} status={p.status} />
-            <span className="grow">
-              {p.name}
-              {p.id === youId && <span className="muted"> (you)</span>}
-              {p.kind === 'agent' && <span className="muted"> · agent</span>}
-            </span>
-            <span className={`presence presence-${p.status}`}>{p.status}</span>
-            {p.agent && <AgentNow agent={p} chats={chats} locks={locks} onOpenChat={onOpenChat} />}
-          </li>
-        ))}
-      </ul>
-      {participants.length === 0 && <p className="muted">Waiting for the server…</p>}
-    </section>
-  );
-}
-
-/** What a running agent is doing right now, and the files it holds. */
-function AgentNow({
-  agent,
-  chats,
-  locks,
-  onOpenChat,
-}: {
-  agent: Participant;
-  chats: ChatInfo[];
-  locks: Lock[];
-  onOpenChat: (chatId: string) => void;
-}) {
-  const busy = chats.filter((c) => c.agentId === agent.agent?.profileId && c.state !== 'idle');
-  const held = locks.filter((l) => l.holder.id === agent.id);
-  if (busy.length === 0 && held.length === 0) return <span className="agent-now muted small">Idle</span>;
-  return (
-    <span className="agent-now wrap small">
-      {busy.map((c) => (
-        <button key={c.id} className="link" onClick={() => onOpenChat(c.id)} title={`In "${c.title}"`}>
-          <span className={`dot dot-${c.state}`} />
-          {c.activity ?? (c.state === 'waiting' ? 'Waiting' : 'Working')}
-        </button>
-      ))}
-      {busy.length === 0 && <span className="muted">Idle</span>}
-      {held.length > 0 && (
-        <span className="muted" title={held.map((l) => l.path).join('\n')}>
-          holding {held.length === 1 ? held[0]!.path : `${held.length} locks`}
-        </span>
-      )}
-    </span>
-  );
-}
-
-function ActivityFeed({
-  activity,
-  taskIds,
-  onSelect,
-}: {
-  activity: Activity[];
-  taskIds: Set<string>;
-  onSelect: (taskId: string) => void;
-}) {
-  return (
-    <section className="activity">
-      <h2>Activity</h2>
-      <ol>
-        {[...activity].reverse().map((entry) => {
-          const clickable = entry.taskId !== null && taskIds.has(entry.taskId);
-          return (
-            <li key={entry.id} className={clickable ? 'clickable' : undefined} onClick={() => clickable && onSelect(entry.taskId!)}>
-              <span>
-                {entry.actorName && <strong>{entry.actorName} </strong>}
-                {entry.text}
-              </span>
-              <time className="muted">{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
-            </li>
-          );
-        })}
-      </ol>
-      {activity.length === 0 && <p className="muted">Nothing yet.</p>}
-    </section>
-  );
 }
 
 function SnapshotPopover({ canTag, onClose }: { canTag: boolean; onClose: () => void }) {

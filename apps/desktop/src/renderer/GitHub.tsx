@@ -54,12 +54,10 @@ export function PullBadge({ pull, link = true }: { pull: PullRequest; link?: boo
 export function GitHubScreen({
   state,
   participants,
-  overlaps,
   onOpenTask,
 }: {
   state: AppState;
   participants: Participant[];
-  overlaps: Overlap[];
   onOpenTask: (taskId: string) => void;
 }) {
   const { session } = state;
@@ -110,22 +108,6 @@ export function GitHubScreen({
         </ul>
       </section>
 
-      <section className="card">
-        <h2>Overlaps</h2>
-        {overlaps.length === 0 ? (
-          <p className="muted">Nobody else is changing the same files.</p>
-        ) : (
-          <ul className="gh-list">
-            {overlaps.map((overlap) => (
-              <li key={overlap.path}>
-                <code className="lock-path">{overlap.path}</code>
-                <span className="warning small">{overlap.sources.map((s) => describeSource(s, youId)).join(', ')}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="muted small">Overlaps between different files that depend on each other (say, a scene and its script) come with the engine integrations.</p>
-      </section>
 
       {linkedBranches.length > 0 && (
         <section className="card">
@@ -150,6 +132,30 @@ export function GitHubScreen({
         </section>
       )}
       {!online && <p className="muted small">Offline: this is what GitHub looked like when you were last connected.</p>}
+    </div>
+  );
+}
+
+/** Files that more than one person, branch, pull request or lock is changing. */
+export function OverlapsScreen({ overlaps, youId }: { overlaps: Overlap[]; youId: string | null }) {
+  return (
+    <div className="locks-screen">
+      <section className="card">
+        <h2>Overlaps</h2>
+        {overlaps.length === 0 ? (
+          <p className="muted">Nobody else is changing the same files.</p>
+        ) : (
+          <ul className="gh-list">
+            {overlaps.map((overlap) => (
+              <li key={overlap.path}>
+                <code className="lock-path">{overlap.path}</code>
+                <span className="warning small">{overlap.sources.map((s) => describeSource(s, youId)).join(', ')}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="muted small">Overlaps between different files that depend on each other (say, a scene and its script) come with the engine integrations.</p>
+      </section>
     </div>
   );
 }
@@ -569,7 +575,7 @@ export function WorkspaceCard({ local, tasks, onOpenTask }: { local: LocalWorksp
         <button className="secondary" onClick={() => void choose()}>
           Choose project folder
         </button>
-        <span className="muted small">No copy yet? Clone it from the GitHub page.</span>
+        <span className="muted small">No copy yet? Clone it from Code.</span>
         {error && <span className="error small">{error}</span>}
       </div>
     );

@@ -31,12 +31,15 @@ export function ChatScreen({
   chatId,
   onSelect,
   newChatAgentId,
+  onSetup,
 }: {
   state: AppState;
   chatId: string | null;
   onSelect: (chatId: string | null) => void;
-  /** Open the new chat form with this agent picked (from the Agents screen). */
+  /** Open the new chat form with this agent picked (from agent setup). */
   newChatAgentId: string | null;
+  /** Opens agent setup (Settings). */
+  onSetup: () => void;
 }) {
   const { session } = state;
   const [composing, setComposing] = useState(newChatAgentId !== null || session.chats.length === 0);
@@ -63,7 +66,7 @@ export function ChatScreen({
         <button onClick={() => setComposing(true)} disabled={session.status !== 'connected' || session.agents.length === 0}>
           New chat
         </button>
-        {session.agents.length === 0 && <p className="muted small">Add an agent on the Agents screen first.</p>}
+        {session.agents.length === 0 && <p className="muted small">Add an agent first.</p>}
         <ul>
           {sorted.map((c) => {
             const agent = session.agents.find((a) => a.id === c.agentId);
@@ -88,6 +91,9 @@ export function ChatScreen({
             );
           })}
         </ul>
+        <button className="link small chat-setup" onClick={onSetup}>
+          {session.agents.length === 0 ? 'Add an agent' : 'Set up agents'}
+        </button>
       </aside>
       {composing ? (
         <NewChat
@@ -316,7 +322,17 @@ function Message({ message: m, youId, online }: { message: ChatMessage; youId: s
 }
 
 /** Side panel for the open chat: what the agent knows, its task, and handing off. */
-export function ChatSidePanel({ state, chat, onSelect }: { state: AppState; chat: ChatInfo; onSelect: (chatId: string) => void }) {
+export function ChatSidePanel({
+  state,
+  chat,
+  onSelect,
+  onCollapse,
+}: {
+  state: AppState;
+  chat: ChatInfo;
+  onSelect: (chatId: string) => void;
+  onCollapse?: () => void;
+}) {
   const { session } = state;
   const task = session.tasks.find((t) => t.id === chat.taskId) ?? null;
   const [handingOff, setHandingOff] = useState(false);
@@ -326,6 +342,11 @@ export function ChatSidePanel({ state, chat, onSelect }: { state: AppState; chat
 
   return (
     <aside className="side-panel">
+      {onCollapse && (
+        <button className="link small side-collapse" onClick={onCollapse} title="Hide this panel">
+          Hide ›
+        </button>
+      )}
       {handingOff ? (
         <HandoffForm
           state={state}

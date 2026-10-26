@@ -10,7 +10,12 @@ people do: they have a presence, hold locks, own tasks and go through review.
 
 - Title bar: project name, live sync status, avatars of everyone connected
   (people as circles, agents as dashed squares), Invite button.
-- Left nav: Session board, Planning space, Locks and GitHub, Agents, Project memory.
+- Left nav (since issue #34): Home, Board, Planning, Agents (chats; setup is
+  under the Settings gear in the title bar), Code (GitHub, Locks, Overlaps),
+  Memory. The app opens on Home: what needs you, who is doing what, features by
+  state, what changed since you were last here, unusual PRs and locks, and a
+  setup checklist for a new session. Hovering an avatar in the title bar shows
+  what that person or agent is doing.
 - Bottom of nav: your own isolated workspace (branch, how many files changed,
   whether the changes are inside your task's scope).
 
