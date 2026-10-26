@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FEATURE_STATE_LABELS,
+  currentMilestone,
+  describeDaysLeft,
   featureCounts,
   groupActivity,
   parseLockWait,
   pullProblems,
+  roadmap,
   samePath,
   sinceLastHere,
   whoIsDoing,
@@ -12,10 +15,12 @@ import {
   type Lock,
   type NeedItem,
   type NeedTarget,
+  type RoadmapLane,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
 import { PullBadge } from './GitHub';
+import { RiskBadge } from './Roadmap';
 import { recall, remember } from './storage';
 
 // Home (issue #34): the screen a session opens on. What needs you, who is doing
@@ -141,8 +146,10 @@ function NeedsYou({ needs, online, go }: { needs: NeedItem[]; online: boolean; g
 }
 
 function Features({ state, onFeatures }: { state: AppState; onFeatures: (filter: FeatureState | null) => void }) {
-  const { planning, tasks } = state.session;
+  const { session } = state;
+  const { planning, tasks } = session;
   const counts = useMemo(() => featureCounts({ planning, tasks }), [planning, tasks]);
+  const current = useMemo(() => currentMilestone(roadmap(session)), [session.planning, session.milestones, session.tasks, session.github, session.chats, session.agents]);
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   return (
     <section className="home-panel">
@@ -150,7 +157,7 @@ function Features({ state, onFeatures }: { state: AppState; onFeatures: (filter:
         Features
         {total > 0 && (
           <button className="link small" onClick={() => onFeatures(null)}>
-            Open planning
+            Open roadmap
           </button>
         )}
       </h2>
@@ -163,12 +170,7 @@ function Features({ state, onFeatures }: { state: AppState; onFeatures: (filter:
         </p>
       ) : (
         <>
-          <div className="progress" title={`${counts.ready} of ${total} features ready`}>
-            <span style={{ width: `${(counts.ready / total) * 100}%` }} />
-          </div>
-          <p className="muted small">
-            {counts.ready} of {total} features ready. Milestones and target dates come with the Roadmap view.
-          </p>
+          {current && <MilestoneSummary lane={current} onOpen={() => onFeatures(null)} />}
           <div className="feature-tiles">
             {FEATURE_TILES.map((tile) => (
               <button
@@ -176,7 +178,7 @@ function Features({ state, onFeatures }: { state: AppState; onFeatures: (filter:
                 className={`feature-tile ${counts[tile.state] > 0 ? tile.tone : ''}`}
                 disabled={counts[tile.state] === 0}
                 onClick={() => onFeatures(tile.state)}
-                title={`Show ${FEATURE_STATE_LABELS[tile.state].toLowerCase()} features`}
+                title={`Show ${FEATURE_STATE_LABELS[tile.state].toLowerCase()} features on the roadmap`}
               >
                 <b>{counts[tile.state]}</b>
                 <span>{tile.label}</span>
@@ -186,6 +188,35 @@ function Features({ state, onFeatures }: { state: AppState; onFeatures: (filter:
         </>
       )}
     </section>
+  );
+}
+
+/** The milestone being worked on: how far it is, what blocks it, and when it is due. */
+function MilestoneSummary({ lane, onOpen }: { lane: RoadmapLane; onOpen: () => void }) {
+  const { milestone, done, blocked } = lane;
+  const total = lane.features.length;
+  return (
+    <div className="milestone-summary">
+      <p className="small">
+        <button className="link" onClick={onOpen} title="Open the roadmap">
+          {milestone.title}
+        </button>
+        {milestone.goal && <span className="muted"> · {milestone.goal}</span>}
+        {milestone.target && (
+          <span className="muted">
+            {' '}
+            · target {new Date(`${milestone.target}T00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' })}, {describeDaysLeft(lane.daysLeft!)}
+          </span>
+        )}{' '}
+        <RiskBadge lane={lane} />
+      </p>
+      <div className="progress" title={`${done} of ${total} features done`}>
+        <span style={{ width: `${(done / total) * 100}%` }} />
+      </div>
+      <p className="muted small">
+        {done} of {total} features done{blocked > 0 && <span className="bad"> · {blocked} blocked</span>}
+      </p>
+    </div>
   );
 }
 

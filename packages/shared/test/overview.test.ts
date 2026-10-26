@@ -107,6 +107,9 @@ const plan = (id: string, extra: Partial<PlanItem> = {}): PlanItem => ({
   updatedAt: 0,
   approvedAt: null,
   approvedBy: null,
+  milestoneId: null,
+  rank: null,
+  assign: {},
   ...extra,
 });
 

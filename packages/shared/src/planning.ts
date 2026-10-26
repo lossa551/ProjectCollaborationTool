@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { z } from 'zod';
 import { itemsOf, readItems, setItemText } from './docs.js';
-import { CRITERIA_LIMIT, CriterionText, STAGE_LABELS, ReadList, TaskScope, TaskStage, TaskTitle, type Task } from './model.js';
+import { CRITERIA_LIMIT, CriterionText, ParticipantKind, STAGE_LABELS, ReadList, TaskScope, TaskStage, TaskTitle, type Task } from './model.js';
 import { normalizePath } from './paths.js';
 
 // The planning space (screen 4): features, ideas and notes in one shared Yjs
@@ -20,6 +20,46 @@ export type PlanTextField = z.infer<typeof PlanTextField>;
 
 export const PlanTitle = z.string().trim().min(1).max(200);
 export const PLAN_TEXT_LIMIT = 50_000;
+
+/** The stages someone can be picked for on the roadmap; done needs nobody. */
+export const AssignStage = TaskStage.exclude(['done']);
+export type AssignStage = z.infer<typeof AssignStage>;
+
+/** Who does one stage of a feature: a person (participant id) or an agent (profile id). */
+export const Assignee = z.object({
+  kind: ParticipantKind,
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(64),
+});
+export type Assignee = z.infer<typeof Assignee>;
+
+// Milestones (issue #42): the lanes of the roadmap. They live in the planning
+// document next to the items, in their own map. Until someone changes them a
+// project has Now, Next and Later; those have fixed ids, so two people who
+// start editing them at the same time do not end up with two sets.
+
+export const MilestoneTitle = z.string().trim().min(1).max(100);
+export const MilestoneGoal = z.string().trim().max(300);
+/** A calendar day, YYYY-MM-DD. */
+export const TargetDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const Milestone = z.object({
+  id: z.string(),
+  title: z.string().max(100),
+  goal: z.string().default(''),
+  target: TargetDate.nullable().default(null),
+  order: z.number(),
+  createdAt: z.number().default(0),
+});
+export type Milestone = z.infer<typeof Milestone>;
+
+export const DEFAULT_MILESTONES: Milestone[] = [
+  { id: 'now', title: 'Now', goal: '', target: null, order: 0, createdAt: 0 },
+  { id: 'next', title: 'Next', goal: '', target: null, order: 1, createdAt: 0 },
+  { id: 'later', title: 'Later', goal: '', target: null, order: 2, createdAt: 0 },
+];
+
+export const MILESTONE_LIMIT = 30;
 
 export const PlanItem = z.object({
   id: z.string(),
@@ -40,10 +80,17 @@ export const PlanItem = z.object({
   updatedAt: z.number(),
   approvedAt: z.number().nullable().default(null),
   approvedBy: z.string().nullable().default(null),
+  /** The milestone a feature belongs to; one that is gone or unset means the first. */
+  milestoneId: z.string().nullable().default(null),
+  /** Position inside its milestone; unset ones follow, in creation order. */
+  rank: z.number().nullable().default(null),
+  /** Who does each stage, picked on the roadmap. */
+  assign: z.partialRecord(AssignStage, Assignee).catch({}).default({}),
 });
 export type PlanItem = z.infer<typeof PlanItem>;
 
 const ItemId = z.string().min(8).max(64);
+const MilestoneId = z.string().min(3).max(64);
 
 /** One change to the planning space; applied to the Yjs document by whoever makes it. */
 export const PlanOp = z.discriminatedUnion('op', [
@@ -59,6 +106,19 @@ export const PlanOp = z.discriminatedUnion('op', [
   }),
   z.object({ op: z.literal('approve'), id: ItemId }),
   z.object({ op: z.literal('delete'), id: ItemId }),
+  /** Puts these features in this milestone, in this order. */
+  z.object({ op: z.literal('order'), milestoneId: MilestoneId, ids: z.array(ItemId).max(1000) }),
+  z.object({ op: z.literal('assign'), id: ItemId, stage: AssignStage, who: Assignee.nullable() }),
+  /** Creates a milestone (title needed) or changes one. */
+  z.object({
+    op: z.literal('milestone'),
+    id: MilestoneId,
+    title: MilestoneTitle.optional(),
+    goal: MilestoneGoal.optional(),
+    target: TargetDate.nullable().optional(),
+    order: z.number().finite().optional(),
+  }),
+  z.object({ op: z.literal('milestone-delete'), id: MilestoneId }),
 ]);
 export type PlanOp = z.infer<typeof PlanOp>;
 
@@ -72,8 +132,73 @@ export const PlanApproval = z.object({
 });
 export type PlanApproval = z.infer<typeof PlanApproval>;
 
+const ASSIGN_PREFIX = 'assign:';
+
+/** An item as stored: stage picks are kept as one "assign:<stage>" key each. */
+const StoredPlanItem = z.preprocess((raw) => {
+  if (typeof raw !== 'object' || raw === null) return raw;
+  const assign: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (key.startsWith(ASSIGN_PREFIX)) assign[key.slice(ASSIGN_PREFIX.length)] = value;
+  }
+  return { ...raw, assign };
+}, PlanItem);
+
 export function readPlanning(doc: Y.Doc): PlanItem[] {
-  return readItems(doc, 'planning', PlanItem).sort((a, b) => a.createdAt - b.createdAt);
+  return readItems(doc, 'planning', StoredPlanItem).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+const milestonesOf = (doc: Y.Doc) => doc.getMap<Y.Map<unknown>>('milestones');
+
+/** The milestones in order; Now, Next and Later until someone changes them. */
+export function readMilestones(doc: Y.Doc): Milestone[] {
+  const out: Milestone[] = [];
+  for (const [id, entry] of milestonesOf(doc).entries()) {
+    if (!(entry instanceof Y.Map)) continue;
+    const parsed = Milestone.safeParse({ ...entry.toJSON(), id });
+    if (parsed.success) out.push(parsed.data);
+  }
+  if (out.length === 0) return DEFAULT_MILESTONES.map((m) => ({ ...m }));
+  return out.sort((a, b) => a.order - b.order || a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+}
+
+/** Writes the default milestones before the first change to them. */
+function materializeMilestones(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
+  const map = milestonesOf(doc);
+  if (map.size > 0) return map;
+  for (const m of DEFAULT_MILESTONES) {
+    const entry = new Y.Map<unknown>();
+    map.set(m.id, entry);
+    for (const [key, value] of Object.entries(m)) if (key !== 'id') entry.set(key, value);
+  }
+  return map;
+}
+
+function applyMilestoneOp(doc: Y.Doc, op: Extract<PlanOp, { op: 'milestone' | 'milestone-delete' }>, now: number): boolean {
+  const map = materializeMilestones(doc);
+  const entry = map.get(op.id);
+  if (op.op === 'milestone-delete') {
+    // The last one stays: features always need a lane.
+    if (!(entry instanceof Y.Map) || map.size <= 1) return false;
+    map.delete(op.id);
+    return true;
+  }
+  if (!(entry instanceof Y.Map)) {
+    if (!op.title || map.size >= MILESTONE_LIMIT) return false;
+    const created = new Y.Map<unknown>();
+    map.set(op.id, created);
+    created.set('title', op.title);
+    created.set('goal', op.goal ?? '');
+    created.set('target', op.target ?? null);
+    created.set('order', op.order ?? Math.max(...readMilestones(doc).map((m) => m.order)) + 1);
+    created.set('createdAt', now);
+    return true;
+  }
+  if (op.title !== undefined) entry.set('title', op.title);
+  if (op.goal !== undefined) entry.set('goal', op.goal);
+  if (op.target !== undefined) entry.set('target', op.target);
+  if (op.order !== undefined) entry.set('order', op.order);
+  return true;
 }
 
 /** Applies a change; returns false when the item it refers to is gone. */
@@ -81,6 +206,21 @@ export function applyPlanOp(doc: Y.Doc, op: PlanOp, by: string, now = Date.now()
   const items = itemsOf(doc, 'planning');
   let ok = true;
   doc.transact(() => {
+    if (op.op === 'milestone' || op.op === 'milestone-delete') {
+      ok = applyMilestoneOp(doc, op, now);
+      return;
+    }
+    if (op.op === 'order') {
+      // Ranks are rewritten for the whole lane, so they never run out of room
+      // between two neighbours. Not a content change: updatedAt stays.
+      op.ids.forEach((id, rank) => {
+        const item = items.get(id);
+        if (!(item instanceof Y.Map)) return;
+        item.set('milestoneId', op.milestoneId);
+        item.set('rank', rank);
+      });
+      return;
+    }
     if (op.op === 'create') {
       if (items.has(op.id)) return;
       const item = new Y.Map<unknown>();
@@ -109,6 +249,11 @@ export function applyPlanOp(doc: Y.Doc, op: PlanOp, by: string, now = Date.now()
       case 'approve':
         item.set('approvedAt', now);
         item.set('approvedBy', by);
+        break;
+      case 'assign':
+        // One key per stage on the item itself, so picks for different stages merge.
+        if (op.who) item.set(`${ASSIGN_PREFIX}${op.stage}`, { ...op.who });
+        else item.delete(`${ASSIGN_PREFIX}${op.stage}`);
         break;
       case 'delete':
         items.delete(op.id);

@@ -2094,3 +2094,282 @@ pre.fn-prompt {
 .home-rows .grow .link {
   text-align: left;
 }
+
+/* Roadmap (issue #42) */
+
+.planning-tabs {
+  align-items: center;
+}
+
+.planning-tabs .plan-filter {
+  margin: 0 0 0 12px;
+}
+
+.roadmap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.roadmap-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--border);
+}
+
+.roadmap-lane.drop-end .roadmap-add {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.milestone-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.milestone-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.milestone-title input {
+  background: transparent;
+  border-color: transparent;
+  padding: 3px 6px;
+}
+
+.milestone-title input:hover:not(:disabled),
+.milestone-title input:focus {
+  border-color: var(--border);
+}
+
+input.milestone-name {
+  width: 180px;
+  flex: none;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+input.milestone-goal {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+}
+
+input.milestone-date {
+  width: 150px;
+  flex: none;
+  color: var(--muted);
+}
+
+.milestone-tools {
+  display: flex;
+  gap: 6px;
+}
+
+.milestone-tools .link {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.milestone-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.milestone-progress .progress {
+  width: 220px;
+  flex: none;
+}
+
+.roadmap-empty {
+  margin: 0;
+  padding: 6px 4px;
+}
+
+.roadmap-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.roadmap-row {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.roadmap-row.open {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.roadmap-row.dragging {
+  opacity: 0.4;
+}
+
+.roadmap-row.drop-before {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.roadmap-line {
+  display: grid;
+  /* Fixed columns, so the pipelines and counts line up from row to row. */
+  grid-template-columns: 14px minmax(140px, 1fr) 250px 64px 84px 150px minmax(0, 150px) 84px 150px;
+  align-items: center;
+  gap: 10px;
+}
+
+.drag-handle {
+  color: var(--muted);
+  cursor: grab;
+  user-select: none;
+}
+
+.roadmap-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.roadmap-name > .link {
+  text-align: left;
+  color: var(--text);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roadmap-name > .link:hover {
+  color: var(--accent);
+}
+
+.pipeline {
+  display: flex;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pipeline li {
+  flex: 1;
+  text-align: center;
+  font-size: 11px;
+  padding: 2px 0;
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.pipeline li:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.pipeline li:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.pipeline li.done {
+  background: color-mix(in srgb, var(--good) 25%, var(--panel));
+  color: var(--text);
+}
+
+.pipeline li.current {
+  background: color-mix(in srgb, var(--accent) 35%, var(--panel));
+  color: var(--text);
+}
+
+.pipeline li.current.blocked {
+  background: color-mix(in srgb, var(--bad) 35%, var(--panel));
+}
+
+.pipeline li.current.unverified {
+  background: color-mix(in srgb, var(--warn) 35%, var(--panel));
+}
+
+.roadmap-count {
+  white-space: nowrap;
+}
+
+.roadmap-pulls,
+.roadmap-who {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.roadmap-act {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.roadmap-act button,
+.roadmap-more button.small {
+  padding: 3px 10px;
+}
+
+.roadmap-more {
+  margin: 8px 0 2px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stage-picks {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 180px));
+  gap: 8px;
+}
+
+.stage-picks .field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+}
+
+.roadmap-more .row {
+  align-items: center;
+  margin-top: 0;
+}
+
+.roadmap-more .row select {
+  width: auto;
+}
+
+.roadmap-add input {
+  background: transparent;
+  border-style: dashed;
+}
+
+.roadmap-add-milestone {
+  max-width: 480px;
+}
+
+.milestone-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.milestone-summary p {
+  margin: 0;
+}
+
+.milestone-summary .link {
+  font-weight: 600;
+}
+
+.roadmap-add-milestone button {
+  white-space: nowrap;
+}

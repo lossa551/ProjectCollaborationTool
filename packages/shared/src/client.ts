@@ -24,7 +24,7 @@ import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import type { BloatReport } from './bloat.js';
 import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
 import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
-import { applyPlanOp, readPlanning, type PlanItem, type PlanOp } from './planning.js';
+import { DEFAULT_MILESTONES, applyPlanOp, readMilestones, readPlanning, type Milestone, type PlanItem, type PlanOp } from './planning.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -63,6 +63,8 @@ export interface SessionState {
   messages: Record<string, ChatMessage[]>;
   /** The planning space: features, ideas and notes. */
   planning: PlanItem[];
+  /** The roadmap's milestones, in order. */
+  milestones: Milestone[];
   /** Project memory: decisions, conventions, known issues and plans. */
   memory: MemoryEntry[];
   /** The last bloat check anyone ran. */
@@ -117,6 +119,7 @@ const INITIAL_STATE: SessionState = {
   chats: [],
   messages: {},
   planning: [],
+  milestones: DEFAULT_MILESTONES,
   memory: [],
   bloat: null,
   pending: 0,
@@ -219,6 +222,7 @@ export class SessionClient {
         bloat: snapshot.bloat,
       }),
       planning: readPlanning(this.docs.planning),
+      milestones: readMilestones(this.docs.planning),
       memory: readMemory(this.docs.memory),
       pending: this.queue.length,
       status: 'connecting',
@@ -342,7 +346,7 @@ export class SessionClient {
   }
 
   private refreshDoc(id: DocId): void {
-    if (id === 'planning') this.setState({ ...this.state, planning: readPlanning(this.docs.planning) });
+    if (id === 'planning') this.setState({ ...this.state, planning: readPlanning(this.docs.planning), milestones: readMilestones(this.docs.planning) });
     else this.setState({ ...this.state, memory: readMemory(this.docs.memory) });
   }
 
@@ -540,6 +544,7 @@ export class SessionClient {
           chats: message.chats,
           bloat: message.bloat,
           planning: readPlanning(this.docs.planning),
+          milestones: readMilestones(this.docs.planning),
           memory: readMemory(this.docs.memory),
           // Keep loaded messages of chats that still exist; chat.open fetches what was missed.
           messages: Object.fromEntries(
