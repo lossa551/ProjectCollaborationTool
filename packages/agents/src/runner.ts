@@ -4,9 +4,11 @@ import {
   samePath,
   type AgentProfile,
   type ApprovalState,
+  type ChatAgentState,
   type ChatInfo,
   type ChatMessage,
   type ChatTool,
+  type Lock,
   type LockKind,
   type ServerMessage,
   type SessionClient,
@@ -16,7 +18,7 @@ import {
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { describeContext, systemPrompt, type ContextInput } from './context.js';
 import { ProjectFiles } from './files.js';
-import { checkCommand, checkEdit, type GuardContext } from './guard.js';
+import { checkCommand, checkEdit, othersLocks, type GuardContext } from './guard.js';
 import { parseInput, type LoopMessage, type ModelAdapter, type ToolCall, type ToolResult } from './models/types.js';
 import {
   AGENT_TOOLS,
@@ -60,6 +62,8 @@ export interface AgentRunnerOptions {
   approvalTimeoutMs?: number;
   /** How long to wait for the server to grant a lock. Default 5 s. */
   lockTimeoutMs?: number;
+  /** How long to wait for someone to release a file the agent needs. Default 10 minutes. */
+  lockWaitMs?: number;
   /** Messages people posted at most this long before the agent started are still answered. Default 1 hour. */
   answerBacklogMs?: number;
   /** Most model round trips in one turn. Default 40. */
@@ -80,9 +84,22 @@ interface ChatRun {
   cliSession: string | null;
   /** Edits a person approved in this run; not asked about again after it. */
   approvedPaths: Set<string>;
+  /** Last state reported to the session. */
+  state: ChatAgentState;
 }
 
 const STREAM_INTERVAL_MS = 200;
+
+/** How the agent's activity line reads while a tool runs. */
+const TOOL_ACTIVITY: Record<string, string> = {
+  read_file: 'Reading',
+  list_files: 'Looking through',
+  search: 'Searching for',
+  write_file: 'Writing',
+  edit_file: 'Editing',
+  run_command: 'Running',
+  record_test_result: 'Recording a test result:',
+};
 
 const TOOL_LABEL: Record<string, string> = {
   read_file: 'Read',
@@ -124,6 +141,8 @@ export class AgentRunner {
     this.stopped = true;
     for (const off of this.unsubscribe.splice(0)) off();
     for (const run of this.runs.values()) run.abort?.abort();
+    // Stopping: no turn is still going, whatever its run says.
+    await this.releaseUnchanged(() => true, true);
     for (const resolve of this.waiters.values()) resolve('expired');
     this.waiters.clear();
     await this.hook?.stop();
@@ -155,6 +174,7 @@ export class AgentRunner {
         stoppedBy: null,
         cliSession: null,
         approvedPaths: new Set(),
+        state: 'idle',
       };
       this.runs.set(chatId, run);
     }
@@ -243,7 +263,7 @@ export class AgentRunner {
         run.abort = new AbortController();
         run.stoppedBy = null;
         run.approvedPaths.clear();
-        this.setState(chatId, 'working');
+        this.setState(chatId, 'working', 'Thinking');
         try {
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
           else await this.runCliAgent(chat, agent, run, prompt, messages);
@@ -261,7 +281,26 @@ export class AgentRunner {
     } finally {
       run.busy = false;
       run.abort = null;
-      if (!this.stopped) this.setState(chatId, 'idle');
+      if (!this.stopped) {
+        this.setState(chatId, 'idle');
+        await this.releaseUnchanged((lock) => lock.chatId === chatId);
+      }
+    }
+  }
+
+  /**
+   * Frees the agent's locks on files it did not end up changing. Locks on
+   * files with uncommitted changes stay until the work is committed, the
+   * task is done, or a person releases them.
+   */
+  private async releaseUnchanged(which: (lock: Lock) => boolean, stopping = false) {
+    const { locks, you } = this.client.getState();
+    const mine = locks.filter((l) => l.holder.id === you?.id && which(l));
+    if (mine.length === 0) return;
+    const changed = [...(await this.files.changedFiles())];
+    for (const lock of mine) {
+      const busy = !stopping && lock.chatId !== null && this.runs.get(lock.chatId)?.busy;
+      if (!busy && !changed.some((file) => samePath(file, lock.path))) this.client.releaseLock(lock.id);
     }
   }
 
@@ -277,17 +316,25 @@ export class AgentRunner {
     };
   }
 
-  private setState(chatId: string, state: 'idle' | 'working' | 'waiting') {
+  private setState(chatId: string, state: ChatAgentState, activity?: string) {
     const chat = this.chat(chatId);
     const agent = this.profile();
     if (!chat || !agent) return;
     const run = this.run(chatId);
+    run.state = state;
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
     const context = describeContext(
       this.contextInput(agent, chat, task),
       { filesRead: [...run.filesRead], conversation: JSON.stringify(run.history ?? []) },
     );
-    this.client.setChatAgentState(chatId, state, context);
+    this.client.setChatAgentState(chatId, state, context, activity);
+  }
+
+  /** Tells everyone what the agent is doing now, in one line. */
+  private setActivity(chatId: string, text: string) {
+    const run = this.run(chatId);
+    if (run.state === 'idle') return;
+    this.client.setChatAgentState(chatId, run.state, undefined, text.length > 300 ? `${text.slice(0, 299)}…` : text);
   }
 
   private contextInput(agent: AgentProfile, chat: ChatInfo, task: Task | null): ContextInput {
@@ -353,7 +400,7 @@ export class AgentRunner {
       signal.addEventListener('abort', abort, { once: true });
     });
     card('pending');
-    this.setState(chatId, 'waiting');
+    this.setState(chatId, 'waiting', `Waiting for approval: ${action}`);
     const state = await decided;
     clearTimeout(timeout);
     signal.removeEventListener('abort', abort);
@@ -364,7 +411,7 @@ export class AgentRunner {
   }
 
   /** Takes a lock on the path for the agent (or keeps the one it has). Returns why not, if it could not. */
-  private async ensureLock(path: string, kind: LockKind, taskId: string | null): Promise<string | null> {
+  private async ensureLock(path: string, kind: LockKind, chat: ChatInfo): Promise<string | null> {
     const holds = () => {
       const { locks, you } = this.client.getState();
       return locks.some((l) => l.holder.id === you?.id && samePath(l.path, path) && (kind === 'soft' || l.kind === 'exclusive'));
@@ -384,7 +431,7 @@ export class AgentRunner {
       const offMessage = this.client.onMessage((message) => {
         if (message.type === 'error' && (message.code === 'locked' || message.code === 'not_found')) done(message.message);
       });
-      this.client.acquireLock(path, { taskId, exclusive: kind === 'exclusive' });
+      this.client.acquireLock(path, { taskId: chat.taskId, exclusive: kind === 'exclusive', chatId: chat.id, reason: chat.title });
     });
   }
 
@@ -393,7 +440,19 @@ export class AgentRunner {
    * then locked. Returns null when the edit may go ahead, else why not.
    */
   private async gateEdit(chat: ChatInfo, agent: AgentProfile, rawPath: string, signal: AbortSignal): Promise<{ path: string } | { blocked: string }> {
-    const decision = checkEdit(this.guardContext(chat, agent), rawPath);
+    let decision = checkEdit(this.guardContext(chat, agent), rawPath);
+    if (decision.path && decision.verdict === 'deny') {
+      // Held by someone who is still around, and nothing else in the way: wait for them.
+      const ctx = this.guardContext(chat, agent);
+      const holding = othersLocks(ctx, decision.path, decision.lockKind).blocking;
+      const live = holding.filter((l) => !l.abandoned);
+      const withoutThem = checkEdit({ ...ctx, locks: ctx.locks.filter((l) => !live.includes(l)) }, rawPath);
+      if (live.length > 0 && withoutThem.verdict !== 'deny') {
+        const problem = await this.waitForRelease(chat.id, decision.path, live, signal);
+        if (problem) return { blocked: problem };
+        decision = checkEdit(this.guardContext(chat, agent), rawPath);
+      }
+    }
     if (!decision.path || decision.verdict === 'deny') return { blocked: decision.reasons.join('; ') || 'not allowed' };
     const path = decision.path;
     if (decision.verdict === 'ask' && !this.run(chat.id).approvedPaths.has(path.toLowerCase())) {
@@ -401,9 +460,56 @@ export class AgentRunner {
       if (!approved) return { blocked: signal.aborted ? 'stopped' : `a person did not approve editing ${path}` };
       this.run(chat.id).approvedPaths.add(path.toLowerCase());
     }
-    const lockProblem = await this.ensureLock(path, decision.lockKind, chat.taskId);
+    const lockProblem = await this.ensureLock(path, decision.lockKind, chat);
     if (lockProblem) return { blocked: lockProblem };
     return { path };
+  }
+
+  /**
+   * Waits until the given locks are released (or recovered), so an agent does
+   * not fail just because someone else is using a file for a while. Returns
+   * why it gave up, or null once the file is free.
+   */
+  private async waitForRelease(chatId: string, path: string, holding: Lock[], signal: AbortSignal): Promise<string | null> {
+    const ids = new Set(holding.map((l) => l.id));
+    const names = [...new Set(holding.map((l) => l.holder.name))].join(' and ');
+    const why = holding.map((l) => l.reason).find(Boolean);
+    const waitMs = this.options.lockWaitMs ?? 10 * 60_000;
+    const minutes = Math.max(1, Math.round(waitMs / 60_000));
+    this.notice(
+      chatId,
+      `Waiting for ${names} to release ${path}${why ? ` (locked for "${why}")` : ''}. It goes on by itself once the lock is free; press Stop to give up.`,
+    );
+    this.setState(chatId, 'waiting', `Waiting for ${names} to release ${path}`);
+    const result = await new Promise<'free' | 'abandoned' | 'timeout' | 'stopped'>((resolve) => {
+      const check = () => {
+        const current = this.client.getState().locks.filter((l) => ids.has(l.id));
+        if (current.length === 0) finish('free');
+        else if (current.every((l) => l.abandoned)) finish('abandoned');
+      };
+      const finish = (value: 'free' | 'abandoned' | 'timeout' | 'stopped') => {
+        clearTimeout(timer);
+        off();
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      };
+      const onAbort = () => finish('stopped');
+      const timer = setTimeout(() => finish('timeout'), waitMs);
+      const off = this.client.subscribe(check);
+      signal.addEventListener('abort', onAbort, { once: true });
+      check();
+    });
+    if (!signal.aborted) this.setState(chatId, 'working', `Editing ${path}`);
+    switch (result) {
+      case 'free':
+        return null;
+      case 'stopped':
+        return 'stopped';
+      case 'abandoned':
+        return `${path} is locked by ${names}, who stopped answering (recover the lock on Locks and GitHub first)`;
+      case 'timeout':
+        return `${path} is still locked by ${names} after ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+    }
   }
 
   private async gateCommand(chat: ChatInfo, agent: AgentProfile, command: string, signal: AbortSignal): Promise<string | null> {
@@ -438,7 +544,7 @@ export class AgentRunner {
       }
       if (decision.verdict === 'ask') ask.push({ path: decision.path, reason: decision.reasons.join('; ') });
       else {
-        const problem = await this.ensureLock(decision.path, decision.lockKind, chat.taskId);
+        const problem = await this.ensureLock(decision.path, decision.lockKind, chat);
         if (problem) undo.push(decision.path);
       }
     }
@@ -448,7 +554,7 @@ export class AgentRunner {
       if (keep) {
         for (const a of ask) {
           const kind = checkEdit(this.guardContext(chat, agent), a.path).lockKind;
-          if (await this.ensureLock(a.path, kind, chat.taskId)) undo.push(a.path);
+          if (await this.ensureLock(a.path, kind, chat)) undo.push(a.path);
         }
       } else undo.push(...ask.map((a) => a.path));
     }
@@ -505,7 +611,7 @@ export class AgentRunner {
         else results.push(await this.executeTool(current, agent, run, call, signal));
       }
       history.push({ role: 'tool', results });
-      this.setState(chat.id, 'working');
+      this.setState(chat.id, 'working', 'Thinking');
       if (signal.aborted) throw new Error('stopped');
     }
     this.notice(chat.id, `Paused after ${maxSteps} steps. Send a message to let it continue.`);
@@ -514,7 +620,10 @@ export class AgentRunner {
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
     const id = randomUUID();
     const label = TOOL_LABEL[call.name] ?? call.name;
-    const show = (summary: string, status: ToolStatus, output = '') => this.postTool(chat.id, id, { name: label, summary, status, output });
+    const show = (summary: string, status: ToolStatus, output = '') => {
+      if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? label} ${summary}`);
+      this.postTool(chat.id, id, { name: label, summary, status, output });
+    };
     const ok = (content: string): ToolResult => ({ id: call.id, content, isError: false });
     const error = (content: string): ToolResult => ({ id: call.id, content, isError: true });
     const attempt = async (summary: string, work: () => Promise<string>): Promise<ToolResult> => {
@@ -620,7 +729,10 @@ export class AgentRunner {
           const existing = toolMessages.get(event.id);
           const entry = existing ?? { id: randomUUID(), name: event.name, summary: event.summary };
           toolMessages.set(event.id, entry);
-          if (!existing) this.postTool(chat.id, entry.id, { name: entry.name, summary: entry.summary, status: 'running', output: '' });
+          if (!existing) {
+            this.postTool(chat.id, entry.id, { name: entry.name, summary: entry.summary, status: 'running', output: '' });
+            this.setActivity(chat.id, `${entry.name} ${entry.summary}`.trim());
+          }
           break;
         }
         case 'tool_result': {

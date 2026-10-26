@@ -7,6 +7,7 @@ import {
   AgentProfile,
   ApprovalState,
   BranchName,
+  ChatActivity,
   ChatAgentState,
   ChatContext,
   ChatInfo,
@@ -22,6 +23,7 @@ import {
   EMPTY_GITHUB_STATUS,
   GitHubStatus,
   Lock,
+  LockReason,
   LockRules,
   Participant,
   ParticipantKind,
@@ -38,7 +40,7 @@ import { BloatReport } from './bloat.js';
 import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -154,6 +156,9 @@ export const LockAcquireMessage = z.object({
   taskId: z.string().nullable().optional(),
   /** Ask for an exclusive lock even if the rules would give a soft one. */
   exclusive: z.boolean().optional(),
+  /** The agent chat the lock is for. */
+  chatId: z.string().nullable().optional(),
+  reason: LockReason.nullable().optional(),
 });
 
 export const LockReleaseMessage = z.object({
@@ -262,6 +267,8 @@ export const ChatAgentMessage = z.object({
   chatId: z.string(),
   state: ChatAgentState,
   context: ChatContext.nullable().optional(),
+  /** One line on what it is doing now; left out keeps the last one. Cleared when idle. */
+  activity: ChatActivity.nullable().optional(),
 });
 
 /** Asks the chat's agent to stop what it is doing. */

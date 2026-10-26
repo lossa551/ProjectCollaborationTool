@@ -34,6 +34,8 @@ const lock: Lock = {
   kind: 'exclusive',
   holder: { id: 'm', name: 'Martin', kind: 'human' },
   taskId: 't1',
+  chatId: null,
+  reason: null,
   acquiredAt: 1,
   heartbeatAt: 2,
   abandoned: false,

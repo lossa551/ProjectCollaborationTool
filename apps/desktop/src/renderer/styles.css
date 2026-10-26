@@ -485,8 +485,86 @@ textarea:disabled {
 
 .people li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+}
+
+/* What an agent is doing right now: in Who is here, on task cards and in its chat. */
+.people li .agent-now {
+  flex-basis: 100%;
+  padding-left: 38px;
+}
+
+.agent-now {
+  display: flex;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+
+.agent-now > span:not(.dot) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-now.wrap {
+  flex-wrap: wrap;
+}
+
+.held-locks {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.held-locks li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.held-locks code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-now .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  margin-right: 6px;
+  background: var(--good);
+}
+
+.agent-now .link .dot {
+  margin-right: 0;
+}
+
+.dot.dot-working {
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+
+.dot.dot-waiting {
+  background: var(--warn);
+}
+
+@keyframes dot-pulse {
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .presence {
@@ -1189,6 +1267,13 @@ a {
 }
 
 .plan-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Project memory: Folder notes */
 .folder-notes {
   display: grid;
@@ -1299,6 +1384,13 @@ input.plan-title:focus {
 
 .feature-badge {
   flex-shrink: 0;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
 .fn-weight {
   display: flex;
   align-items: center;
@@ -1322,6 +1414,7 @@ input.plan-title:focus {
   border-radius: 99px;
   border: 1px solid var(--border);
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .feature-in-progress {
@@ -1340,7 +1433,8 @@ input.plan-title:focus {
 }
 
 .feature-ready {
-  white-space: nowrap;
+  color: var(--good);
+  border-color: var(--good);
 }
 
 .fn-fresh {

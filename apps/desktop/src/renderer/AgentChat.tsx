@@ -18,7 +18,7 @@ import { Avatar } from './Avatar';
 // and can post in it; the agent answers from the PC that runs it. Edits and
 // commands that need a person show up as approval cards anyone can decide.
 
-const STATE_LABEL = { idle: null, working: 'Working…', waiting: 'Waiting for approval' } as const;
+const STATE_LABEL = { idle: null, working: 'Working…', waiting: 'Waiting' } as const;
 
 const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -216,6 +216,12 @@ function Conversation({ state, chat }: { state: AppState; chat: ChatInfo }) {
             {agent ? `${agent.name} · ${describeConnection(agent.connection)}` : 'This agent was removed'}
             {runner ? ` · on ${runner.agent!.startedBy}’s PC` : ' · not running'}
           </span>
+          {chat.state !== 'idle' && (
+            <span className="agent-now small">
+              <span className={`dot dot-${chat.state}`} />
+              Now: {chat.activity ?? STATE_LABEL[chat.state]}
+            </span>
+          )}
         </div>
         {STATE_LABEL[chat.state] && <span className="badge badge-warn">{STATE_LABEL[chat.state]}</span>}
         {chat.state !== 'idle' && runner && (
@@ -353,6 +359,7 @@ export function ChatSidePanel({ state, chat, onSelect }: { state: AppState; chat
               <p className="muted small">Shown once the agent has started on this chat.</p>
             )}
           </section>
+          <HeldLocks state={state} chat={chat} />
           <section>
             <h2>Task</h2>
             <select value={chat.taskId ?? ''} disabled={!online} onChange={(e) => window.pct.updateChat(chat.id, { taskId: e.target.value || null })}>
@@ -611,5 +618,38 @@ function HandoffForm({
         </button>
       </div>
     </form>
+  );
+}
+
+/** Files the agent locked for this chat: kept while they have uncommitted changes. */
+function HeldLocks({ state, chat }: { state: AppState; chat: ChatInfo }) {
+  const { session } = state;
+  const held = session.locks.filter((l) => l.chatId === chat.id);
+  const online = session.status === 'connected';
+  return (
+    <section>
+      <h2>Locked for this chat</h2>
+      {held.length > 0 ? (
+        <>
+          <ul className="held-locks small">
+            {held.map((lock) => (
+              <li key={lock.id}>
+                <code title={lock.path}>{lock.path}</code>
+                <span className={`badge badge-${lock.kind}`}>{lock.kind === 'exclusive' ? 'Exclusive' : 'Soft'}</span>
+                <button className="link" disabled={!online} onClick={() => window.pct.releaseLock(lock.id)}>
+                  Release
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">
+            The agent locks a file before its first edit and frees it when the turn ends, unless the file still has
+            uncommitted changes. Locks on a task are freed when the task is done.
+          </p>
+        </>
+      ) : (
+        <p className="muted small">Nothing yet. The agent locks each file before its first edit.</p>
+      )}
+    </section>
   );
 }

@@ -172,7 +172,7 @@ export interface PctApi {
   createTask(title: string, stage: TaskStage): void;
   updateTask(taskId: string, changes: TaskChanges): void;
   deleteTask(taskId: string): void;
-  acquireLock(path: string, options: { taskId: string | null; exclusive: boolean }): void;
+  acquireLock(path: string, options: { taskId: string | null; exclusive: boolean; reason?: string | null }): void;
   releaseLock(lockId: string): void;
   recoverLock(lockId: string): void;
   setLockRules(rules: LockRules): void;

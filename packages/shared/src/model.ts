@@ -116,6 +116,8 @@ export type Activity = z.infer<typeof Activity>;
 export const LockKind = z.enum(['exclusive', 'soft']);
 export type LockKind = z.infer<typeof LockKind>;
 
+export const LockReason = z.string().trim().max(200);
+
 export const Lock = z.object({
   id: z.string(),
   /** Repo-relative path with forward slashes. */
@@ -124,6 +126,10 @@ export const Lock = z.object({
   /** Snapshot like a task owner, so the lock reads right while the holder is away. */
   holder: TaskOwner,
   taskId: z.string().nullable(),
+  /** The agent chat the lock was taken for, so people can see the conversation behind it. */
+  chatId: z.string().nullable().default(null),
+  /** Why the file is locked, in a few words (an agent uses its chat's title). */
+  reason: LockReason.nullable().default(null),
   acquiredAt: z.number(),
   /** Last time the holder was seen connected. */
   heartbeatAt: z.number(),
@@ -403,6 +409,7 @@ export const ChatAgentState = z.enum(['idle', 'working', 'waiting']);
 export type ChatAgentState = z.infer<typeof ChatAgentState>;
 
 export const ChatTitle = z.string().trim().min(1).max(200);
+export const ChatActivity = z.string().max(300);
 
 export const ChatInfo = z.object({
   id: z.string(),
@@ -412,6 +419,8 @@ export const ChatInfo = z.object({
   createdBy: TaskOwner,
   handoff: Handoff.nullable(),
   state: ChatAgentState,
+  /** What the agent is doing right now, in one line, e.g. "Editing src/player.ts". Null when idle. */
+  activity: ChatActivity.nullable().default(null),
   context: ChatContext.nullable(),
   createdAt: z.number(),
   updatedAt: z.number(),

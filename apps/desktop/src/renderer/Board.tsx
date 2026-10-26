@@ -4,6 +4,7 @@ import {
   TaskStage,
   overlapsForTask,
   pullForBranch,
+  type ChatInfo,
   type GitHubStatus,
   type Lock,
   type Overlap,
@@ -24,6 +25,7 @@ export function Board({
   participants,
   github,
   overlaps,
+  chats,
   editable,
   selectedId,
   onSelect,
@@ -33,6 +35,7 @@ export function Board({
   participants: Participant[];
   github: GitHubStatus;
   overlaps: Overlap[];
+  chats: ChatInfo[];
   editable: boolean;
   selectedId: string | null;
   onSelect: (taskId: string) => void;
@@ -76,6 +79,8 @@ export function Board({
                   ownerOnline={!!task.owner && participants.some((p) => p.id === task.owner!.id)}
                   pull={pullForBranch(github, task.branch)}
                   overlaps={overlapsForTask(overlaps, task)}
+                  working={chats.filter((c) => c.taskId === task.id && c.state !== 'idle')}
+                  agentName={(chat) => participants.find((p) => p.agent?.profileId === chat.agentId)?.name ?? 'Agent'}
                   draggable={editable}
                   selected={task.id === selectedId}
                   onSelect={() => onSelect(task.id)}
@@ -96,6 +101,8 @@ function TaskCard({
   ownerOnline,
   pull,
   overlaps,
+  working,
+  agentName,
   draggable,
   selected,
   onSelect,
@@ -105,6 +112,9 @@ function TaskCard({
   ownerOnline: boolean;
   pull: PullRequest | null;
   overlaps: Overlap[];
+  /** Agent chats on this task that are busy right now. */
+  working: ChatInfo[];
+  agentName: (chat: ChatInfo) => string;
   draggable: boolean;
   selected: boolean;
   onSelect: () => void;
@@ -120,6 +130,14 @@ function TaskCard({
       onClick={onSelect}
     >
       <span className="task-title">{task.title}</span>
+      {working.map((chat) => (
+        <span key={chat.id} className="agent-now small">
+          <span className={`dot dot-${chat.state}`} />
+          <span>
+            {agentName(chat)}: {chat.activity ?? (chat.state === 'waiting' ? 'Waiting' : 'Working')}
+          </span>
+        </span>
+      ))}
       <span className="task-meta">
         {task.owner ? (
           <span className="owner">

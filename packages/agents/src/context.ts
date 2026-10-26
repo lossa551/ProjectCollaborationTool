@@ -44,7 +44,9 @@ function pieces({ agent, chat, task, startedBy, memory, recordsResults }: Contex
         'messages from them start with their name.',
       agent.responsibilities.trim() ? `Your responsibilities:\n${agent.responsibilities.trim()}` : '',
       'Every file edit and command you make is checked by the app against file locks, your allowed paths, the task’s allowed ' +
-        'paths and the approval rules. Some actions wait for a person to approve them. If an action is blocked or denied, ' +
+        'paths and the approval rules. The app locks each file for you before your first edit to it, so others can see what ' +
+        'you are working on; if someone else holds a file, it waits for them first. Some actions wait for a person to ' +
+        'approve them. If an action is blocked or denied, ' +
         'do not try to reach the same result another way: say what you need and why. Keep changes to what the task asks for, ' +
         'and avoid adding new systems, dependencies or files the task does not need. Paths are relative to the repository root.',
       agent.allowedPaths.length > 0 ? `You may change only these paths:\n${agent.allowedPaths.map((p) => `- ${p}`).join('\n')}` : '',
