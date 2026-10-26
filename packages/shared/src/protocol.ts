@@ -221,6 +221,18 @@ export const ChatCreateMessage = z.object({
   handoff: Handoff.nullable().optional(),
 });
 
+/** Starts a new chat with a copy of another chat's messages up to and including one of them. */
+export const ChatBranchMessage = z.object({
+  type: z.literal('chat.branch'),
+  /** Chosen by the client so it can open the chat right away. */
+  id: z.string().min(8).max(64),
+  fromChatId: z.string(),
+  fromMessageId: z.string(),
+  /** The agent that carries on; the parent chat's agent when left out. */
+  agentId: z.string().optional(),
+  title: ChatTitle,
+});
+
 export const ChatUpdateMessage = z.object({
   type: z.literal('chat.update'),
   chatId: z.string(),
@@ -301,6 +313,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   AgentSaveMessage,
   AgentDeleteMessage,
   ChatCreateMessage,
+  ChatBranchMessage,
   ChatUpdateMessage,
   ChatDeleteMessage,
   ChatOpenMessage,

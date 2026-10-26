@@ -248,6 +248,8 @@ export interface PctApi {
   /** Saves (or with null removes) an API key on this PC only. */
   setApiKey(name: string, key: string | null): Promise<Result>;
   createChat(request: { agentId: string; title: string; taskId: string | null }): Promise<ResultWith<string>>;
+  /** Starts a new chat with the messages up to and including one message; returns the new chat's id. */
+  branchChat(request: { fromChatId: string; fromMessageId: string; title: string; agentId: string }): Promise<ResultWith<string>>;
   updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void;
   deleteChat(chatId: string): void;
   openChat(chatId: string): void;
@@ -322,6 +324,7 @@ export const Channel = {
   stopAgent: 'pct:stop-agent',
   setApiKey: 'pct:set-api-key',
   createChat: 'pct:create-chat',
+  branchChat: 'pct:branch-chat',
   updateChat: 'pct:update-chat',
   deleteChat: 'pct:delete-chat',
   openChat: 'pct:open-chat',

@@ -416,6 +416,15 @@ export type ChatAgentState = z.infer<typeof ChatAgentState>;
 export const ChatTitle = z.string().trim().min(1).max(200);
 export const ChatActivity = z.string().max(300);
 
+/** Where a branched chat came from: the chat and the last message it copied. */
+export const ChatBranch = z.object({
+  chatId: z.string(),
+  messageId: z.string(),
+  /** The parent's title when branched, so the link still reads well if it is renamed or deleted. */
+  title: ChatTitle,
+});
+export type ChatBranch = z.infer<typeof ChatBranch>;
+
 export const ChatInfo = z.object({
   id: z.string(),
   title: ChatTitle,
@@ -423,6 +432,7 @@ export const ChatInfo = z.object({
   taskId: z.string().nullable(),
   createdBy: TaskOwner,
   handoff: Handoff.nullable(),
+  branchedFrom: ChatBranch.nullable().default(null),
   state: ChatAgentState,
   /** What the agent is doing right now, in one line, e.g. "Editing src/player.ts". Null when idle. */
   activity: ChatActivity.nullable().default(null),

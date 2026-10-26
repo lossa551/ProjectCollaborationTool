@@ -80,3 +80,8 @@ directly inside the shared session.
   entries, files) and context size.
 - A chat can become a task, a project memory entry, or a handoff to another
   agent.
+- **Branch from here** on any message starts a new chat with the conversation
+  up to that message (same agent or another one); the original chat is left
+  as it is. Only the conversation is branched for now; once agents have their
+  own worktrees and per-turn checkpoints (#32, #33) the branch also starts
+  from the files as they were at that message (#41).

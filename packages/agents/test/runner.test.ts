@@ -300,6 +300,44 @@ describe('agent runner', () => {
     await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
   });
 
+  it('carries on in a branched chat knowing only the conversation up to the branch point', async () => {
+    const { martin, profile, model } = await setup([
+      { text: 'Use a grid.', toolCalls: [], stop: 'end' },
+      { text: 'A list then.', toolCalls: [], stop: 'end' },
+      { text: 'Maybe tabs.', toolCalls: [], stop: 'end' },
+      { text: 'Bigger grid.', toolCalls: [], stop: 'end' },
+    ]);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Menu' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    const answered = (chat: string, text: string) => (s: SessionState) =>
+      (s.messages[chat] ?? []).some((m) => m.kind === 'text' && m.text === text && !m.streaming);
+    const ask = martin.postChat(chatId, { kind: 'text', text: 'Plan the menu' });
+    await waitFor(martin, answered(chatId, 'Use a grid.'));
+    martin.postChat(chatId, { kind: 'text', text: 'No, use a list' });
+    await waitFor(martin, answered(chatId, 'A list then.'));
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    const grid = martin.getState().messages[chatId]!.find((m) => m.text === 'Use a grid.')!.id;
+
+    // Branched at a person's message: the agent answers it again, without what came after.
+    const retry = martin.branchChat({ fromChatId: chatId, fromMessageId: ask, title: 'Menu (retry)' });
+    await waitFor(martin, answered(retry, 'Maybe tabs.'));
+    expect(model.requests[2]!.messages).toEqual([{ role: 'user', text: 'Martin: Plan the menu' }]);
+
+    // Branched at the agent's answer: nothing to answer until someone posts.
+    const branch = martin.branchChat({ fromChatId: chatId, fromMessageId: grid, title: 'Menu (grid)' });
+    await waitFor(martin, (s) => (s.messages[branch]?.length ?? 0) === 3);
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === retry)?.state === 'idle');
+    expect(model.requests).toHaveLength(3);
+    martin.postChat(branch, { kind: 'text', text: 'Make it bigger' });
+    await waitFor(martin, answered(branch, 'Bigger grid.'));
+    expect(model.requests[3]!.messages).toEqual([
+      { role: 'user', text: 'Martin: Plan the menu' },
+      { role: 'assistant', text: 'Use a grid.', toolCalls: [] },
+      { role: 'user', text: 'Martin: Make it bigger' },
+    ]);
+  });
+
   it('undoes files a command changed outside the agent’s paths unless a person keeps them', async () => {
     const command = `node -e "require('fs').writeFileSync('outside.txt','1')"`;
     const { martin, profile, root } = await setup(

@@ -204,7 +204,8 @@ export class AgentRunner {
         if (message.chat.agentId === this.options.profileId && !this.runs.has(message.chat.id)) this.run(message.chat.id);
         break;
       case 'chat.history': {
-        if (!this.chat(message.chatId)) break;
+        const chat = this.chat(message.chatId);
+        if (!chat) break;
         const run = this.run(message.chatId);
         const firstLoad = run.history === null && !run.busy;
         // Answer only what came after the agent last spoke, and not too long ago.
@@ -213,9 +214,11 @@ export class AgentRunner {
         message.messages.forEach((m, i) => {
           if (m.author.kind === 'agent') lastAgent = i;
         });
+        // A chat branched just now answers its last message even if that was written long ago.
+        const branchedAt = chat.branchedFrom ? chat.createdAt : 0;
         message.messages.forEach((m, i) => {
           if (!isPrompt(m)) return;
-          if (!firstLoad || i < lastAgent || m.at < cutoff) run.handled.add(m.id);
+          if (!firstLoad || i < lastAgent || Math.max(m.at, branchedAt) < cutoff) run.handled.add(m.id);
         });
         if (message.messages.some((m) => isPrompt(m) && !run.handled.has(m.id))) this.schedule(message.chatId);
         break;
@@ -276,7 +279,7 @@ export class AgentRunner {
         this.setState(chatId, 'working', 'Thinking');
         try {
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
-          else await this.runCliAgent(chat, agent, run, prompt, messages);
+          else await this.runCliAgent(chat, agent, run, prompt, messages, fresh);
         } catch (error) {
           if (run.abort.signal.aborted) {
             this.notice(chatId, run.stoppedBy ? `Stopped by ${run.stoppedBy}.` : 'Stopped.');
@@ -731,7 +734,7 @@ export class AgentRunner {
 
   // CLI agents.
 
-  private async runCliAgent(chat: ChatInfo, agent: AgentProfile, run: ChatRun, prompt: string, messages: ChatMessage[]) {
+  private async runCliAgent(chat: ChatInfo, agent: AgentProfile, run: ChatRun, prompt: string, messages: ChatMessage[], fresh: ChatMessage[]) {
     if (agent.connection.type !== 'cli') return;
     const settings = this.options.cli;
     if (!settings) throw new Error('This PC cannot run command-line agents');
@@ -780,7 +783,9 @@ export class AgentRunner {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--settings', hook.claudeSettingsFile(settings.hookScript, settings.nodePath)];
       if (agent.connection.model) args.push('--model', agent.connection.model);
       if (run.cliSession) args.push('--resume', run.cliSession);
-      const fullPrompt = run.cliSession ? prompt : `${context}\n\n---\n\n${prompt}`;
+      // A new session (a branched chat, or after a restart) gets the conversation so far once.
+      const earlier = run.cliSession ? '' : transcript(messages.filter((m) => !fresh.includes(m)));
+      const fullPrompt = run.cliSession ? prompt : `${context}\n\n---\n\n${earlier ? `Conversation so far:\n${earlier}\n\n---\n\n` : ''}${prompt}`;
       result = await runCli({
         command,
         args,
@@ -793,11 +798,7 @@ export class AgentRunner {
       });
     } else {
       // Codex gets the recent conversation each time instead of resuming a session.
-      const recent = messages
-        .filter((m) => m.kind === 'text' || m.kind === 'handoff')
-        .slice(-20)
-        .map((m) => `${m.author.name}: ${m.text}`)
-        .join('\n\n');
+      const recent = transcript(messages, 20);
       const args = ['exec', '--json', '--sandbox', 'workspace-write', '--skip-git-repo-check'];
       if (agent.connection.model) args.push('-m', agent.connection.model);
       args.push('-');
@@ -891,6 +892,15 @@ function isPrompt(m: ChatMessage): boolean {
 
 function formatPrompt(m: ChatMessage): string {
   return m.kind === 'handoff' ? m.text : `${m.author.name}: ${m.text}`;
+}
+
+/** The chat's text messages as plain text, for CLI agents that do not keep the conversation themselves. */
+function transcript(messages: ChatMessage[], limit = 50): string {
+  return messages
+    .filter((m) => m.kind === 'text' || m.kind === 'handoff')
+    .slice(-limit)
+    .map((m) => `${m.author.name}: ${m.text}`)
+    .join('\n\n');
 }
 
 /** The conversation so far, from the chat, when the agent starts (or restarts) on it. */
