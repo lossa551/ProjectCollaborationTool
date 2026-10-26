@@ -28,12 +28,15 @@ import {
   type HostingInfo,
   type JoinRequest,
   type LocalWorkspace,
+  type ResumeRequest,
   type Result,
   type ResultWith,
+  type SavedSessionInfo,
 } from '../common/api';
 import { LocalAgents, apiKeyStatus, createSocket, findCliTools } from './agents';
 import { loadSnapshot, saveSnapshot } from './cache';
-import { hostedSessionPath, loadIdentity } from './identity';
+import { loadIdentity } from './identity';
+import { SessionHistory } from './sessions';
 import { loadGitHubToken, saveApiKey, saveGitHubToken, saveWorkspaceFolder, workspaceFolder } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, repositoryRoot, runGitAction, trustFolder } from './git';
@@ -55,6 +58,10 @@ let workspace: LocalWorkspace | null = null;
 /** Where this app is connected, so agents started here can join the same session. */
 let joined: { url: string; secret: string } | null = null;
 let cliTools: Record<CliTool, boolean> = { 'claude-code': false, codex: false };
+/** The sessions hosted or joined on this PC, and the one in use now. */
+let history: SessionHistory | null = null;
+const sessions = () => (history ??= new SessionHistory(app.getPath('userData')));
+let currentKey: string | null = null;
 
 const appState = (): AppState => ({
   session: client.getState(),
@@ -112,6 +119,63 @@ const messageBox = (options: MessageBoxOptions) => (window ? dialog.showMessageB
 function useWorkspace(sessionId: string, root: string) {
   saveWorkspaceFolder(sessionId, root);
   watchFolder(root);
+}
+
+// Keep the saved entry of the session in use up to date: its id (which ties
+// it to your project folder), its name and its linked repository.
+client.subscribe((state) => {
+  if (!currentKey || state.status !== 'connected' || !state.session) return;
+  const repo = state.github.repo ? `${state.github.repo.owner}/${state.github.repo.name}` : null;
+  sessions().update(currentKey, { sessionId: state.session.id, name: state.session.name, repo });
+});
+
+let legacyAdopted: Promise<boolean> = Promise.resolve(false);
+
+async function listSessions(): Promise<SavedSessionInfo[]> {
+  await legacyAdopted;
+  return sessions()
+    .list()
+    .map(({ key, role, name, invite, repo, sessionId, lastUsedAt }) => ({
+      key,
+      role,
+      name,
+      invite,
+      repo,
+      folder: sessionId ? workspaceFolder(sessionId) : null,
+      lastUsedAt,
+    }));
+}
+
+async function resume({ name, key }: ResumeRequest): Promise<Result> {
+  const entry = sessions().get(key);
+  if (!entry) return { ok: false, error: 'That session is no longer saved on this PC.' };
+  if (entry.role === 'host') return host({ name, sessionName: '' }, key);
+  if (!entry.invite) return { ok: false, error: 'No invite code is saved for that session.' };
+  return joinSession({ name, invite: entry.invite });
+}
+
+async function forgetSession(key: unknown): Promise<Result> {
+  const entry = typeof key === 'string' ? sessions().get(key) : null;
+  if (!entry) return { ok: true };
+  if (entry.key === currentKey) return { ok: false, error: 'Leave the session first.' };
+  if (entry.role === 'host') {
+    const answer = await messageBox({
+      type: 'warning',
+      title: 'Delete hosted session',
+      message: `Delete "${entry.name}" from this PC?`,
+      detail: 'Its board, locks, agents and chats are deleted and its invite code stops working. Your project folder and GitHub are not touched.',
+      buttons: ['Delete', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (answer.response !== 0) return { ok: true };
+  }
+  try {
+    sessions().forget(entry.key);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
 }
 
 async function chooseWorkspace(): Promise<Result> {
@@ -285,18 +349,23 @@ async function stopHosting() {
   hosted = null;
   hosting = null;
   githubToken = null;
+  currentKey = null;
   await server?.close();
 }
 
-async function host({ name, sessionName }: HostRequest): Promise<Result> {
+/**
+ * Hosts a new session, or with the key of a saved one, hosts it again: same
+ * board, locks, agents, chats, invite code and linked repository.
+ */
+async function host({ name, sessionName }: HostRequest, savedKey?: string): Promise<Result> {
+  const key = savedKey ?? sessions().newHostKey();
   try {
     flushCache();
     cachedUrl = null;
     client.disconnect();
     await stopHosting();
-    // The hosted session is saved on this PC: the board, locks and invite code
-    // are still there the next time you host.
-    const storage = new SqliteStorage(hostedSessionPath());
+    // Each hosted session is saved in its own file on this PC.
+    const storage = new SqliteStorage(sessions().hostFile(key));
     // A token saved in the app, else the GitHub CLI's if you are signed in to it.
     const saved = loadGitHubToken();
     const token = saved ?? (await tokenFromGitHubCli());
@@ -322,10 +391,22 @@ async function host({ name, sessionName }: HostRequest): Promise<Result> {
       port: hosted.port,
     };
     joined = { url: hosted.localUrl, secret: hosted.secret };
+    const previous = sessions().get(key);
+    sessions().save({
+      key,
+      role: 'host',
+      sessionId: hosted.session.id,
+      name: hosted.session.name,
+      invite: hosting.invite,
+      repo: previous?.repo ?? null,
+    });
+    currentKey = key;
     client.connect({ url: hosted.localUrl, secret: hosted.secret, name, identity: loadIdentity() });
     return { ok: true };
   } catch (error) {
     await stopHosting();
+    // A new session that never started leaves nothing behind.
+    if (!savedKey) sessions().forget(key);
     return failure(error);
   }
 }
@@ -337,6 +418,17 @@ async function joinSession({ name, invite }: JoinRequest): Promise<Result> {
   flushCache();
   cachedUrl = decoded.url;
   joined = { url: decoded.url, secret: decoded.secret };
+  const key = sessions().joinKey(decoded.url);
+  const saved = sessions().get(key);
+  sessions().save({
+    key,
+    role: 'join',
+    sessionId: saved?.sessionId ?? null,
+    name: decoded.sessionName ?? saved?.name ?? 'Session',
+    invite: invite.trim(),
+    repo: saved?.repo ?? null,
+  });
+  currentKey = key;
   client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() }, loadSnapshot(decoded.url));
   return { ok: true };
 }
@@ -455,6 +547,12 @@ ipcMain.handle(Channel.getState, () => appState());
 ipcMain.handle(Channel.host, (_event, request: HostRequest) => host(request));
 ipcMain.handle(Channel.join, (_event, request: JoinRequest) => joinSession(request));
 ipcMain.handle(Channel.leave, () => leave());
+ipcMain.handle(Channel.listSessions, () => listSessions());
+ipcMain.handle(Channel.resume, (_event, request: ResumeRequest) => {
+  if (!request || typeof request.key !== 'string' || typeof request.name !== 'string') return { ok: false, error: 'Pick a session.' };
+  return resume(request);
+});
+ipcMain.handle(Channel.forgetSession, (_event, key: unknown) => forgetSession(key));
 ipcMain.on(Channel.setPresence, (_event, status: unknown, focus: unknown) => {
   const parsed = PresenceStatus.safeParse(status);
   if (parsed.success) client.setPresence(parsed.data, typeof focus === 'string' ? focus : null);
@@ -600,6 +698,15 @@ app.setAppUserModelId('com.lossa551.projectcollaborationtool');
 
 void app.whenReady().then(() => {
   if (!firstInstance) return;
+  // The session hosted before this list existed shows up to resume.
+  legacyAdopted = sessions().adoptLegacyHost(async (file) => {
+    const storage = new SqliteStorage(file);
+    try {
+      return await storage.loadSession();
+    } finally {
+      await storage.close();
+    }
+  });
   createWindow();
   void findCliTools().then((found) => {
     cliTools = found;

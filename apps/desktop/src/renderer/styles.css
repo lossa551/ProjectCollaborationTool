@@ -113,6 +113,54 @@ textarea {
   margin-bottom: 20px;
 }
 
+.resume {
+  margin-bottom: 16px;
+}
+
+.resume-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.resume-row:first-child {
+  border-top: 0;
+}
+
+.resume-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.resume-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resume-details {
+  margin-top: 2px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .connect-options {
   display: grid;
   grid-template-columns: 1fr 1fr;

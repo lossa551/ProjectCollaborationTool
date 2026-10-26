@@ -25,7 +25,3 @@ export function loadIdentity(): string {
   return cached;
 }
 
-/** Where the session you host on this PC is saved, so it survives restarts. */
-export function hostedSessionPath(): string {
-  return join(app.getPath('userData'), 'hosted-session.sqlite');
-}

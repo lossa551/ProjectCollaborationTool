@@ -109,6 +109,25 @@ export interface JoinRequest {
 
 export type Result = { ok: true } | { ok: false; error: string };
 
+/** A session you hosted or joined on this PC, listed on the start screen. */
+export interface SavedSessionInfo {
+  key: string;
+  role: 'host' | 'join';
+  name: string;
+  /** The invite code you joined with, or the last one you shared as host. */
+  invite: string | null;
+  /** The linked GitHub repository, as owner/name. */
+  repo: string | null;
+  /** Your project folder in that session. */
+  folder: string | null;
+  lastUsedAt: number;
+}
+
+export interface ResumeRequest {
+  name: string;
+  key: string;
+}
+
 /** Where the installed app is in updating itself from GitHub Releases. */
 export type UpdateState =
   | { status: 'unavailable'; message: string }
@@ -129,6 +148,12 @@ export interface PctApi {
   getState(): Promise<AppState>;
   host(request: HostRequest): Promise<Result>;
   join(request: JoinRequest): Promise<Result>;
+  /** Sessions hosted or joined on this PC, most recent first. */
+  listSessions(): Promise<SavedSessionInfo[]>;
+  /** Hosts a saved session again, or rejoins it with its saved invite code. */
+  resume(request: ResumeRequest): Promise<Result>;
+  /** Asks, then removes the session from the list (and a hosted session's saved board). */
+  forgetSession(key: string): Promise<Result>;
   leave(): Promise<void>;
   setPresence(status: 'active' | 'idle' | 'away', focus: string | null): void;
   createTask(title: string, stage: TaskStage): void;
@@ -179,6 +204,9 @@ export const Channel = {
   getState: 'pct:get-state',
   host: 'pct:host',
   join: 'pct:join',
+  listSessions: 'pct:list-sessions',
+  resume: 'pct:resume',
+  forgetSession: 'pct:forget-session',
   leave: 'pct:leave',
   setPresence: 'pct:set-presence',
   createTask: 'pct:create-task',
