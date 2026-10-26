@@ -17,6 +17,8 @@ export const Participant = z.object({
   /** What the participant is looking at or working on, e.g. a task id or file path. */
   focus: z.string().nullable(),
   connectedAt: z.number(),
+  /** For a running agent: its agent profile and the person whose PC runs it. */
+  agent: z.object({ profileId: z.string(), startedBy: z.string() }).nullable().default(null),
 });
 export type Participant = z.infer<typeof Participant>;
 
@@ -239,3 +241,213 @@ export const Workspace = z.object({
   updatedAt: z.number(),
 });
 export type Workspace = z.infer<typeof Workspace>;
+
+// Agents. An agent profile is shared with the session (so both people see what
+// each agent may do), but it runs on the PC of whoever starts it, and its API
+// key never leaves that PC. A running agent joins as its own participant.
+
+/** Model APIs the app runs its own agent loop for. Ollama is the local runtime. */
+export const ApiProvider = z.enum(['anthropic', 'deepseek', 'openai', 'ollama', 'openai-compatible']);
+export type ApiProvider = z.infer<typeof ApiProvider>;
+
+export const API_PROVIDERS: Record<ApiProvider, { label: string; baseUrl: string | null; model: string; needsKey: boolean }> = {
+  anthropic: { label: 'Claude (Anthropic API)', baseUrl: null, model: 'claude-opus-5-5', needsKey: true },
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', needsKey: true },
+  openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5', needsKey: true },
+  ollama: { label: 'Ollama (local model)', baseUrl: 'http://localhost:11434/v1', model: 'qwen3', needsKey: false },
+  'openai-compatible': { label: 'Other OpenAI-compatible API', baseUrl: null, model: '', needsKey: true },
+};
+
+/** Where a provider's key is kept on a PC: per provider, or per address for other compatible APIs. */
+export function apiKeyName(provider: ApiProvider, baseUrl: string | null): string {
+  if (provider !== 'openai-compatible') return provider;
+  try {
+    return `openai-compatible:${new URL(baseUrl ?? '').host}`;
+  } catch {
+    return 'openai-compatible';
+  }
+}
+
+/** The environment variable a provider's key can also come from. */
+export const API_KEY_ENV: Partial<Record<ApiProvider, string>> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  openai: 'OPENAI_API_KEY',
+};
+
+/** Command-line agents run headless; their tool use is routed through the app. */
+export const CliTool = z.enum(['claude-code', 'codex']);
+export type CliTool = z.infer<typeof CliTool>;
+
+export const CLI_TOOLS: Record<CliTool, { label: string; command: string }> = {
+  'claude-code': { label: 'Claude Code', command: 'claude' },
+  codex: { label: 'Codex CLI', command: 'codex' },
+};
+
+export const AgentConnection = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('api'),
+    provider: ApiProvider,
+    model: z.string().trim().min(1).max(100),
+    /** Only for providers without a fixed address (openai-compatible), or to override one. */
+    baseUrl: z.string().trim().url().max(300).nullable().default(null),
+  }),
+  z.object({
+    type: z.literal('cli'),
+    tool: CliTool,
+    /** Passed to the tool's --model flag; null uses the tool's own default. */
+    model: z.string().trim().min(1).max(100).nullable().default(null),
+  }),
+]);
+export type AgentConnection = z.infer<typeof AgentConnection>;
+
+/** allow: just do it; ask: show an approval card in the chat; deny: refuse. */
+export const ApprovalPolicy = z.enum(['allow', 'ask', 'deny']);
+export type ApprovalPolicy = z.infer<typeof ApprovalPolicy>;
+
+export const AgentApprovals = z.object({
+  /** Editing files inside the agent's allowed paths and the task's scope. */
+  editInScope: ApprovalPolicy,
+  /** Editing anything else. */
+  editOutsideScope: ApprovalPolicy,
+  /** Running shell commands. */
+  commands: ApprovalPolicy,
+});
+export type AgentApprovals = z.infer<typeof AgentApprovals>;
+
+export const DEFAULT_APPROVALS: AgentApprovals = { editInScope: 'allow', editOutsideScope: 'ask', commands: 'ask' };
+
+export const AgentName = z.string().trim().min(1).max(64);
+
+export const AgentProfile = z.object({
+  id: z.string(),
+  name: AgentName,
+  connection: AgentConnection,
+  /** What this agent is for, given to it as instructions. */
+  responsibilities: z.string().max(4000),
+  /** Paths the agent may change (glob patterns); empty means anywhere the task allows. */
+  allowedPaths: TaskScope,
+  approvals: AgentApprovals,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type AgentProfile = z.infer<typeof AgentProfile>;
+
+export function describeConnection(connection: AgentConnection): string {
+  if (connection.type === 'cli') {
+    const label = CLI_TOOLS[connection.tool].label;
+    return connection.model ? `${label} · ${connection.model}` : label;
+  }
+  return `${API_PROVIDERS[connection.provider].label} · ${connection.model}`;
+}
+
+// Agent chats. Shared: everyone in the session sees every chat live and can
+// post in it. The agent's own messages (text, tool use, approval cards) come
+// from its runner on the PC that started it.
+
+/** What one agent or stage hands to the next, so nothing agreed gets lost. */
+export const Handoff = z.object({
+  fromChatId: z.string().nullable(),
+  /** Name of the agent or person handing off. */
+  fromName: z.string().max(64).nullable(),
+  /** The stage the work moves into. */
+  stage: TaskStage.nullable(),
+  plan: z.string().max(20000),
+  decisions: z.array(z.string().trim().min(1).max(1000)).max(50),
+  criteria: z.array(z.string().trim().min(1).max(1000)).max(50),
+  scope: TaskScope,
+  notes: z.string().max(10000),
+});
+export type Handoff = z.infer<typeof Handoff>;
+
+/** What the agent has in its context, as its runner reports it. */
+export const ChatContext = z.object({
+  items: z
+    .array(z.object({ label: z.string().max(200), detail: z.string().max(500), tokens: z.number().int() }))
+    .max(200),
+  /** Rough size of everything sent to the model, in tokens. */
+  tokens: z.number().int(),
+});
+export type ChatContext = z.infer<typeof ChatContext>;
+
+export const ChatAgentState = z.enum(['idle', 'working', 'waiting']);
+export type ChatAgentState = z.infer<typeof ChatAgentState>;
+
+export const ChatTitle = z.string().trim().min(1).max(200);
+
+export const ChatInfo = z.object({
+  id: z.string(),
+  title: ChatTitle,
+  agentId: z.string(),
+  taskId: z.string().nullable(),
+  createdBy: TaskOwner,
+  handoff: Handoff.nullable(),
+  state: ChatAgentState,
+  context: ChatContext.nullable(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type ChatInfo = z.infer<typeof ChatInfo>;
+
+export const ChatMessageKind = z.enum(['text', 'tool', 'approval', 'notice', 'handoff']);
+export type ChatMessageKind = z.infer<typeof ChatMessageKind>;
+
+export const ToolStatus = z.enum(['running', 'done', 'failed', 'blocked']);
+export type ToolStatus = z.infer<typeof ToolStatus>;
+
+export const ChatTool = z.object({
+  name: z.string().max(100),
+  /** One line, e.g. the path or command. */
+  summary: z.string().max(500),
+  status: ToolStatus,
+  output: z.string().max(4000),
+});
+export type ChatTool = z.infer<typeof ChatTool>;
+
+export const ApprovalState = z.enum(['pending', 'approved', 'denied', 'expired']);
+export type ApprovalState = z.infer<typeof ApprovalState>;
+
+export const ChatApproval = z.object({
+  /** What the agent wants to do, e.g. "Edit scripts/ui/menu.gd". */
+  action: z.string().max(500),
+  /** Why it needs approval: outside the plan, a soft lock held by someone else, a command. */
+  reason: z.string().max(1000),
+  state: ApprovalState,
+  decidedBy: z.string().max(64).nullable(),
+});
+export type ChatApproval = z.infer<typeof ChatApproval>;
+
+export const CHAT_TEXT_LIMIT = 100_000;
+
+export const ChatMessage = z.object({
+  id: z.string(),
+  chatId: z.string(),
+  author: TaskOwner,
+  kind: ChatMessageKind,
+  text: z.string().max(CHAT_TEXT_LIMIT),
+  /** Still being written; the agent keeps updating it. */
+  streaming: z.boolean(),
+  tool: ChatTool.nullable(),
+  approval: ChatApproval.nullable(),
+  at: z.number(),
+  updatedAt: z.number(),
+});
+export type ChatMessage = z.infer<typeof ChatMessage>;
+
+/** Rough token count for showing context size (about four characters a token). */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** The handoff package as text, the way the receiving agent reads it. */
+export function renderHandoff(handoff: Handoff, taskTitle: string | null): string {
+  const lines: string[] = [];
+  lines.push(`Handoff${handoff.fromName ? ` from ${handoff.fromName}` : ''}${taskTitle ? ` for "${taskTitle}"` : ''}.`);
+  if (handoff.stage) lines.push(`Stage: ${STAGE_LABELS[handoff.stage]}`);
+  if (handoff.plan.trim()) lines.push('', 'Plan:', handoff.plan.trim());
+  if (handoff.decisions.length) lines.push('', 'Decisions:', ...handoff.decisions.map((d) => `- ${d}`));
+  if (handoff.criteria.length) lines.push('', 'Acceptance criteria:', ...handoff.criteria.map((c) => `- ${c}`));
+  if (handoff.scope.length) lines.push('', 'Allowed paths:', ...handoff.scope.map((s) => `- ${s}`));
+  if (handoff.notes.trim()) lines.push('', 'Notes:', handoff.notes.trim());
+  return lines.join('\n');
+}

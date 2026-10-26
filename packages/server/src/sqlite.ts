@@ -2,7 +2,18 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { Activity, Lock, LockRules, ParticipantKind, RepoRef, SessionInfo, Task } from '@pct/shared';
+import {
+  Activity,
+  AgentProfile,
+  ChatInfo,
+  ChatMessage,
+  Lock,
+  LockRules,
+  ParticipantKind,
+  RepoRef,
+  SessionInfo,
+  Task,
+} from '@pct/shared';
 import type { Identity, Storage } from './storage.js';
 
 // Storage in one SQLite file, using the SQLite built into Node (and Electron),
@@ -10,7 +21,7 @@ import type { Identity, Storage } from './storage.js';
 // checked against the shared schemas when read back; a row that no longer
 // fits (say, from a newer version) is skipped rather than crashing the server.
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const IdentityRecord = z.object({
   id: z.string(),
@@ -44,6 +55,20 @@ export class SqliteStorage implements Storage {
         CREATE TABLE IF NOT EXISTS activity (seq INTEGER PRIMARY KEY AUTOINCREMENT, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS identities (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL);
         PRAGMA user_version = 1;
+      `);
+    }
+    if (version < 2) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS chats (id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS chat_messages (
+          id TEXT PRIMARY KEY,
+          chat_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          data TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS chat_messages_by_chat ON chat_messages (chat_id, seq);
+        PRAGMA user_version = 2;
       `);
     }
   }
@@ -138,6 +163,55 @@ export class SqliteStorage implements Storage {
 
   async saveGitHubRepo(repo: RepoRef | null) {
     this.setMeta('githubRepo', repo);
+  }
+
+  async listAgents() {
+    return this.all('SELECT data FROM agents', AgentProfile);
+  }
+
+  async saveAgent(agent: AgentProfile) {
+    this.db
+      .prepare('INSERT INTO agents (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
+      .run(agent.id, JSON.stringify(agent));
+  }
+
+  async deleteAgent(agentId: string) {
+    this.db.prepare('DELETE FROM agents WHERE id = ?').run(agentId);
+  }
+
+  async listChats() {
+    return this.all('SELECT data FROM chats', ChatInfo);
+  }
+
+  async saveChat(chat: ChatInfo) {
+    this.db
+      .prepare('INSERT INTO chats (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data')
+      .run(chat.id, JSON.stringify(chat));
+  }
+
+  async deleteChat(chatId: string) {
+    this.db.prepare('DELETE FROM chat_messages WHERE chat_id = ?').run(chatId);
+    this.db.prepare('DELETE FROM chats WHERE id = ?').run(chatId);
+  }
+
+  async listChatMessages(chatId: string, limit = 500) {
+    return this.all(
+      'SELECT data FROM (SELECT seq, data FROM chat_messages WHERE chat_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq',
+      ChatMessage,
+      chatId,
+      limit,
+    );
+  }
+
+  async saveChatMessage(message: ChatMessage) {
+    // A message keeps its place (seq) when it is updated.
+    this.db
+      .prepare(
+        `INSERT INTO chat_messages (id, chat_id, seq, data)
+         VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM chat_messages), ?)
+         ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
+      )
+      .run(message.id, message.chatId, JSON.stringify(message));
   }
 
   async appendActivity(entry: Activity) {

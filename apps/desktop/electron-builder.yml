@@ -13,6 +13,9 @@ files:
   - package.json
   - '!dist/**/*.map'
 npmRebuild: false
+# Claude Code runs the agent hook script with Electron as Node, from disk.
+asarUnpack:
+  - dist/pct-hook.cjs
 
 win:
   target: nsis

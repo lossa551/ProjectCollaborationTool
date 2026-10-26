@@ -14,8 +14,15 @@ when it is back). GitHub status: link the repository and see branches, pull
 requests, checks, reviews and merge conflicts on the task cards; each person
 picks their project folder so others see their branch and changed files,
 whether those stay inside the task's allowed paths, and where two people (or a
-pull request or a lock) touch the same file. Agents and engine integrations
-come next; see the GitHub issues.
+pull request or a lock) touch the same file. Agents: set up agents for a model
+API (Claude, DeepSeek, OpenAI, a local model through Ollama, or any
+OpenAI-compatible API) or a command-line agent (Claude Code, Codex CLI), start
+them on your PC, and chat with them together in shared agent chats. Every edit
+and command an agent makes is checked against locks, its allowed paths, the
+task's paths and its approval rules; anything that needs a person shows an
+approval card in the chat. Chats can become tasks and hand work to another
+agent with the plan, decisions, paths and acceptance criteria. Engine
+integrations come next; see the GitHub issues.
 
 ## Layout
 
@@ -23,6 +30,7 @@ come next; see the GitHub issues.
 | --- | --- |
 | `packages/shared` | Data model (participants, tasks, locks), the WebSocket protocol, invite codes, and `SessionClient`, which any client (app, agent runner, test) uses to join a session. |
 | `packages/server` | Session server (Node + `ws`). Runs inside the desktop app when you host, or on its own on a server. Storage sits behind an interface: in memory for now, SQLite next, Postgres when hosted. |
+| `packages/agents` | Runs agents on the PC that started them: our own agent loop for model APIs, Claude Code and Codex run headless, and the guard that checks every edit and command against locks, scope and approvals. |
 | `apps/desktop` | Electron app. The main process owns the connection and, when hosting, the server; the window is React, built with Vite. |
 
 ## Install

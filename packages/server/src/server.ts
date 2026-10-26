@@ -9,6 +9,7 @@ import {
   SOCKET_PATH,
   parseClientMessage,
   type Activity,
+  type ChatInfo,
   type GitHubStatus,
   type Lock,
   type ErrorCode,
@@ -18,6 +19,7 @@ import {
   type Workspace,
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
+import { AgentChats } from './chats.js';
 import { GitHubWatcher, describeGitHubChanges, type GitHubOptions } from './github.js';
 import { LockTable } from './locks.js';
 import { MemoryStorage, type Storage } from './storage.js';
@@ -106,6 +108,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   );
   /** Activity sent to clients when they join; storage keeps the full log. */
   const recentActivity = await storage.listActivity(ACTIVITY_ON_JOIN);
+  const chats = new AgentChats(await storage.listAgents(), await storage.listChats(), storage);
   /** Each participant's local checkout, while they are connected. */
   const workspaces = new Map<string, Workspace>();
 
@@ -163,6 +166,11 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   );
   github.setRepo(await storage.loadGitHubRepo());
 
+  const chatChanged = (chat: ChatInfo) => {
+    void persist('chat', storage.saveChat(chat));
+    broadcast({ type: 'chat.changed', chat });
+  };
+
   const lockChanged = (lock: Lock) => {
     void persist('lock', storage.saveLock(lock));
     broadcast({ type: 'lock.changed', lock });
@@ -196,6 +204,10 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         if (!secretsMatch(message.secret, sessionSecret)) {
           return fail(conn, 'bad_secret', 'The invite code is wrong or out of date', CloseCode.badSecret);
         }
+        if (message.agent) {
+          const profile = message.kind === 'agent' ? chats.getAgent(message.agent.profileId) : undefined;
+          if (!profile) return fail(conn, 'not_found', 'That agent is not set up in this session', CloseCode.agentRunning);
+        }
         clearTimeout(helloTimer);
         const now = Date.now();
         const tokenHash = createHash('sha256').update(message.identity).digest('hex');
@@ -217,6 +229,16 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           other.participant = null;
           fail(other, 'replaced', 'You joined this session from another window', CloseCode.replaced);
         }
+        // One runner per agent: a second PC starting the same agent is turned away.
+        const running = message.agent && joined().find((p) => p.agent?.profileId === message.agent!.profileId);
+        if (running) {
+          return fail(
+            conn,
+            'agent_running',
+            `${running.name} is already running on ${running.agent!.startedBy}'s PC`,
+            CloseCode.agentRunning,
+          );
+        }
 
         const participant: Participant = {
           id: identity.id,
@@ -225,6 +247,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           status: 'active',
           focus: null,
           connectedAt: now,
+          agent: message.agent ?? null,
         };
         conn.participant = participant;
         for (const lock of locks.refresh(participant.id, now)) lockChanged(lock);
@@ -240,6 +263,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           activity: recentActivity,
           github: github.getStatus(),
           workspaces: [...workspaces].map(([participantId, workspace]) => ({ participantId, workspace })),
+          agents: chats.listAgents(),
+          chats: chats.listChats(),
         });
         broadcast({ type: 'participant.joined', participant }, conn);
         record(participant, 'joined the session');
@@ -295,6 +320,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           broadcast({ type: 'task.removed', taskId: result.task.id });
           for (const text of result.descriptions) record(participant, text, null);
           for (const lock of locks.detachTask(result.task.id)) lockChanged(lock);
+          for (const chat of chats.detachTask(result.task.id)) chatChanged(chat);
           break;
         }
         case 'lock.acquire': {
@@ -337,6 +363,90 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           else workspaces.delete(participant.id);
           broadcast({ type: 'workspace.changed', participantId: participant.id, workspace: message.workspace });
           break;
+        case 'agent.save': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people set up agents');
+          const result = chats.saveAgent(message.agent);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          void persist('agent', storage.saveAgent(result.value));
+          broadcast({ type: 'agent.changed', agent: result.value });
+          if (result.description) record(participant, result.description);
+          break;
+        }
+        case 'agent.delete': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people remove agents');
+          const result = chats.deleteAgent(message.agentId);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          void persist('agent', storage.deleteAgent(result.value.id));
+          broadcast({ type: 'agent.removed', agentId: result.value.id });
+          if (result.description) record(participant, result.description);
+          // Its runner stops: the profile it runs is gone.
+          for (const other of connections) {
+            if (other.participant?.agent?.profileId === result.value.id) {
+              fail(other, 'not_found', 'This agent was removed from the session', CloseCode.agentRunning);
+            }
+          }
+          break;
+        }
+        case 'chat.create': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people start chats');
+          if (message.taskId && !board.get(message.taskId)) return fail(conn, 'not_found', 'That task no longer exists');
+          const result = chats.createChat(message, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          if (!result.description) {
+            send(conn, { type: 'chat.changed', chat: result.value });
+            break;
+          }
+          chatChanged(result.value);
+          record(participant, result.description, result.value.taskId);
+          break;
+        }
+        case 'chat.update': {
+          if (message.taskId && !board.get(message.taskId)) return fail(conn, 'not_found', 'That task no longer exists');
+          const result = chats.updateChat(message.chatId, message);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          chatChanged(result.value);
+          break;
+        }
+        case 'chat.delete': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people delete chats');
+          const result = chats.deleteChat(message.chatId);
+          if (!result.ok) break;
+          void persist('chat', storage.deleteChat(result.value.id));
+          broadcast({ type: 'chat.removed', chatId: result.value.id });
+          if (result.description) record(participant, result.description, result.value.taskId);
+          break;
+        }
+        case 'chat.open': {
+          if (!chats.getChat(message.chatId)) return fail(conn, 'not_found', 'That chat no longer exists');
+          send(conn, { type: 'chat.history', chatId: message.chatId, messages: await chats.history(message.chatId) });
+          break;
+        }
+        case 'chat.post': {
+          const result = await chats.post(message.chatId, message.message, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          if (result.value.persist) void persist('chat message', storage.saveChatMessage(result.value.message));
+          broadcast({ type: 'chat.message', message: result.value.message });
+          break;
+        }
+        case 'chat.decide': {
+          const result = await chats.decide(message.chatId, message.messageId, message.approve, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          void persist('chat message', storage.saveChatMessage(result.value));
+          broadcast({ type: 'chat.message', message: result.value });
+          if (result.description) record(participant, result.description, chats.getChat(message.chatId)?.taskId ?? null);
+          break;
+        }
+        case 'chat.agent': {
+          const result = chats.setAgentState(message.chatId, message.state, message.context, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          chatChanged(result.value);
+          break;
+        }
+        case 'chat.stop': {
+          if (!chats.getChat(message.chatId)) return fail(conn, 'not_found', 'That chat no longer exists');
+          broadcast({ type: 'chat.stopped', chatId: message.chatId, by: participant.name });
+          break;
+        }
       }
     };
 
@@ -354,6 +464,12 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       const participant = conn.participant;
       if (participant && !joined().some((p) => p.id === participant.id)) {
         workspaces.delete(participant.id);
+        const left = chats.agentLeft(participant);
+        for (const chat of left.chats) chatChanged(chat);
+        for (const m of left.messages) {
+          void persist('chat message', storage.saveChatMessage(m));
+          broadcast({ type: 'chat.message', message: m });
+        }
         broadcast({ type: 'participant.left', participantId: participant.id });
         record(participant, 'left the session');
         log(`${participant.name} left`);

@@ -1,4 +1,15 @@
-import type { Activity, Lock, LockRules, ParticipantKind, RepoRef, SessionInfo, Task } from '@pct/shared';
+import type {
+  Activity,
+  AgentProfile,
+  ChatInfo,
+  ChatMessage,
+  Lock,
+  LockRules,
+  ParticipantKind,
+  RepoRef,
+  SessionInfo,
+  Task,
+} from '@pct/shared';
 
 // Where the server keeps durable state. The in-memory store is the first
 // implementation; SqliteStorage keeps it on disk, and Postgres when the server
@@ -36,6 +47,17 @@ export interface Storage {
   /** The GitHub repository the session is linked to. */
   loadGitHubRepo(): Promise<RepoRef | null>;
   saveGitHubRepo(repo: RepoRef | null): Promise<void>;
+  listAgents(): Promise<AgentProfile[]>;
+  saveAgent(agent: AgentProfile): Promise<void>;
+  deleteAgent(agentId: string): Promise<void>;
+  listChats(): Promise<ChatInfo[]>;
+  saveChat(chat: ChatInfo): Promise<void>;
+  /** Deletes the chat and its messages. */
+  deleteChat(chatId: string): Promise<void>;
+  /** The most recent messages of a chat, oldest first. */
+  listChatMessages(chatId: string, limit?: number): Promise<ChatMessage[]>;
+  /** Adds a message, or replaces the one with the same id. */
+  saveChatMessage(message: ChatMessage): Promise<void>;
   /** Append-only log of what happened, for the activity feed and later undo. */
   appendActivity(entry: Activity): Promise<void>;
   /** The most recent entries, oldest first. */
@@ -52,6 +74,9 @@ export class MemoryStorage implements Storage {
   private lockRules: LockRules | null = null;
   private githubRepo: RepoRef | null = null;
   private readonly activity: Activity[] = [];
+  private readonly agents = new Map<string, AgentProfile>();
+  private readonly chats = new Map<string, ChatInfo>();
+  private readonly chatMessages = new Map<string, ChatMessage[]>();
 
   async loadSession() {
     return this.session;
@@ -115,6 +140,43 @@ export class MemoryStorage implements Storage {
 
   async saveGitHubRepo(repo: RepoRef | null) {
     this.githubRepo = repo;
+  }
+
+  async listAgents() {
+    return [...this.agents.values()];
+  }
+
+  async saveAgent(agent: AgentProfile) {
+    this.agents.set(agent.id, agent);
+  }
+
+  async deleteAgent(agentId: string) {
+    this.agents.delete(agentId);
+  }
+
+  async listChats() {
+    return [...this.chats.values()];
+  }
+
+  async saveChat(chat: ChatInfo) {
+    this.chats.set(chat.id, chat);
+  }
+
+  async deleteChat(chatId: string) {
+    this.chats.delete(chatId);
+    this.chatMessages.delete(chatId);
+  }
+
+  async listChatMessages(chatId: string, limit = 500) {
+    return (this.chatMessages.get(chatId) ?? []).slice(-limit);
+  }
+
+  async saveChatMessage(message: ChatMessage) {
+    const list = this.chatMessages.get(message.chatId) ?? [];
+    const index = list.findIndex((m) => m.id === message.id);
+    if (index >= 0) list[index] = message;
+    else list.push(message);
+    this.chatMessages.set(message.chatId, list);
   }
 
   async appendActivity(entry: Activity) {

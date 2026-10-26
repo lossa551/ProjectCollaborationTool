@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@pct/agents": "0.1.0",
     "@pct/server": "0.1.0",
     "@pct/shared": "0.1.0",
     "@types/react": "^19.2.2",

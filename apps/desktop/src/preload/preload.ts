@@ -19,6 +19,20 @@ const api: PctApi = {
   linkRepo: (repo) => ipcRenderer.invoke(Channel.linkRepo, repo),
   setGitHubToken: (token) => ipcRenderer.invoke(Channel.setGitHubToken, token),
   copyText: (text) => ipcRenderer.send(Channel.copyText, text),
+  saveAgent: (agent) => ipcRenderer.invoke(Channel.saveAgent, agent),
+  deleteAgent: (agentId) => ipcRenderer.send(Channel.deleteAgent, agentId),
+  startAgent: (agentId) => ipcRenderer.invoke(Channel.startAgent, agentId),
+  stopAgent: (agentId) => ipcRenderer.send(Channel.stopAgent, agentId),
+  setApiKey: (name, key) => ipcRenderer.invoke(Channel.setApiKey, name, key),
+  createChat: (request) => ipcRenderer.invoke(Channel.createChat, request),
+  updateChat: (chatId, changes) => ipcRenderer.send(Channel.updateChat, chatId, changes),
+  deleteChat: (chatId) => ipcRenderer.send(Channel.deleteChat, chatId),
+  openChat: (chatId) => ipcRenderer.send(Channel.openChat, chatId),
+  postChat: (chatId, text) => ipcRenderer.send(Channel.postChat, chatId, text),
+  decideApproval: (chatId, messageId, approve) => ipcRenderer.send(Channel.decideApproval, chatId, messageId, approve),
+  stopChat: (chatId) => ipcRenderer.send(Channel.stopChat, chatId),
+  chatToTask: (chatId) => ipcRenderer.invoke(Channel.chatToTask, chatId),
+  handOff: (request) => ipcRenderer.invoke(Channel.handOff, request),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);

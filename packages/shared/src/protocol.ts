@@ -1,7 +1,21 @@
 import { z } from 'zod';
 import {
   Activity,
+  AgentApprovals,
+  AgentConnection,
+  AgentName,
+  AgentProfile,
+  ApprovalState,
   BranchName,
+  ChatAgentState,
+  ChatContext,
+  ChatInfo,
+  ChatMessage,
+  ChatMessageKind,
+  ChatTitle,
+  ChatTool,
+  CHAT_TEXT_LIMIT,
+  Handoff,
   EMPTY_GITHUB_STATUS,
   GitHubStatus,
   Lock,
@@ -19,7 +33,7 @@ import {
 } from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -38,6 +52,8 @@ export const HelloMessage = z.object({
    * so tasks and locks stay theirs. Never shown to others.
    */
   identity: z.string().min(16).max(128),
+  /** Set when an agent runner joins: which agent profile it runs and who started it. */
+  agent: z.object({ profileId: z.string(), startedBy: z.string().max(64) }).optional(),
 });
 
 export const PresenceUpdateMessage = z.object({
@@ -127,6 +143,92 @@ export const WorkspaceUpdateMessage = z.object({
   workspace: Workspace.nullable(),
 });
 
+/** Creates (without an id) or changes an agent profile. */
+export const AgentSaveMessage = z.object({
+  type: z.literal('agent.save'),
+  agent: z.object({
+    id: z.string().optional(),
+    name: AgentName,
+    connection: AgentConnection,
+    responsibilities: z.string().max(4000),
+    allowedPaths: TaskScope,
+    approvals: AgentApprovals,
+  }),
+});
+
+export const AgentDeleteMessage = z.object({
+  type: z.literal('agent.delete'),
+  agentId: z.string(),
+});
+
+export const ChatCreateMessage = z.object({
+  type: z.literal('chat.create'),
+  /** Chosen by the client so it can open the chat right away. */
+  id: z.string().min(8).max(64),
+  agentId: z.string(),
+  title: ChatTitle,
+  taskId: z.string().nullable().optional(),
+  handoff: Handoff.nullable().optional(),
+});
+
+export const ChatUpdateMessage = z.object({
+  type: z.literal('chat.update'),
+  chatId: z.string(),
+  title: ChatTitle.optional(),
+  taskId: z.string().nullable().optional(),
+});
+
+export const ChatDeleteMessage = z.object({
+  type: z.literal('chat.delete'),
+  chatId: z.string(),
+});
+
+/** Asks for a chat's messages; the server answers with chat.history. */
+export const ChatOpenMessage = z.object({
+  type: z.literal('chat.open'),
+  chatId: z.string(),
+});
+
+/**
+ * Posts a message, or updates one of your own with the same id (agents
+ * stream their answers this way). People can only post text and handoffs.
+ */
+export const ChatPostMessage = z.object({
+  type: z.literal('chat.post'),
+  chatId: z.string(),
+  message: z.object({
+    id: z.string().min(8).max(64),
+    kind: ChatMessageKind,
+    text: z.string().max(CHAT_TEXT_LIMIT),
+    streaming: z.boolean().optional(),
+    tool: ChatTool.nullable().optional(),
+    /** Agents open an approval card with state "pending"; only people decide it. */
+    approval: z.object({ action: z.string().max(500), reason: z.string().max(1000), state: ApprovalState }).nullable().optional(),
+  }),
+});
+
+/** A person approves or denies an agent's pending request. */
+export const ChatDecideMessage = z.object({
+  type: z.literal('chat.decide'),
+  chatId: z.string(),
+  messageId: z.string(),
+  approve: z.boolean(),
+});
+
+/** The chat's agent reports whether it is working and what context it has. */
+export const ChatAgentMessage = z.object({
+  type: z.literal('chat.agent'),
+  chatId: z.string(),
+  state: ChatAgentState,
+  context: ChatContext.nullable().optional(),
+});
+
+/** Asks the chat's agent to stop what it is doing. */
+export const ChatStopMessage = z.object({
+  type: z.literal('chat.stop'),
+  chatId: z.string(),
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PresenceUpdateMessage,
@@ -140,6 +242,16 @@ export const ClientMessage = z.discriminatedUnion('type', [
   LockRulesUpdateMessage,
   GitHubLinkMessage,
   WorkspaceUpdateMessage,
+  AgentSaveMessage,
+  AgentDeleteMessage,
+  ChatCreateMessage,
+  ChatUpdateMessage,
+  ChatDeleteMessage,
+  ChatOpenMessage,
+  ChatPostMessage,
+  ChatDecideMessage,
+  ChatAgentMessage,
+  ChatStopMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -158,6 +270,8 @@ export const WelcomeMessage = z.object({
   activity: z.array(Activity),
   github: GitHubStatus,
   workspaces: z.array(z.object({ participantId: z.string(), workspace: Workspace })),
+  agents: z.array(AgentProfile),
+  chats: z.array(ChatInfo),
 });
 
 export const ParticipantJoinedMessage = z.object({
@@ -218,6 +332,46 @@ export const WorkspaceChangedMessage = z.object({
   workspace: Workspace.nullable(),
 });
 
+export const AgentChangedMessage = z.object({
+  type: z.literal('agent.changed'),
+  agent: AgentProfile,
+});
+
+export const AgentRemovedMessage = z.object({
+  type: z.literal('agent.removed'),
+  agentId: z.string(),
+});
+
+export const ChatChangedMessage = z.object({
+  type: z.literal('chat.changed'),
+  chat: ChatInfo,
+});
+
+export const ChatRemovedMessage = z.object({
+  type: z.literal('chat.removed'),
+  chatId: z.string(),
+});
+
+/** A new or updated chat message. */
+export const ChatMessageMessage = z.object({
+  type: z.literal('chat.message'),
+  message: ChatMessage,
+});
+
+/** The messages of a chat, oldest first, in answer to chat.open. */
+export const ChatHistoryMessage = z.object({
+  type: z.literal('chat.history'),
+  chatId: z.string(),
+  messages: z.array(ChatMessage),
+});
+
+/** Someone asked the chat's agent to stop. */
+export const ChatStoppedMessage = z.object({
+  type: z.literal('chat.stopped'),
+  chatId: z.string(),
+  by: z.string(),
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -234,6 +388,7 @@ export const ErrorCode = z.enum([
   'not_allowed',
   'replaced',
   'conflict',
+  'agent_running',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -256,6 +411,13 @@ export const ServerMessage = z.discriminatedUnion('type', [
   ActivityMessage,
   GitHubStatusMessage,
   WorkspaceChangedMessage,
+  AgentChangedMessage,
+  AgentRemovedMessage,
+  ChatChangedMessage,
+  ChatRemovedMessage,
+  ChatMessageMessage,
+  ChatHistoryMessage,
+  ChatStoppedMessage,
   PongMessage,
   ErrorMessage,
 ]);
@@ -269,6 +431,8 @@ export const CloseCode = {
   serverShutdown: 4004,
   /** The same identity connected again from somewhere else. */
   replaced: 4005,
+  /** That agent is already running on someone's PC. */
+  agentRunning: 4006,
 } as const;
 
 function parse<T>(schema: z.ZodType<T>, raw: string): T | null {
@@ -293,6 +457,11 @@ export const SessionSnapshot = z.object({
   lockRules: LockRules,
   activity: z.array(Activity),
   github: GitHubStatus.default(EMPTY_GITHUB_STATUS),
+  agents: z.array(AgentProfile).default([]),
+  chats: z.array(ChatInfo).default([]),
   queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage])),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshot>;
+
+export type AgentSaveMessage = z.infer<typeof AgentSaveMessage>;
+export type ChatPostMessage = z.infer<typeof ChatPostMessage>;

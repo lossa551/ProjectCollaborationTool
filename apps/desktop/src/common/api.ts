@@ -1,4 +1,14 @@
-import type { LockRules, RepoRef, SessionState, TaskChanges, TaskStage, Workspace } from '@pct/shared';
+import type {
+  AgentSaveMessage,
+  CliTool,
+  Handoff,
+  LockRules,
+  RepoRef,
+  SessionState,
+  TaskChanges,
+  TaskStage,
+  Workspace,
+} from '@pct/shared';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -20,6 +30,14 @@ export interface LocalWorkspace {
   error: string | null;
 }
 
+/** An agent started on this PC. */
+export interface LocalAgent {
+  status: 'starting' | 'running' | 'error';
+  error: string | null;
+  /** The project folder it works in. */
+  folder: string;
+}
+
 export interface AppState {
   session: SessionState;
   hosting: HostingInfo | null;
@@ -29,7 +47,24 @@ export interface AppState {
   workspace: LocalWorkspace | null;
   /** Where the hosted server's GitHub token comes from; null when not hosting. */
   githubToken: 'saved' | 'cli' | 'none' | null;
+  /** Agents running on this PC, by agent profile id. */
+  localAgents: Record<string, LocalAgent>;
+  /** API keys available on this PC by key name (see apiKeyName): saved in the app or from an environment variable. */
+  apiKeys: Record<string, 'saved' | 'env'>;
+  /** Command-line agents installed on this PC. */
+  cliTools: Record<CliTool, boolean>;
 }
+
+export interface HandoffRequest {
+  /** The chat the handoff comes from, if any. */
+  fromChatId: string | null;
+  taskId: string | null;
+  /** The agent profile that takes over. */
+  agentId: string;
+  handoff: Omit<Handoff, 'fromChatId' | 'fromName'>;
+}
+
+export type ResultWith<T> = { ok: true; value: T } | { ok: false; error: string };
 
 export interface HostRequest {
   name: string;
@@ -80,6 +115,24 @@ export interface PctApi {
   /** Host only: saves (or with null removes) the token the session server uses for GitHub. */
   setGitHubToken(token: string | null): Promise<Result>;
   copyText(text: string): void;
+  saveAgent(agent: AgentSaveMessage['agent']): Promise<Result>;
+  deleteAgent(agentId: string): void;
+  /** Starts an agent on this PC, in your project folder. */
+  startAgent(agentId: string): Promise<Result>;
+  stopAgent(agentId: string): void;
+  /** Saves (or with null removes) an API key on this PC only. */
+  setApiKey(name: string, key: string | null): Promise<Result>;
+  createChat(request: { agentId: string; title: string; taskId: string | null }): Promise<ResultWith<string>>;
+  updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void;
+  deleteChat(chatId: string): void;
+  openChat(chatId: string): void;
+  postChat(chatId: string, text: string): void;
+  decideApproval(chatId: string, messageId: string, approve: boolean): void;
+  stopChat(chatId: string): void;
+  /** Creates a task from the chat and links the chat to it. */
+  chatToTask(chatId: string): Promise<Result>;
+  /** Starts a chat with another agent carrying the handoff package; returns the new chat's id. */
+  handOff(request: HandoffRequest): Promise<ResultWith<string>>;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -105,6 +158,20 @@ export const Channel = {
   linkRepo: 'pct:link-repo',
   setGitHubToken: 'pct:set-github-token',
   copyText: 'pct:copy-text',
+  saveAgent: 'pct:save-agent',
+  deleteAgent: 'pct:delete-agent',
+  startAgent: 'pct:start-agent',
+  stopAgent: 'pct:stop-agent',
+  setApiKey: 'pct:set-api-key',
+  createChat: 'pct:create-chat',
+  updateChat: 'pct:update-chat',
+  deleteChat: 'pct:delete-chat',
+  openChat: 'pct:open-chat',
+  postChat: 'pct:post-chat',
+  decideApproval: 'pct:decide-approval',
+  stopChat: 'pct:stop-chat',
+  chatToTask: 'pct:chat-to-task',
+  handOff: 'pct:hand-off',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

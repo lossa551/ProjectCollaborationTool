@@ -748,3 +748,318 @@ a {
 .overlap-list li {
   margin-bottom: 2px;
 }
+
+/* Agents */
+
+.screen-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.screen-header p {
+  margin: 0;
+  max-width: 640px;
+}
+
+.agents-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1100px;
+}
+
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.agent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-card p {
+  margin: 0;
+}
+
+.agent-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.agent-head h2 {
+  margin: 0;
+}
+
+.agent-role {
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agent-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.agent-facts dt {
+  color: var(--muted);
+}
+
+.agent-facts dd {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.agent-editor h2 {
+  margin-bottom: 12px;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0 12px;
+}
+
+.row.tight {
+  margin-top: 0;
+}
+
+.row.tight input {
+  flex: 1;
+}
+
+/* Agent chat */
+
+.chat-screen {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.chat-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.chat-item.active {
+  background: var(--panel-2);
+}
+
+.chat-item-title {
+  overflow-wrap: anywhere;
+}
+
+.chat-empty {
+  display: grid;
+  place-items: center;
+}
+
+.new-chat {
+  max-width: 520px;
+  align-self: flex-start;
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.conversation-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.conversation-head h2 {
+  margin: 0;
+}
+
+.messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.msg-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.msg-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 2px;
+}
+
+.msg-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg-handoff .msg-body {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.cursor {
+  color: var(--accent);
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.msg-notice {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.msg-tool {
+  margin-left: 30px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.msg-tool summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.msg-tool pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+.tool-done .tool-icon {
+  color: var(--good);
+}
+
+.tool-failed .tool-icon,
+.tool-blocked .tool-icon {
+  color: var(--bad);
+}
+
+.tool-blocked summary {
+  color: var(--bad);
+}
+
+.msg-approval {
+  margin-left: 30px;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+}
+
+.msg-approval p {
+  margin: 4px 0;
+  white-space: pre-wrap;
+}
+
+.approval-approved {
+  border-color: var(--good);
+  background: var(--panel);
+}
+
+.approval-denied,
+.approval-expired {
+  border-color: var(--border);
+  background: var(--panel);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.context-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.context-list li {
+  display: flex;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.criteria {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.handoff-form {
+  display: flex;
+  flex-direction: column;
+}
