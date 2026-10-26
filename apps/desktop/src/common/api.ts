@@ -220,6 +220,8 @@ export interface PctApi {
   scanFolderNotes(fresh: boolean): Promise<ResultWith<FolderNotesReport>>;
   /** Makes a task scoped to one folder's AGENTS.md: update it, or write the first one. */
   folderNoteTask(folder: string): Promise<ResultWith<string>>;
+  /** Paths of the AGENTS.md notes in your project folder; empty without one. */
+  folderNotePaths(): Promise<string[]>;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -271,6 +273,7 @@ export const Channel = {
   runBloatCheck: 'pct:run-bloat-check',
   scanFolderNotes: 'pct:scan-folder-notes',
   folderNoteTask: 'pct:folder-note-task',
+  folderNotePaths: 'pct:folder-note-paths',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

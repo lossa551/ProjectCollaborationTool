@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { analyzeBloat, type BloatReport, type ScannedFile } from '@pct/shared';
+import { folderNoteFindings } from '../common/folder-notes';
+import { scanFolderNotes } from './folder-notes';
 import { listProjectFiles } from './git';
 
 // Reads the project folder for the bloat check: every file git knows about
@@ -49,6 +51,10 @@ async function readOne(root: string, path: string): Promise<ScannedFile | null> 
 }
 
 export async function runBloatCheck(root: string, ranBy: string, branch: string | null): Promise<BloatReport> {
-  const { files, truncated } = await scanProject(root);
-  return analyzeBloat(files, { ranBy, branch, truncated });
+  const [{ files, truncated }, notes] = await Promise.all([
+    scanProject(root),
+    // The folder notes part is extra: without it the rest of the report still stands.
+    scanFolderNotes(root).catch(() => null),
+  ]);
+  return analyzeBloat(files, { ranBy, branch, truncated }, Date.now(), notes ? folderNoteFindings(notes) : []);
 }

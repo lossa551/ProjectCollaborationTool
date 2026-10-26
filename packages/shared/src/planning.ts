@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { z } from 'zod';
 import { itemsOf, readItems, setItemText } from './docs.js';
-import { CRITERIA_LIMIT, CriterionText, STAGE_LABELS, TaskScope, TaskStage, TaskTitle, type Task } from './model.js';
+import { CRITERIA_LIMIT, CriterionText, STAGE_LABELS, ReadList, TaskScope, TaskStage, TaskTitle, type Task } from './model.js';
 import { normalizePath } from './paths.js';
 
 // The planning space (screen 4): features, ideas and notes in one shared Yjs
@@ -66,7 +66,7 @@ export type PlanOp = z.infer<typeof PlanOp>;
 export const PlanApproval = z.object({
   featureId: ItemId,
   tasks: z
-    .array(z.object({ title: TaskTitle, scope: TaskScope, criteria: z.array(CriterionText).max(CRITERIA_LIMIT) }))
+    .array(z.object({ title: TaskTitle, scope: TaskScope, readFirst: ReadList.default([]), criteria: z.array(CriterionText).max(CRITERIA_LIMIT) }))
     .min(1)
     .max(50),
 });
@@ -136,26 +136,25 @@ export function planLines(text: string): string[] {
 export interface PlannedTask {
   title: string;
   scope: string[];
+  readFirst: string[];
 }
 
-/** The implementation tasks of a plan: "Title | path/a/**, path/b.gd". */
+const pathList = (text: string | undefined, limit: number) =>
+  (text ?? '')
+    .split(/[,\s]+/)
+    .flatMap((p) => {
+      const path = normalizePath(p);
+      return path ? [path] : [];
+    })
+    .slice(0, limit);
+
+/** The implementation tasks of a plan: "Title | path/a/**, path/b.gd | files/to/read.md". */
 export function plannedTasks(text: string): PlannedTask[] {
   return planLines(text).flatMap((line) => {
-    const bar = line.indexOf('|');
-    const title = (bar >= 0 ? line.slice(0, bar) : line).trim().slice(0, 200);
+    const [head, scope, read] = line.split('|');
+    const title = head!.trim().slice(0, 200);
     if (!title) return [];
-    const scope =
-      bar >= 0
-        ? line
-            .slice(bar + 1)
-            .split(/[,\s]+/)
-            .flatMap((p) => {
-              const path = normalizePath(p);
-              return path ? [path] : [];
-            })
-            .slice(0, 100)
-        : [];
-    return [{ title, scope }];
+    return [{ title, scope: pathList(scope, 100), readFirst: pathList(read, 50) }];
   });
 }
 

@@ -21,6 +21,7 @@ const task: Task = {
   stage: 'implementing',
   owner: { id: 'm', name: 'Martin', kind: 'human' },
   scope: ['scripts/player/**'],
+  readFirst: [],
   branch: null,
   featureId: null,
   criteria: [],
@@ -84,6 +85,7 @@ describe('SqliteStorage', () => {
       duplicates: [],
       unusedAssets: ['art/old.png'],
       unusedDependencies: [],
+      folderNotes: [],
     });
     await first.close();
 

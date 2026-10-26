@@ -55,6 +55,10 @@ describe('task board', () => {
     expect(seen.tasks[0]!.owner).toEqual({ id: friendId, name: 'Friend', kind: 'human' });
     expect(seen.tasks[0]!.version).toBe(2);
 
+    martin.updateTask(task.id, { readFirst: ['scripts/player/AGENTS.md'] });
+    seen = await waitFor(friend, (s) => s.tasks[0]?.readFirst.length === 1);
+    expect(seen.tasks[0]!.readFirst).toEqual(['scripts/player/AGENTS.md']);
+
     friend.deleteTask(task.id);
     await waitFor(martin, (s) => s.tasks.length === 0);
     const final = await waitFor(martin, (s) => feed(s).includes('Friend deleted "Player movement"'));
@@ -63,6 +67,7 @@ describe('task board', () => {
         'Martin added "Player movement"',
         'Martin moved "Player movement" to Implementing',
         'Martin assigned "Player movement" to Friend',
+        'Martin changed the files to read for "Player movement"',
       ]),
     );
   });

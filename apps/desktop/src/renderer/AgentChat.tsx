@@ -534,6 +534,7 @@ function HandoffForm({
     (task?.criteria.length ? task.criteria.map((c) => c.text) : (chat.handoff?.criteria ?? [])).join('\n'),
   );
   const [scope, setScope] = useState((task?.scope.length ? task.scope : (chat.handoff?.scope ?? [])).join('\n'));
+  const [readFirst, setReadFirst] = useState((task?.readFirst.length ? task.readFirst : (chat.handoff?.readFirst ?? [])).join('\n'));
   const [notes, setNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const split = (text: string) =>
@@ -554,6 +555,7 @@ function HandoffForm({
         decisions: split(decisions),
         criteria: split(criteria),
         scope: split(scope),
+        readFirst: split(readFirst),
         notes: notes.trim(),
       },
     });
@@ -603,6 +605,10 @@ function HandoffForm({
       <label className="field">
         <span>Allowed paths, one per line</span>
         <textarea value={scope} onChange={(e) => setScope(e.target.value)} rows={2} spellCheck={false} />
+      </label>
+      <label className="field">
+        <span>Files to read first, one per line</span>
+        <textarea value={readFirst} onChange={(e) => setReadFirst(e.target.value)} rows={2} spellCheck={false} />
       </label>
       <label className="field">
         <span>Notes</span>

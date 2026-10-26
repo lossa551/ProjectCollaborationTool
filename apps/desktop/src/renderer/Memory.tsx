@@ -10,6 +10,7 @@ import {
   type MemorySource,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
+import { folderLabel } from '../common/folder-notes';
 import { FolderNotesScreen } from './FolderNotes';
 import { LiveText } from './LiveText';
 
@@ -247,6 +248,13 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
     });
     setNoted(new Set(noted).add(key));
   };
+  const noteTask = async (key: string, folder: string) => {
+    const result = await window.pct.folderNoteTask(folder);
+    if (result.ok) {
+      setNoted(new Set(noted).add(key));
+      onOpenTask(result.value);
+    } else setError(result.error);
+  };
   const noteButton = (id: string, title: string, body: string) =>
     noted.has(id) ? (
       <span className="muted small">Noted</span>
@@ -336,6 +344,32 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
                 {noteButton(`dep:${d.manifest}:${d.name}`, `Possibly unnecessary dependency: ${d.name}`, `Declared in ${d.manifest}.`)}
               </li>
             ))}
+          </BloatSection>
+          <BloatSection
+            title="Folder notes and large files"
+            count={report.folderNotes.length}
+            empty="Every folder note matches its folder, big folders have one, and no text file is huge."
+          >
+            {report.folderNotes.map((f) => {
+              const id = `notes:${f.kind}:${f.path}`;
+              const folder = f.kind === 'stale-note' ? f.path.slice(0, Math.max(0, f.path.lastIndexOf('/'))) : f.path;
+              const what =
+                f.kind === 'stale-note' ? 'Out-of-date folder note' : f.kind === 'missing-note' ? 'Folder with no note' : 'Very large text file';
+              return (
+                <li key={id}>
+                  <span className="small">{what}: </span>
+                  <code className="small">{f.kind === 'missing-note' ? folderLabel(f.path) : f.path}</code>
+                  <span className="muted small"> · {f.detail} </span>
+                  {f.kind === 'large-file' ? (
+                    noteButton(id, `${what}: ${f.path}`, `${f.path}: ${f.detail}. Agents should search it rather than read it whole.`)
+                  ) : (
+                    <button className="link small" disabled={!state.canEditTasks || noted.has(id)} onClick={() => void noteTask(id, folder)}>
+                      {noted.has(id) ? 'Task made' : 'Make a task'}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </BloatSection>
           <p className="muted small">
             Assets are matched by file name in code, scenes and configs; Unreal’s binary assets are not checked yet. A dependency counts as

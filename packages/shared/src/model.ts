@@ -54,6 +54,8 @@ export type TaskOwner = z.infer<typeof TaskOwner>;
 
 export const TaskTitle = z.string().trim().min(1).max(200);
 export const TaskScope = z.array(z.string().trim().min(1).max(260)).max(100);
+/** Files (or folders) an agent should read before starting, so it does not have to explore. */
+export const ReadList = z.array(z.string().trim().min(1).max(260)).max(50);
 /** A git branch name, as GitHub shows it. */
 export const BranchName = z.string().trim().min(1).max(255);
 
@@ -89,6 +91,8 @@ export const Task = z.object({
   owner: TaskOwner.nullable(),
   /** Paths the task is allowed to change (glob patterns). */
   scope: TaskScope,
+  /** Files to read first, chosen when the task is planned. */
+  readFirst: ReadList.default([]),
   /** The git branch the work happens on; its pull request shows on the card. */
   branch: BranchName.nullable().default(null),
   /** The planning-space feature this task was created from. */
@@ -391,6 +395,7 @@ export const Handoff = z.object({
   decisions: z.array(z.string().trim().min(1).max(1000)).max(50),
   criteria: z.array(z.string().trim().min(1).max(1000)).max(50),
   scope: TaskScope,
+  readFirst: ReadList.default([]),
   notes: z.string().max(10000),
 });
 export type Handoff = z.infer<typeof Handoff>;
@@ -486,6 +491,7 @@ export function renderHandoff(handoff: Handoff, taskTitle: string | null): strin
   if (handoff.decisions.length) lines.push('', 'Decisions:', ...handoff.decisions.map((d) => `- ${d}`));
   if (handoff.criteria.length) lines.push('', 'Acceptance criteria:', ...handoff.criteria.map((c) => `- ${c}`));
   if (handoff.scope.length) lines.push('', 'Allowed paths:', ...handoff.scope.map((s) => `- ${s}`));
+  if (handoff.readFirst.length) lines.push('', 'Read first:', ...handoff.readFirst.map((s) => `- ${s}`));
   if (handoff.notes.trim()) lines.push('', 'Notes:', handoff.notes.trim());
   return lines.join('\n');
 }

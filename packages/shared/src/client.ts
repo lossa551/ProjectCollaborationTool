@@ -136,6 +136,7 @@ export interface TaskChanges {
   stage?: TaskStage;
   ownerId?: string | null;
   scope?: string[];
+  readFirst?: string[];
   branch?: string | null;
   /** Acceptance criteria as written; a criterion keeps its result while its id stays. */
   criteria?: { id: string; text: string }[];
@@ -256,7 +257,7 @@ export class SessionClient {
   /** Returns the new task's id. */
   createTask(
     title: string,
-    options: { stage?: TaskStage; scope?: string[]; featureId?: string | null; criteria?: { id: string; text: string }[] } = {},
+    options: { stage?: TaskStage; scope?: string[]; readFirst?: string[]; featureId?: string | null; criteria?: { id: string; text: string }[] } = {},
   ): string {
     const id = crypto.randomUUID();
     this.sendTask({ type: 'task.create', id, title, ...options });
@@ -271,6 +272,7 @@ export class SessionClient {
       if (changes.stage !== undefined) expected.stage = task.stage;
       if (changes.ownerId !== undefined) expected.ownerId = task.owner?.id ?? null;
       if (changes.scope !== undefined) expected.scope = task.scope;
+      if (changes.readFirst !== undefined) expected.readFirst = task.readFirst;
       if (changes.branch !== undefined) expected.branch = task.branch;
       if (changes.criteria !== undefined) expected.criteria = task.criteria.map(({ id, text }) => ({ id, text }));
     }
@@ -726,6 +728,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           stage: message.stage ?? 'planning',
           owner: null,
           scope: message.scope ?? [],
+          readFirst: message.readFirst ?? [],
           branch: null,
           featureId: message.featureId ?? null,
           criteria: (message.criteria ?? []).map(({ id, text }) => newCriterion(id, text)),
@@ -743,6 +746,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
               title: message.changes.title ?? t.title,
               stage: message.changes.stage ?? t.stage,
               scope: message.changes.scope ?? t.scope,
+              readFirst: message.changes.readFirst ?? t.readFirst,
               branch: message.changes.branch !== undefined ? message.changes.branch : t.branch,
               criteria: message.changes.criteria ? mergeCriteria(t.criteria, message.changes.criteria) : t.criteria,
             }

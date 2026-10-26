@@ -45,6 +45,7 @@ const api: PctApi = {
   runBloatCheck: () => ipcRenderer.invoke(Channel.runBloatCheck),
   scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
   folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
+  folderNotePaths: () => ipcRenderer.invoke(Channel.folderNotePaths),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);

@@ -23,6 +23,22 @@ export const UnusedDependency = z.object({
 });
 export type UnusedDependency = z.infer<typeof UnusedDependency>;
 
+/** What the folder notes scan adds to the report (see the desktop app's folder-notes.ts). */
+export const FolderNoteFinding = z.object({
+  /**
+   * stale-note: a folder's AGENTS.md no longer matches it; missing-note: a big
+   * folder agents read through without one; large-file: a text file that
+   * costs an agent a lot of context to read whole.
+   */
+  kind: z.enum(['stale-note', 'missing-note', 'large-file']),
+  /** The note, folder or file. */
+  path: z.string().max(1024),
+  /** Estimated tokens of the folder or file. */
+  tokens: z.number().int(),
+  detail: z.string().max(300),
+});
+export type FolderNoteFinding = z.infer<typeof FolderNoteFinding>;
+
 export const BloatReport = z.object({
   ranBy: z.string().max(64),
   ranAt: z.number(),
@@ -35,6 +51,7 @@ export const BloatReport = z.object({
   duplicates: z.array(BloatDuplicate).max(BLOAT_LIST_LIMIT),
   unusedAssets: z.array(z.string().max(1024)).max(BLOAT_LIST_LIMIT),
   unusedDependencies: z.array(UnusedDependency).max(BLOAT_LIST_LIMIT),
+  folderNotes: z.array(FolderNoteFinding).max(BLOAT_LIST_LIMIT).default([]),
 });
 export type BloatReport = z.infer<typeof BloatReport>;
 
@@ -217,6 +234,7 @@ export function analyzeBloat(
   files: ScannedFile[],
   info: { ranBy: string; branch: string | null; truncated: boolean },
   now = Date.now(),
+  folderNotes: FolderNoteFinding[] = [],
 ): BloatReport {
   return {
     ranBy: info.ranBy.slice(0, 64),
@@ -227,5 +245,6 @@ export function analyzeBloat(
     duplicates: findDuplicates(files).slice(0, BLOAT_LIST_LIMIT),
     unusedAssets: findUnusedAssets(files).slice(0, BLOAT_LIST_LIMIT),
     unusedDependencies: findUnusedDependencies(files).slice(0, BLOAT_LIST_LIMIT),
+    folderNotes: folderNotes.slice(0, BLOAT_LIST_LIMIT),
   };
 }

@@ -4,7 +4,9 @@
 // folder, whether its note exists and still matches the folder. This file
 // holds the report's shape and the prompts, used by both sides.
 
-export const NOTE_FILE = 'AGENTS.md';
+import { NOTE_FILE, type FolderNoteFinding } from '@pct/shared';
+
+export { NOTE_FILE };
 
 /**
  * fresh: nothing in the folder changed since the note was last committed.
@@ -161,4 +163,30 @@ export function rootIndex(report: FolderNotesReport): string {
   }
   if (noted.length === 0) lines.push('No folder has a note yet.');
   return lines.join('\n');
+}
+
+/** A text file this big costs an agent a lot of context to read whole. */
+export const LARGE_FILE_TOKENS = 25_000;
+
+/** The scan's findings for the bloat report: stale and missing notes, and very large text files. */
+export function folderNoteFindings(report: FolderNotesReport): FolderNoteFinding[] {
+  const out: FolderNoteFinding[] = [];
+  for (const folder of report.folders) {
+    if (folder.state === 'stale') {
+      out.push({ kind: 'stale-note', path: folder.notePath!, tokens: folder.tokens, detail: folder.reasons.join('; ').slice(0, 300) });
+    } else if (folder.state === 'missing') {
+      out.push({
+        kind: 'missing-note',
+        path: folder.path,
+        tokens: folder.ownTokens,
+        detail: `${plural(folder.ownFiles, 'readable file')}, about ${formatTokens(folder.ownTokens)} tokens, with no ${NOTE_FILE}`,
+      });
+    }
+  }
+  const large = new Map<string, number>();
+  for (const folder of report.folders) for (const file of folder.largest) if (file.tokens >= LARGE_FILE_TOKENS) large.set(file.path, file.tokens);
+  for (const [path, tokens] of [...large].sort((a, b) => b[1] - a[1])) {
+    out.push({ kind: 'large-file', path, tokens, detail: `about ${formatTokens(tokens)} tokens if an agent reads it whole` });
+  }
+  return out;
 }

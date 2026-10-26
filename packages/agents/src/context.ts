@@ -3,7 +3,9 @@ import {
   STAGE_LABELS,
   estimateTokens,
   renderHandoff,
+  renderFolderNotes,
   renderMemory,
+  type FolderNote,
   type MemoryEntry,
   type AgentProfile,
   type ChatContext,
@@ -23,6 +25,8 @@ export interface ContextInput {
   startedBy: string;
   /** Project memory: decisions, conventions, known issues and plans. */
   memory: MemoryEntry[];
+  /** AGENTS.md notes for the folders the task touches, shallowest first (see notesForPaths). */
+  folderNotes: FolderNote[];
   /** The agent has the record_test_result tool (our own loop); CLI agents report results in the chat instead. */
   recordsResults: boolean;
 }
@@ -33,7 +37,7 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy, memory, recordsResults }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
@@ -57,6 +61,9 @@ function pieces({ agent, chat, task, startedBy, memory, recordsResults }: Contex
   if (task) {
     const lines = [`Task: "${task.title}"`, `Stage: ${STAGE_LABELS[task.stage]}`];
     if (task.scope.length) lines.push(`Allowed paths for this task:\n${task.scope.map((s) => `- ${s}`).join('\n')}`);
+    if (task.readFirst.length) {
+      lines.push(`Read these first; start from them instead of exploring the project:\n${task.readFirst.map((s) => `- ${s}`).join('\n')}`);
+    }
     if (task.branch) lines.push(`Branch: ${task.branch}`);
     if (task.criteria.length) {
       lines.push(
@@ -75,6 +82,16 @@ function pieces({ agent, chat, task, startedBy, memory, recordsResults }: Contex
       label: 'Project memory',
       detail: `${memory.length} ${memory.length === 1 ? 'entry' : 'entries'}`,
       text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered}`,
+    });
+  }
+  const notes = renderFolderNotes(folderNotes);
+  if (notes.text) {
+    out.push({
+      label: 'Folder notes',
+      detail:
+        notes.included.map((n) => n.path).join(', ') +
+        (notes.skipped.length ? `${notes.included.length ? '; ' : ''}${notes.skipped.length} more listed by path` : ''),
+      text: notes.text,
     });
   }
   if (chat.handoff) {

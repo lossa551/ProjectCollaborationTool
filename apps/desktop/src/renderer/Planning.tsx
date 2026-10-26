@@ -137,7 +137,7 @@ const FIELDS: { field: PlanTextField; label: string; hint: string; rows: number;
   {
     field: 'tasks',
     label: 'Implementation tasks',
-    hint: 'One per line. Add "|" and paths to set what a task may change, e.g. Movement script | scripts/player/**',
+    hint: 'One per line. Add "|" and paths to set what a task may change, e.g. Movement script | scripts/player/**. Add a second "|" for files the agent should read first.',
     rows: 4,
     featureOnly: true,
   },
@@ -349,7 +349,7 @@ function ApproveForm({ item, existing, onDone }: { item: PlanItem; existing: Tas
 
   const submit = async () => {
     const tasks = planned.flatMap((t, i) =>
-      chosen[i] ? [{ title: t.title, scope: t.scope, criteria: criteria.filter((_, c) => target[c] === i) }] : [],
+      chosen[i] ? [{ title: t.title, scope: t.scope, readFirst: t.readFirst, criteria: criteria.filter((_, c) => target[c] === i) }] : [],
     );
     const result = await window.pct.approvePlan({ featureId: item.id, tasks });
     if (result.ok) onDone();
@@ -367,6 +367,7 @@ function ApproveForm({ item, existing, onDone }: { item: PlanItem; existing: Tas
               {t.title}
             </label>
             {t.scope.length > 0 && <span className="muted small"> · {t.scope.join(', ')}</span>}
+            {t.readFirst.length > 0 && <span className="muted small"> · read {t.readFirst.join(', ')}</span>}
           </li>
         ))}
       </ul>
@@ -423,6 +424,7 @@ function DiscussWithAgent({ item, state, onOpenChat }: { item: PlanItem; state: 
         decisions: [],
         criteria: planLines(item.criteria).slice(0, 50).map((c) => c.slice(0, 1000)),
         scope: [],
+        readFirst: [],
         notes: 'This is a plan in the planning space. Help refine it: point out gaps, risks and missing acceptance criteria, and suggest how to split it into tasks.',
       },
     });

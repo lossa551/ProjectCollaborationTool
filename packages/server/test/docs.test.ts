@@ -131,6 +131,7 @@ describe('shared documents', () => {
       duplicates: [{ reason: 'identical', paths: ['a.png', 'b.png'] }],
       unusedAssets: [],
       unusedDependencies: [],
+      folderNotes: [],
     });
     await waitFor(friend, (s) => s.bloat?.scanned === 10);
     const late = await join('Late');

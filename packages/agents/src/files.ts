@@ -91,6 +91,16 @@ export class ProjectFiles {
     return shown.join('\n') + (files.length > shown.length ? `\n… ${files.length - shown.length} more files` : '') || '(no files)';
   }
 
+  /** Paths of the folder notes (AGENTS.md) in the project. */
+  async notePaths(): Promise<string[]> {
+    try {
+      const out = await git(this.root, ['-c', 'core.quotepath=off', 'ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', ':(glob,icase)**/AGENTS.md']);
+      return [...new Set(out.split('\0').filter(Boolean))];
+    } catch {
+      return [];
+    }
+  }
+
   private async walk(rel: string, depth = 0): Promise<string[]> {
     if (depth > 8) return [];
     const dir = rel ? join(this.root, ...rel.split('/')) : this.root;
