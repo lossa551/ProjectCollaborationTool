@@ -7,6 +7,7 @@ const task = (id: string, featureId: string | null, stage: Task['stage'], states
   stage,
   owner: null,
   scope: [],
+  readFirst: [],
   branch: null,
   featureId,
   criteria: states.map((state, i) => ({ id: `${id}-${i}`, text: `c${i}`, state, evidence: '', by: null, at: null })),
@@ -18,9 +19,9 @@ const task = (id: string, featureId: string | null, stage: Task['stage'], states
 describe('planning space', () => {
   it('reads plan lines and implementation tasks', () => {
     expect(planLines('- Jump\n\n* [ ] Land\n2. Fall  \n')).toEqual(['Jump', 'Land', 'Fall']);
-    expect(plannedTasks('Movement script | scripts/player/**, scenes/player.tscn\nAnimations\n | nothing')).toEqual([
-      { title: 'Movement script', scope: ['scripts/player/**', 'scenes/player.tscn'] },
-      { title: 'Animations', scope: [] },
+    expect(plannedTasks('Movement script | scripts/player/**, scenes/player.tscn | scripts/player/AGENTS.md\nAnimations\n | nothing')).toEqual([
+      { title: 'Movement script', scope: ['scripts/player/**', 'scenes/player.tscn'], readFirst: ['scripts/player/AGENTS.md'] },
+      { title: 'Animations', scope: [], readFirst: [] },
     ]);
   });
 

@@ -32,6 +32,7 @@ import {
   SessionInfo,
   Task,
   TaskScope,
+  ReadList,
   TaskStage,
   TaskTitle,
   Workspace,
@@ -88,6 +89,7 @@ export const TaskCreateMessage = z.object({
   title: TaskTitle,
   stage: TaskStage.optional(),
   scope: TaskScope.optional(),
+  readFirst: ReadList.optional(),
   /** The planning-space feature the task comes from. */
   featureId: z.string().max(64).nullable().optional(),
   criteria: CriteriaTexts.optional(),
@@ -99,6 +101,8 @@ const TaskFields = z.object({
   /** A connected participant's id, or null to unassign. */
   ownerId: z.string().nullable().optional(),
   scope: TaskScope.optional(),
+  /** Files to read first. */
+  readFirst: ReadList.optional(),
   /** A branch name, or null to unlink. */
   branch: BranchName.nullable().optional(),
   criteria: CriteriaTexts.optional(),

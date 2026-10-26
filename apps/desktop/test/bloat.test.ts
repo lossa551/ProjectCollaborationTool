@@ -27,12 +27,18 @@ describe('bloat check on a project folder', () => {
     write('.godot/imported/cache.png', png);
     write('scenes/main.tscn', '[ext_resource path="res://art/hero.png"]\n[ext_resource path="res://art/hero copy.png"]\n');
     write('package.json', JSON.stringify({ dependencies: { lodash: '1' } }));
+    write('data/levels.json', JSON.stringify({ levels: 'tile '.repeat(25_000) }));
 
     const report = await runBloatCheck(root, 'Martin', 'main');
-    expect(report.scanned).toBe(6);
+    expect(report.scanned).toBe(7);
     expect(report.duplicates).toEqual([{ reason: 'identical', paths: ['art/hero copy.png', 'art/hero.png'] }]);
     expect(report.unusedAssets).toEqual(['art/unused.png']);
     expect(report.unusedDependencies).toEqual([{ manifest: 'package.json', name: 'lodash', dev: false }]);
+    // Folder notes: the big data folder has no note, and its file is too large to read whole.
+    expect(report.folderNotes.map((f) => [f.kind, f.path])).toEqual([
+      ['missing-note', 'data'],
+      ['large-file', 'data/levels.json'],
+    ]);
     expect(report).toMatchObject({ ranBy: 'Martin', branch: 'main', truncated: false });
   });
 });

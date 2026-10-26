@@ -4,6 +4,7 @@ import {
   TaskStage,
   describeSource,
   filesOutsideScope,
+  notesToUpdate,
   overlapsForTask,
   pullForBranch,
   taskChangedFiles,
@@ -20,6 +21,20 @@ import {
 import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
 import { LockForm, LockList } from './Locks';
+
+/** The folder notes in your project folder, read again when a workspace changes. */
+function useNotePaths(workspaces: Record<string, Workspace>): string[] {
+  const [paths, setPaths] = useState<string[]>([]);
+  const key = JSON.stringify(Object.values(workspaces).map((w) => [w.branch, w.files.length]));
+  useEffect(() => {
+    let live = true;
+    void window.pct.folderNotePaths().then((p) => live && setPaths(p));
+    return () => {
+      live = false;
+    };
+  }, [key]);
+  return paths;
+}
 
 /** A branch name made from the task title, e.g. "task/player-movement-3f2a". */
 function suggestedBranch(task: Task): string {
@@ -64,24 +79,30 @@ export function TaskDetail({
 }) {
   const [title, setTitle] = useState(task.title);
   const [scope, setScope] = useState(task.scope.join('\n'));
+  const [readFirst, setReadFirst] = useState(task.readFirst.join('\n'));
   const [branch, setBranch] = useState(task.branch ?? '');
 
   // Pick up changes others make while the panel is open.
   useEffect(() => setTitle(task.title), [task.title]);
   useEffect(() => setScope(task.scope.join('\n')), [task.scope]);
+  useEffect(() => setReadFirst(task.readFirst.join('\n')), [task.readFirst]);
   useEffect(() => setBranch(task.branch ?? ''), [task.branch]);
 
   const update = (changes: TaskChanges) => window.pct.updateTask(task.id, changes);
 
   const saveText = (event?: FormEvent) => {
     event?.preventDefault();
-    const scopeList = scope
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const lines = (text: string) =>
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const scopeList = lines(scope);
+    const readList = lines(readFirst);
     const changes: TaskChanges = {};
     if (title.trim() && title.trim() !== task.title) changes.title = title.trim();
     if (scopeList.join('\n') !== task.scope.join('\n')) changes.scope = scopeList;
+    if (readList.join('\n') !== task.readFirst.join('\n')) changes.readFirst = readList;
     const branchName = branch.trim() || null;
     if (branchName !== task.branch) changes.branch = branchName;
     if (Object.keys(changes).length > 0) update(changes);
@@ -91,7 +112,15 @@ export function TaskDetail({
   const ownerOffline = task.owner && !participants.some((p) => p.id === task.owner!.id);
   const pull = pullForBranch(github, task.branch);
   const taskOverlaps = overlapsForTask(overlaps, task);
-  const outside = filesOutsideScope(taskChangedFiles(task, workspaces, github), task.scope);
+  const changedFiles = taskChangedFiles(task, workspaces, github);
+  const outside = filesOutsideScope(changedFiles, task.scope);
+  const notePaths = useNotePaths(workspaces);
+  const staleNotes = notesToUpdate(changedFiles, notePaths);
+  const [noteTaskError, setNoteTaskError] = useState<string | null>(null);
+  const noteTask = async (note: string) => {
+    const result = await window.pct.folderNoteTask(note.includes('/') ? note.slice(0, note.lastIndexOf('/')) : '');
+    setNoteTaskError(result.ok ? null : result.error);
+  };
   const feature = task.featureId ? planning.find((i) => i.id === task.featureId) : undefined;
 
   return (
@@ -143,6 +172,18 @@ export function TaskDetail({
             placeholder={'scripts/player/**\nscenes/player.tscn'}
             rows={4}
             disabled={!editable}
+          />
+        </label>
+        <label className="field">
+          <span>Files to read first, one per line</span>
+          <textarea
+            value={readFirst}
+            onChange={(e) => setReadFirst(e.target.value)}
+            onBlur={() => saveText()}
+            placeholder={'scripts/player/AGENTS.md\nscripts/player/movement.gd'}
+            rows={2}
+            disabled={!editable}
+            spellCheck={false}
           />
         </label>
         <label className="field">
@@ -208,6 +249,22 @@ export function TaskDetail({
               {outside.length} changed {outside.length === 1 ? 'file is' : 'files are'} outside the allowed paths: {outside.slice(0, 3).join(', ')}
               {outside.length > 3 ? '…' : ''}
             </p>
+          )}
+          {staleNotes.length > 0 && (
+            <ul className="overlap-list small">
+              {staleNotes.map(({ note, files }) => (
+                <li key={note} className="warning" title={files.join('\n')}>
+                  Folder note <code>{note}</code> may need updating: {files.length} {files.length === 1 ? 'file' : 'files'} it covers changed and
+                  the note did not.{' '}
+                  {online && (
+                    <button className="link" onClick={() => void noteTask(note)}>
+                      Make a task
+                    </button>
+                  )}
+                </li>
+              ))}
+              {noteTaskError && <li className="error">{noteTaskError}</li>}
+            </ul>
           )}
           {taskOverlaps.length > 0 && (
             <ul className="overlap-list small">

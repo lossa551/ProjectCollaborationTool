@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -113,6 +113,31 @@ describe('agent runner', () => {
     expect(model.requests[0]!.system).toContain('[c1] Not tested: Second jump works');
     const chat = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.context?.items.some((i) => i.label === 'Project memory') === true);
     expect(chat.chats[0]!.context!.items.map((i) => i.label)).toContain('Task');
+  });
+
+  it('gets the folder notes and files to read for its task', async () => {
+    const { martin, profile, model, root } = await setup([{ text: 'Read them.', toolCalls: [], stop: 'end' }]);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    const write = (path: string, text: string) => {
+      mkdirSync(joinPath(root, path, '..'), { recursive: true });
+      writeFileSync(joinPath(root, path), text);
+    };
+    write('AGENTS.md', 'Godot game. Scripts live in src/.\n');
+    write('src/player/AGENTS.md', 'Player movement. Start with `movement.gd`.\n');
+    write('src/ui/AGENTS.md', 'Menus and HUD.\n');
+    const taskId = martin.createTask('Double jump', { scope: ['src/player/**'], readFirst: ['src/player/movement.gd'] });
+    await waitFor(martin, (s) => s.tasks.length === 1);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump', taskId });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Add a double jump' });
+
+    const state = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.context?.items.some((i) => i.label === 'Folder notes') === true);
+    const system = model.requests[0]!.system;
+    expect(system).toContain('--- AGENTS.md ---\nGodot game.');
+    expect(system).toContain('--- src/player/AGENTS.md ---\nPlayer movement.');
+    expect(system).not.toContain('Menus and HUD');
+    expect(system).toContain('Read these first; start from them instead of exploring the project:\n- src/player/movement.gd');
+    expect(state.chats[0]!.context!.items.find((i) => i.label === 'Folder notes')!.detail).toBe('AGENTS.md, src/player/AGENTS.md');
   });
 
   it('answers in a shared chat, edits inside its scope and asks before editing outside it', async () => {
@@ -262,7 +287,7 @@ describe('agent runner', () => {
     const chatId = martin.createChat({
       agentId: profile.id,
       title: 'Review',
-      handoff: { fromChatId: null, fromName: 'Planner', stage: 'review', plan: 'Check the movement code', decisions: [], criteria: ['Jumps work'], scope: [], notes: '' },
+      handoff: { fromChatId: null, fromName: 'Planner', stage: 'review', plan: 'Check the movement code', decisions: [], criteria: ['Jumps work'], scope: [], readFirst: [], notes: '' },
     });
     await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
     martin.openChat(chatId);

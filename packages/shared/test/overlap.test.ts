@@ -64,6 +64,7 @@ const task = (id: string, branch: string | null, scope: string[] = []): Task => 
   stage: 'implementing',
   owner: null,
   scope,
+  readFirst: [],
   branch,
   featureId: null,
   criteria: [],

@@ -38,6 +38,7 @@ export class TaskBoard {
       title: string;
       stage?: TaskStage;
       scope?: string[];
+      readFirst?: string[];
       featureId?: string | null;
       criteria?: { id: string; text: string }[];
     },
@@ -52,6 +53,7 @@ export class TaskBoard {
       stage: input.stage ?? 'planning',
       owner: null,
       scope: input.scope ?? [],
+      readFirst: input.readFirst ?? [],
       branch: null,
       featureId: input.featureId ?? null,
       criteria: mergeCriteria([], uniqueIds(input.criteria ?? [])),
@@ -90,6 +92,11 @@ export class TaskBoard {
     clash('stage', expected.stage === current.stage, `"${current.title}" was moved to ${STAGE_LABELS[current.stage]} by someone else`);
     clash('ownerId', (expected.ownerId ?? null) === (current.owner?.id ?? null), `"${current.title}" was reassigned by someone else`);
     clash('scope', (expected.scope ?? []).join('\n') === current.scope.join('\n'), `the paths of "${current.title}" were changed by someone else`);
+    clash(
+      'readFirst',
+      (expected.readFirst ?? []).join('\n') === current.readFirst.join('\n'),
+      `the files to read for "${current.title}" were changed by someone else`,
+    );
     clash('branch', (expected.branch ?? null) === current.branch, `the branch of "${current.title}" was changed by someone else`);
     clash(
       'criteria',
@@ -122,6 +129,10 @@ export class TaskBoard {
     if (changes.scope !== undefined && changes.scope.join('\n') !== current.scope.join('\n')) {
       next.scope = changes.scope;
       descriptions.push(`changed the scope of "${next.title}"`);
+    }
+    if (changes.readFirst !== undefined && changes.readFirst.join('\n') !== current.readFirst.join('\n')) {
+      next.readFirst = changes.readFirst;
+      descriptions.push(`changed the files to read for "${next.title}"`);
     }
     if (changes.branch !== undefined && changes.branch !== current.branch) {
       next.branch = changes.branch;

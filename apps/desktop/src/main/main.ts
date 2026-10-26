@@ -12,6 +12,7 @@ import {
   PlanApproval,
   PlanOp,
   PresenceStatus,
+  NOTE_FILE,
   SOCKET_PATH,
   SessionClient,
   TaskStage,
@@ -19,6 +20,8 @@ import {
   TaskVerifyMessage,
   decodeInvite,
   encodeInvite,
+  isNotePath,
+  normalizePath,
   parseRepoRef,
   renderHandoff,
   type CliTool,
@@ -45,7 +48,7 @@ import { loadIdentity } from './identity';
 import { SessionHistory } from './sessions';
 import { loadGitHubToken, saveApiKey, saveGitHubToken, saveWorkspaceFolder, workspaceFolder } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, repositoryRoot, runGitAction, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, trustFolder } from './git';
 import { WorkspaceWatcher } from './workspace';
 import { scanFolderNotes } from './folder-notes';
 import type { FolderNotesReport } from '../common/folder-notes';
@@ -518,6 +521,7 @@ function handOff(request: HandoffRequest): ResultWith<string> {
     client.updateTask(task.id, {
       ...(handoff.stage && handoff.stage !== task.stage && { stage: handoff.stage }),
       ...(handoff.scope.join('\n') !== task.scope.join('\n') && handoff.scope.length > 0 && { scope: handoff.scope }),
+      ...(handoff.readFirst.join('\n') !== task.readFirst.join('\n') && handoff.readFirst.length > 0 && { readFirst: handoff.readFirst }),
       ...(running && { ownerId: running.id }),
     });
   }
@@ -537,6 +541,7 @@ function approvePlan(input: unknown): Result {
     client.createTask(task.title, {
       stage: 'planning',
       scope: task.scope,
+      readFirst: task.readFirst,
       featureId,
       criteria: task.criteria.map((text) => ({ id: randomUUID(), text })),
     });
@@ -594,9 +599,29 @@ async function scanNotes(fresh: unknown): Promise<ResultWith<FolderNotesReport>>
   }
 }
 
-function folderNoteTask(folder: unknown): ResultWith<string> {
-  const info = folderNotes?.report.folders.find((f) => f.path === folder);
-  if (!info) return { ok: false, error: 'Scan the folder notes again first.' };
+// Just the note paths, for the review flag on tasks: one git call, kept like the scan.
+let notePaths: { key: string; paths: Promise<string[]> } | null = null;
+
+function folderNotePaths(): Promise<string[]> {
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return Promise.resolve([]);
+  const key = JSON.stringify([folder, workspace?.workspace?.branch, workspace?.workspace?.files]);
+  if (notePaths?.key !== key) {
+    notePaths = { key, paths: listProjectFiles(folder).then((files) => files.filter(isNotePath), () => []) };
+  }
+  return notePaths.paths;
+}
+
+async function folderNoteTask(folder: unknown): Promise<ResultWith<string>> {
+  if (typeof folder !== 'string') return { ok: false, error: 'That is not a folder.' };
+  let info: { path: string; notePath: string | null } | undefined = folderNotes?.report.folders.find((f) => f.path === folder);
+  // From a task's review flag or the bloat report: the full scan may not have run here.
+  if (!info) {
+    const path = folder === '' ? '' : normalizePath(folder);
+    if (path === null) return { ok: false, error: 'That folder is outside the project.' };
+    const notePath = (await folderNotePaths()).find((p) => p.toLowerCase() === (path ? `${path}/${NOTE_FILE}` : NOTE_FILE).toLowerCase());
+    info = { path, notePath: notePath ?? null };
+  }
   const label = info.path === '' ? 'top folder' : `${info.path}/`;
   const notePath = info.notePath ?? (info.path ? `${info.path}/AGENTS.md` : 'AGENTS.md');
   const title = info.notePath ? `Update folder note for ${label}` : `Write folder note for ${label}`;
@@ -790,6 +815,7 @@ ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unkno
 ipcMain.handle(Channel.runBloatCheck, () => bloatCheck());
 ipcMain.handle(Channel.scanFolderNotes, (_event, fresh: unknown) => scanNotes(fresh));
 ipcMain.handle(Channel.folderNoteTask, (_event, folder: unknown) => folderNoteTask(folder));
+ipcMain.handle(Channel.folderNotePaths, () => folderNotePaths());
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });

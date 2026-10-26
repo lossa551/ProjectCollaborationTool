@@ -18,6 +18,7 @@ const task: Task = {
   stage: 'implementing',
   owner: null,
   scope: ['scripts/player/**'],
+  readFirst: [],
   branch: null,
   featureId: null,
   criteria: [],

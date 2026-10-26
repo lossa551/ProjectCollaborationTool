@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import {
   CLI_TOOLS,
+  notesForPaths,
   samePath,
   type AgentProfile,
   type ApprovalState,
@@ -8,6 +10,7 @@ import {
   type ChatInfo,
   type ChatMessage,
   type ChatTool,
+  type FolderNote,
   type Lock,
   type LockKind,
   type ServerMessage,
@@ -86,7 +89,12 @@ interface ChatRun {
   approvedPaths: Set<string>;
   /** Last state reported to the session. */
   state: ChatAgentState;
+  /** Folder notes for the task's paths, read at the start of each turn. */
+  folderNotes: FolderNote[];
 }
+
+/** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
+const NOTE_CHARS = 8000;
 
 const STREAM_INTERVAL_MS = 200;
 
@@ -175,6 +183,7 @@ export class AgentRunner {
         cliSession: null,
         approvedPaths: new Set(),
         state: 'idle',
+        folderNotes: [],
       };
       this.runs.set(chatId, run);
     }
@@ -263,6 +272,7 @@ export class AgentRunner {
         run.abort = new AbortController();
         run.stoppedBy = null;
         run.approvedPaths.clear();
+        run.folderNotes = await this.loadFolderNotes(chat);
         this.setState(chatId, 'working', 'Thinking');
         try {
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
@@ -337,6 +347,23 @@ export class AgentRunner {
     this.client.setChatAgentState(chatId, run.state, undefined, text.length > 300 ? `${text.slice(0, 299)}…` : text);
   }
 
+  /** The notes of the folders the chat's task and handoff point at, read from the project folder now. */
+  private async loadFolderNotes(chat: ChatInfo): Promise<FolderNote[]> {
+    const task = this.client.getState().tasks.find((t) => t.id === chat.taskId);
+    const paths = [...(task?.scope ?? []), ...(task?.readFirst ?? []), ...(chat.handoff?.scope ?? []), ...(chat.handoff?.readFirst ?? [])];
+    const notes: FolderNote[] = [];
+    for (const path of notesForPaths(await this.files.notePaths(), paths)) {
+      try {
+        const { abs } = await this.files.resolve(path);
+        const text = await readFile(abs, 'utf8');
+        notes.push({ path, text: text.length > NOTE_CHARS ? `${text.slice(0, NOTE_CHARS)}\n…` : text });
+      } catch {
+        // Deleted since git listed it: left out.
+      }
+    }
+    return notes;
+  }
+
   private contextInput(agent: AgentProfile, chat: ChatInfo, task: Task | null): ContextInput {
     return {
       agent,
@@ -344,6 +371,7 @@ export class AgentRunner {
       task,
       startedBy: this.options.startedBy,
       memory: this.client.getState().memory,
+      folderNotes: this.runs.get(chat.id)?.folderNotes ?? [],
       recordsResults: agent.connection.type === 'api',
     };
   }
