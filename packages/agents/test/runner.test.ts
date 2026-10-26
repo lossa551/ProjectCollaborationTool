@@ -17,7 +17,13 @@ afterEach(async () => {
   for (const client of clients.splice(0)) client.disconnect();
   await server?.close();
   server = null;
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+  for (const dir of dirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch {
+      // Windows can hold a temporary folder a little longer after git exits; the OS cleans it up.
+    }
+  }
 });
 
 function waitFor(client: SessionClient, check: (state: SessionState) => boolean, timeoutMs = 15_000) {
@@ -381,6 +387,8 @@ describe('agent copies (worktrees)', { timeout: 30_000 }, () => {
     git('init', '-q', '-b', 'main');
     git('config', 'user.email', 'test@example.com');
     git('config', 'user.name', 'Test');
+    // Files read back must match what was written, also on Windows.
+    git('config', 'core.autocrlf', 'false');
     mkdirSync(joinPath(root, 'src'), { recursive: true });
     writeFileSync(joinPath(root, 'src/player.gd'), 'extends Node\n');
     git('add', '.');
