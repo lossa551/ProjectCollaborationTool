@@ -14,6 +14,10 @@ const api: PctApi = {
   releaseLock: (lockId) => ipcRenderer.send(Channel.releaseLock, lockId),
   recoverLock: (lockId) => ipcRenderer.send(Channel.recoverLock, lockId),
   setLockRules: (rules) => ipcRenderer.send(Channel.setLockRules, rules),
+  chooseWorkspace: () => ipcRenderer.invoke(Channel.chooseWorkspace),
+  stopWorkspace: () => ipcRenderer.send(Channel.stopWorkspace),
+  linkRepo: (repo) => ipcRenderer.invoke(Channel.linkRepo, repo),
+  setGitHubToken: (token) => ipcRenderer.invoke(Channel.setGitHubToken, token),
   copyText: (text) => ipcRenderer.send(Channel.copyText, text),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);

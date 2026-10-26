@@ -9,13 +9,16 @@ import {
   SOCKET_PATH,
   parseClientMessage,
   type Activity,
+  type GitHubStatus,
   type Lock,
   type ErrorCode,
   type Participant,
   type ServerMessage,
   type SessionInfo,
+  type Workspace,
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
+import { GitHubWatcher, describeGitHubChanges, type GitHubOptions } from './github.js';
 import { LockTable } from './locks.js';
 import { MemoryStorage, type Storage } from './storage.js';
 
@@ -36,6 +39,8 @@ export interface ServerOptions {
   lockStaleMs?: number;
   /** How long a new connection may take to send its hello. */
   helloTimeoutMs?: number;
+  /** How the server reaches GitHub; the token can also be set later with setGitHubToken. */
+  github?: GitHubOptions;
   log?: (line: string) => void;
 }
 
@@ -46,6 +51,9 @@ export interface RunningServer {
   /** Local WebSocket URL, for a client on the same machine. */
   localUrl: string;
   participants(): Participant[];
+  github(): GitHubStatus;
+  /** Sets or clears the token used for GitHub; polling starts again with it. */
+  setGitHubToken(token: string | null): void;
   close(): Promise<void>;
 }
 
@@ -98,6 +106,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   );
   /** Activity sent to clients when they join; storage keeps the full log. */
   const recentActivity = await storage.listActivity(ACTIVITY_ON_JOIN);
+  /** Each participant's local checkout, while they are connected. */
+  const workspaces = new Map<string, Workspace>();
 
   const connections = new Set<Connection>();
   const joined = () =>
@@ -139,6 +149,19 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   };
 
   const findParticipant = (id: string) => joined().find((p) => p.id === id);
+
+  const github = new GitHubWatcher(
+    options.github ?? {},
+    (status, previous) => {
+      broadcast({ type: 'github.status', status });
+      for (const change of describeGitHubChanges(previous, status)) {
+        const task = board.list().find((t) => t.branch === change.branch);
+        record(null, change.text, task?.id ?? null);
+      }
+    },
+    () => board.list().flatMap((t) => (t.branch ? [t.branch] : [])),
+  );
+  github.setRepo(await storage.loadGitHubRepo());
 
   const lockChanged = (lock: Lock) => {
     void persist('lock', storage.saveLock(lock));
@@ -215,6 +238,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           locks: locks.list(),
           lockRules: locks.getRules(),
           activity: recentActivity,
+          github: github.getStatus(),
+          workspaces: [...workspaces].map(([participantId, workspace]) => ({ participantId, workspace })),
         });
         broadcast({ type: 'participant.joined', participant }, conn);
         record(participant, 'joined the session');
@@ -258,6 +283,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           void persist('task', storage.saveTask(result.task));
           broadcast({ type: 'task.changed', task: result.task });
           for (const text of result.descriptions) record(participant, text, result.task.id);
+          // A newly linked branch gets its ahead/behind and changed files.
+          if (message.changes.branch) void github.refresh();
           break;
         }
         case 'task.delete': {
@@ -298,6 +325,18 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           record(participant, 'changed which files need an exclusive lock');
           break;
         }
+        case 'github.link': {
+          const repo = message.repo;
+          void persist('GitHub repository', storage.saveGitHubRepo(repo));
+          github.setRepo(repo);
+          record(participant, repo ? `linked the session to ${repo.owner}/${repo.name} on GitHub` : 'unlinked the GitHub repository');
+          break;
+        }
+        case 'workspace.update':
+          if (message.workspace) workspaces.set(participant.id, message.workspace);
+          else workspaces.delete(participant.id);
+          broadcast({ type: 'workspace.changed', participantId: participant.id, workspace: message.workspace });
+          break;
       }
     };
 
@@ -314,6 +353,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       connections.delete(conn);
       const participant = conn.participant;
       if (participant && !joined().some((p) => p.id === participant.id)) {
+        workspaces.delete(participant.id);
         broadcast({ type: 'participant.left', participantId: participant.id });
         record(participant, 'left the session');
         log(`${participant.name} left`);
@@ -347,6 +387,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     });
   });
   const port = (http.address() as AddressInfo).port;
+  github.start();
   const scheme = options.tls ? 'wss' : 'ws';
 
   return {
@@ -355,8 +396,11 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     session: currentSession,
     localUrl: `${scheme}://127.0.0.1:${port}${SOCKET_PATH}`,
     participants: joined,
+    github: () => github.getStatus(),
+    setGitHubToken: (token) => github.setToken(token),
     async close() {
       clearInterval(heartbeat);
+      github.stop();
       for (const conn of connections) conn.socket.close(CloseCode.serverShutdown, 'Server shutting down');
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => http.close(() => resolve()));

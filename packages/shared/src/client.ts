@@ -1,5 +1,18 @@
-import type { Activity, Lock, LockRules, Participant, ParticipantKind, PresenceStatus, SessionInfo, Task, TaskStage } from './model.js';
-import { DEFAULT_LOCK_RULES } from './model.js';
+import type {
+  Activity,
+  GitHubStatus,
+  Lock,
+  LockRules,
+  Participant,
+  ParticipantKind,
+  PresenceStatus,
+  RepoRef,
+  SessionInfo,
+  Task,
+  TaskStage,
+  Workspace,
+} from './model.js';
+import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -27,6 +40,9 @@ export interface SessionState {
   lockRules: LockRules;
   /** Most recent activity, oldest first. */
   activity: Activity[];
+  github: GitHubStatus;
+  /** Local checkouts by participant id, as each one's app reports them. */
+  workspaces: Record<string, Workspace>;
   /** Task changes made while offline, waiting to be sent. */
   pending: number;
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
@@ -68,6 +84,8 @@ const INITIAL_STATE: SessionState = {
   locks: [],
   lockRules: DEFAULT_LOCK_RULES,
   activity: [],
+  github: EMPTY_GITHUB_STATUS,
+  workspaces: {},
   pending: 0,
   error: null,
 };
@@ -82,6 +100,7 @@ export interface TaskChanges {
   stage?: TaskStage;
   ownerId?: string | null;
   scope?: string[];
+  branch?: string | null;
 }
 
 // Closing with these codes means retrying will not help.
@@ -99,6 +118,8 @@ export class SessionClient {
   private readonly connectTimeoutMs: number;
   /** Offline task changes, in the order they were made. */
   private queue: TaskMessage[] = [];
+  /** Our own workspace, sent again after every reconnect. */
+  private workspace: Workspace | null = null;
 
   constructor(options: SessionClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
@@ -133,6 +154,7 @@ export class SessionClient {
         locks: snapshot.locks,
         lockRules: snapshot.lockRules,
         activity: snapshot.activity,
+        github: snapshot.github,
       }),
       pending: this.queue.length,
       status: 'connecting',
@@ -143,9 +165,9 @@ export class SessionClient {
 
   /** What to save so the next connect can start from here; null before the first join. */
   getSnapshot(): SessionSnapshot | null {
-    const { session, tasks, locks, lockRules, activity } = this.state;
+    const { session, tasks, locks, lockRules, activity, github } = this.state;
     if (!session) return null;
-    return { session, tasks, locks, lockRules, activity, queue: [...this.queue] };
+    return { session, tasks, locks, lockRules, activity, github, queue: [...this.queue] };
   }
 
   /** Task changes are allowed while connected, and offline once we know the session. */
@@ -155,6 +177,7 @@ export class SessionClient {
 
   disconnect(): void {
     this.join = null;
+    this.workspace = null;
     this.clearRetry();
     const socket = this.socket;
     this.socket = null;
@@ -178,6 +201,7 @@ export class SessionClient {
       if (changes.stage !== undefined) expected.stage = task.stage;
       if (changes.ownerId !== undefined) expected.ownerId = task.owner?.id ?? null;
       if (changes.scope !== undefined) expected.scope = task.scope;
+      if (changes.branch !== undefined) expected.branch = task.branch;
     }
     this.sendTask({ type: 'task.update', taskId, changes, expected });
   }
@@ -213,6 +237,16 @@ export class SessionClient {
 
   setLockRules(rules: LockRules): void {
     this.send({ type: 'lock.rules.update', rules });
+  }
+
+  linkRepo(repo: RepoRef | null): void {
+    this.send({ type: 'github.link', repo });
+  }
+
+  /** Shares your local checkout with the session; null stops sharing it. */
+  setWorkspace(workspace: Workspace | null): void {
+    this.workspace = workspace;
+    this.send({ type: 'workspace.update', workspace });
   }
 
   private open(): void {
@@ -290,9 +324,12 @@ export class SessionClient {
           locks: message.locks,
           lockRules: message.lockRules,
           activity: message.activity.slice(-ACTIVITY_LIMIT),
+          github: message.github,
+          workspaces: Object.fromEntries(message.workspaces.map((w) => [w.participantId, w.workspace])),
           pending: 0,
           error: null,
         });
+        if (this.workspace) this.send({ type: 'workspace.update', workspace: this.workspace });
         // Replay offline changes in order; the server checks each for conflicts.
         for (const queued of queue) this.send(queued);
         break;
@@ -306,12 +343,15 @@ export class SessionClient {
           ],
         });
         break;
-      case 'participant.left':
+      case 'participant.left': {
+        const { [message.participantId]: _gone, ...workspaces } = this.state.workspaces;
         this.setState({
           ...this.state,
           participants: this.state.participants.filter((p) => p.id !== message.participantId),
+          workspaces,
         });
         break;
+      }
       case 'presence':
         this.setState({
           ...this.state,
@@ -352,6 +392,17 @@ export class SessionClient {
       case 'activity':
         this.setState({ ...this.state, activity: [...this.state.activity, message.entry].slice(-ACTIVITY_LIMIT) });
         break;
+      case 'github.status':
+        this.setState({ ...this.state, github: message.status });
+        break;
+      case 'workspace.changed': {
+        const { [message.participantId]: _old, ...rest } = this.state.workspaces;
+        this.setState({
+          ...this.state,
+          workspaces: message.workspace ? { ...rest, [message.participantId]: message.workspace } : rest,
+        });
+        break;
+      }
       case 'error':
         this.setState({ ...this.state, error: { code: message.code, message: message.message } });
         break;
@@ -367,6 +418,7 @@ export class SessionClient {
       ...this.state,
       status: 'reconnecting',
       participants: [],
+      workspaces: {},
       error: { code: 'connection_lost', message: 'Lost connection to the session server' },
     });
     this.clearRetry();
@@ -404,6 +456,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           stage: message.stage ?? 'planning',
           owner: null,
           scope: message.scope ?? [],
+          branch: null,
           createdAt: now,
           updatedAt: now,
           version: 0,
@@ -418,6 +471,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
               title: message.changes.title ?? t.title,
               stage: message.changes.stage ?? t.stage,
               scope: message.changes.scope ?? t.scope,
+              branch: message.changes.branch !== undefined ? message.changes.branch : t.branch,
             }
           : t,
       );

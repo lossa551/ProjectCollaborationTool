@@ -1,4 +1,4 @@
-import type { Activity, Lock, LockRules, ParticipantKind, SessionInfo, Task } from '@pct/shared';
+import type { Activity, Lock, LockRules, ParticipantKind, RepoRef, SessionInfo, Task } from '@pct/shared';
 
 // Where the server keeps durable state. The in-memory store is the first
 // implementation; SqliteStorage keeps it on disk, and Postgres when the server
@@ -33,6 +33,9 @@ export interface Storage {
   /** Null until someone changes the rules; the server then uses the defaults. */
   loadLockRules(): Promise<LockRules | null>;
   saveLockRules(rules: LockRules): Promise<void>;
+  /** The GitHub repository the session is linked to. */
+  loadGitHubRepo(): Promise<RepoRef | null>;
+  saveGitHubRepo(repo: RepoRef | null): Promise<void>;
   /** Append-only log of what happened, for the activity feed and later undo. */
   appendActivity(entry: Activity): Promise<void>;
   /** The most recent entries, oldest first. */
@@ -47,6 +50,7 @@ export class MemoryStorage implements Storage {
   private readonly tasks = new Map<string, Task>();
   private readonly locks = new Map<string, Lock>();
   private lockRules: LockRules | null = null;
+  private githubRepo: RepoRef | null = null;
   private readonly activity: Activity[] = [];
 
   async loadSession() {
@@ -103,6 +107,14 @@ export class MemoryStorage implements Storage {
 
   async saveLockRules(rules: LockRules) {
     this.lockRules = rules;
+  }
+
+  async loadGitHubRepo() {
+    return this.githubRepo;
+  }
+
+  async saveGitHubRepo(repo: RepoRef | null) {
+    this.githubRepo = repo;
   }
 
   async appendActivity(entry: Activity) {

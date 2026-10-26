@@ -10,8 +10,12 @@ person or agent, allowed paths, activity feed), and file locks (exclusive for
 files matching the lock rules, soft for the rest, abandoned locks can be
 recovered). Sessions are saved, everyone keeps the same identity across
 reconnects, and tasks can be edited while the host is offline (changes sync
-when it is back). GitHub, agents and engine integrations come next; see the
-GitHub issues.
+when it is back). GitHub status: link the repository and see branches, pull
+requests, checks, reviews and merge conflicts on the task cards; each person
+picks their project folder so others see their branch and changed files,
+whether those stay inside the task's allowed paths, and where two people (or a
+pull request or a lock) touch the same file. Agents and engine integrations
+come next; see the GitHub issues.
 
 ## Layout
 
@@ -62,11 +66,16 @@ survive restarts. Settings are environment variables: `PCT_PORT` (7420),
 `PCT_HOST` (0.0.0.0), `PCT_DB` (path of the SQLite file, or `:memory:` to keep
 nothing), `PCT_SECRET` (generated once and saved if unset),
 `PCT_SESSION_NAME`, `PCT_PUBLIC_HOST` (address to put in the invite), and
-`PCT_TLS_KEY` / `PCT_TLS_CERT` to serve `wss://`.
+`PCT_TLS_KEY` / `PCT_TLS_CERT` to serve `wss://`. For GitHub status it uses
+`PCT_GITHUB_TOKEN` (or `GITHUB_TOKEN`, or the GitHub CLI's token if you are
+signed in to `gh`); without a token it still works for public repositories but
+only checks every 10 minutes.
 
 When you host from the app instead, the session is saved in the app's data
 folder (`%APPDATA%\Project Collaboration Tool\hosted-session.sqlite` on Windows), so hosting
-again brings back the same board and invite code.
+again brings back the same board and invite code. The host's GitHub token is
+set under **Locks and GitHub** and stored encrypted on that PC; the friend
+needs no token, since the server sends everyone the same GitHub status.
 
 ## Playing together over Tailscale
 

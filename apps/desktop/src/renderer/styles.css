@@ -611,3 +611,140 @@ button.link {
   flex-basis: 100%;
   min-width: 0;
 }
+
+/* GitHub */
+
+.good {
+  color: var(--good);
+}
+
+a {
+  color: var(--accent);
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.tabs .nav {
+  padding: 6px 12px;
+}
+
+.pull-badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pull-good {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.pull-bad {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.pull-pending {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.pull-merged {
+  color: #a97ff0;
+  border-color: #a97ff0;
+}
+
+.gh-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.gh-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+
+.gh-list code {
+  overflow-wrap: anywhere;
+}
+
+.gh-wide {
+  flex-basis: 100%;
+}
+
+.gh-subtitle {
+  margin-top: 12px;
+}
+
+.token-form {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.workspace-card {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 8px 4px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+
+.workspace-card code {
+  overflow-wrap: anywhere;
+}
+
+.gh-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.checks,
+.overlap-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.checks li::before {
+  content: '• ';
+}
+
+.check-success::before {
+  color: var(--good);
+}
+
+.check-failure::before {
+  color: var(--bad);
+}
+
+.check-pending::before {
+  color: var(--warn);
+}
+
+.overlap-list li {
+  margin-bottom: 2px;
+}

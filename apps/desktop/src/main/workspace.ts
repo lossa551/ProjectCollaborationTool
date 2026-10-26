@@ -1,0 +1,155 @@
+import { execFile } from 'node:child_process';
+import { WORKSPACE_FILE_LIMIT, parseRepoRef, type FileChange, type Workspace } from '@pct/shared';
+import type { LocalWorkspace } from '../common/api';
+
+// Watches your local checkout of the project with git: which branch is checked
+// out and which files changed since it left the default branch, committed or
+// not. The result is shared with the session so others see who is changing
+// what before anything is pushed.
+
+const POLL_MS = 4000;
+
+function git(cwd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, timeout: 15_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) {
+        const missing = (error as NodeJS.ErrnoException).code === 'ENOENT';
+        reject(new Error(missing ? 'Git is not installed or not on the PATH.' : String(stderr).trim() || error.message));
+      } else resolve(String(stdout));
+    });
+  });
+}
+
+const tryGit = (cwd: string, args: string[]) => git(cwd, args).then((out) => out.trim(), () => null);
+
+/** The top folder of the git repository that contains this folder. */
+export async function repositoryRoot(folder: string): Promise<string> {
+  try {
+    return (await git(folder, ['rev-parse', '--show-toplevel'])).trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(message.includes('Git is not installed') ? message : 'That folder is not inside a git repository.');
+  }
+}
+
+const CHANGE: Record<string, FileChange> = { A: 'added', C: 'added', M: 'modified', T: 'modified', D: 'deleted', R: 'renamed' };
+
+/** Parses `git diff --name-status -z`: a status, then one path (two for renames and copies). */
+export function parseNameStatus(output: string): { path: string; change: FileChange }[] {
+  const parts = output.split('\0');
+  const files: { path: string; change: FileChange }[] = [];
+  for (let i = 0; i < parts.length; ) {
+    const status = parts[i++];
+    if (!status) continue;
+    const letter = status[0]!;
+    if (letter === 'R' || letter === 'C') {
+      i++; // the old path
+      const path = parts[i++];
+      if (path) files.push({ path, change: CHANGE[letter]! });
+    } else {
+      const path = parts[i++];
+      if (path) files.push({ path, change: CHANGE[letter] ?? 'modified' });
+    }
+  }
+  return files;
+}
+
+export class WorkspaceWatcher {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private busy = false;
+  private last = '';
+  private state: LocalWorkspace;
+
+  constructor(
+    readonly folder: string,
+    /** The default branch on GitHub, when known; otherwise taken from origin/HEAD. */
+    private readonly defaultBranch: () => string | null,
+    private readonly onChange: (state: LocalWorkspace) => void,
+  ) {
+    this.state = { folder, remote: null, workspace: null, error: null };
+  }
+
+  getState(): LocalWorkspace {
+    return this.state;
+  }
+
+  start(): void {
+    void this.poll();
+    this.timer = setInterval(() => void this.poll(), POLL_MS);
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  /** Looks again now, e.g. after the default branch became known. */
+  poll = async (): Promise<void> => {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      this.publish(await this.read());
+    } catch (error) {
+      this.publish({ ...this.state, workspace: null, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      this.busy = false;
+    }
+  };
+
+  private async read(): Promise<LocalWorkspace> {
+    const cwd = this.folder;
+    const remoteUrl = await tryGit(cwd, ['remote', 'get-url', 'origin']);
+    const remote = remoteUrl && /github\.com[/:]/i.test(remoteUrl) ? parseRepoRef(remoteUrl) : null;
+    const head = await tryGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    if (head === null) throw new Error('Could not read the repository. Has it got at least one commit?');
+    const branch = head === 'HEAD' ? null : head;
+
+    const base = await this.baseRef();
+    const mergeBase = base ? await tryGit(cwd, ['merge-base', 'HEAD', base]) : null;
+    // Against the merge base: everything this branch changed, committed or not.
+    // Without one, just what is not committed yet.
+    const diff = await git(cwd, ['diff', '--name-status', '-z', mergeBase ?? 'HEAD']);
+    const untracked = await git(cwd, ['ls-files', '--others', '--exclude-standard', '--full-name', '-z', '--', ':/']);
+    const all = [
+      ...parseNameStatus(diff),
+      ...untracked
+        .split('\0')
+        .filter(Boolean)
+        .map((path) => ({ path, change: 'untracked' as const })),
+    ];
+    const workspace: Workspace = {
+      branch,
+      base: mergeBase ? base : null,
+      files: all.slice(0, WORKSPACE_FILE_LIMIT),
+      truncated: all.length > WORKSPACE_FILE_LIMIT,
+      updatedAt: Date.now(),
+    };
+    return { folder: cwd, remote, workspace, error: null };
+  }
+
+  private async baseRef(): Promise<string | null> {
+    const cwd = this.folder;
+    const known = this.defaultBranch();
+    const candidates = [
+      known && `origin/${known}`,
+      (await tryGit(cwd, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])) ?? null,
+      'origin/main',
+      'origin/master',
+      known,
+      'main',
+      'master',
+    ];
+    for (const ref of candidates) {
+      if (ref && (await tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]))) return ref;
+    }
+    return null;
+  }
+
+  private publish(next: LocalWorkspace) {
+    this.state = next;
+    const key = JSON.stringify({ ...next, workspace: next.workspace && { ...next.workspace, updatedAt: 0 } });
+    if (key === this.last) return;
+    this.last = key;
+    this.onChange(next);
+  }
+}

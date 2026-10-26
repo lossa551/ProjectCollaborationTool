@@ -1,20 +1,25 @@
 import { z } from 'zod';
 import {
   Activity,
+  BranchName,
+  EMPTY_GITHUB_STATUS,
+  GitHubStatus,
   Lock,
   LockRules,
   Participant,
   ParticipantKind,
   PresenceStatus,
+  RepoRef,
   SessionInfo,
   Task,
   TaskScope,
   TaskStage,
   TaskTitle,
+  Workspace,
 } from './model.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -65,6 +70,8 @@ const TaskFields = z.object({
   /** A connected participant's id, or null to unassign. */
   ownerId: z.string().nullable().optional(),
   scope: TaskScope.optional(),
+  /** A branch name, or null to unlink. */
+  branch: BranchName.nullable().optional(),
 });
 
 export const TaskUpdateMessage = z.object({
@@ -108,6 +115,18 @@ export const LockRulesUpdateMessage = z.object({
   rules: LockRules,
 });
 
+/** Links the session to a GitHub repository, or unlinks it with null. */
+export const GitHubLinkMessage = z.object({
+  type: z.literal('github.link'),
+  repo: RepoRef.nullable(),
+});
+
+/** Your local checkout: branch and changed files. Null when you stop sharing it. */
+export const WorkspaceUpdateMessage = z.object({
+  type: z.literal('workspace.update'),
+  workspace: Workspace.nullable(),
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PresenceUpdateMessage,
@@ -119,6 +138,8 @@ export const ClientMessage = z.discriminatedUnion('type', [
   LockReleaseMessage,
   LockRecoverMessage,
   LockRulesUpdateMessage,
+  GitHubLinkMessage,
+  WorkspaceUpdateMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -135,6 +156,8 @@ export const WelcomeMessage = z.object({
   lockRules: LockRules,
   /** Most recent activity, oldest first. */
   activity: z.array(Activity),
+  github: GitHubStatus,
+  workspaces: z.array(z.object({ participantId: z.string(), workspace: Workspace })),
 });
 
 export const ParticipantJoinedMessage = z.object({
@@ -184,6 +207,17 @@ export const ActivityMessage = z.object({
   entry: Activity,
 });
 
+export const GitHubStatusMessage = z.object({
+  type: z.literal('github.status'),
+  status: GitHubStatus,
+});
+
+export const WorkspaceChangedMessage = z.object({
+  type: z.literal('workspace.changed'),
+  participantId: z.string(),
+  workspace: Workspace.nullable(),
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -220,6 +254,8 @@ export const ServerMessage = z.discriminatedUnion('type', [
   LockRemovedMessage,
   LockRulesChangedMessage,
   ActivityMessage,
+  GitHubStatusMessage,
+  WorkspaceChangedMessage,
   PongMessage,
   ErrorMessage,
 ]);
@@ -256,6 +292,7 @@ export const SessionSnapshot = z.object({
   locks: z.array(Lock),
   lockRules: LockRules,
   activity: z.array(Activity),
+  github: GitHubStatus.default(EMPTY_GITHUB_STATUS),
   queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage])),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshot>;

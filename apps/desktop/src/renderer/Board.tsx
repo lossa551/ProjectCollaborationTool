@@ -1,6 +1,18 @@
 import { useState, type DragEvent, type FormEvent } from 'react';
-import { STAGE_LABELS, TaskStage, type Lock, type Participant, type Task } from '@pct/shared';
+import {
+  STAGE_LABELS,
+  TaskStage,
+  overlapsForTask,
+  pullForBranch,
+  type GitHubStatus,
+  type Lock,
+  type Overlap,
+  type Participant,
+  type PullRequest,
+  type Task,
+} from '@pct/shared';
 import { Avatar } from './Avatar';
+import { PullBadge } from './GitHub';
 
 const STAGES = TaskStage.options;
 const DRAG_TYPE = 'application/x-pct-task';
@@ -9,6 +21,8 @@ export function Board({
   tasks,
   locks,
   participants,
+  github,
+  overlaps,
   editable,
   selectedId,
   onSelect,
@@ -16,6 +30,8 @@ export function Board({
   tasks: Task[];
   locks: Lock[];
   participants: Participant[];
+  github: GitHubStatus;
+  overlaps: Overlap[];
   editable: boolean;
   selectedId: string | null;
   onSelect: (taskId: string) => void;
@@ -57,6 +73,8 @@ export function Board({
                   task={task}
                   locks={locks.filter((l) => l.taskId === task.id)}
                   ownerOnline={!!task.owner && participants.some((p) => p.id === task.owner!.id)}
+                  pull={pullForBranch(github, task.branch)}
+                  overlaps={overlapsForTask(overlaps, task)}
                   draggable={editable}
                   selected={task.id === selectedId}
                   onSelect={() => onSelect(task.id)}
@@ -75,6 +93,8 @@ function TaskCard({
   task,
   locks,
   ownerOnline,
+  pull,
+  overlaps,
   draggable,
   selected,
   onSelect,
@@ -82,6 +102,8 @@ function TaskCard({
   task: Task;
   locks: Lock[];
   ownerOnline: boolean;
+  pull: PullRequest | null;
+  overlaps: Overlap[];
   draggable: boolean;
   selected: boolean;
   onSelect: () => void;
@@ -115,6 +137,12 @@ function TaskCard({
         {task.scope.length > 0 && (
           <span className="muted" title={task.scope.join('\n')}>
             {task.scope.length} {task.scope.length === 1 ? 'path' : 'paths'}
+          </span>
+        )}
+        {pull ? <PullBadge pull={pull} link={false} /> : task.branch && <code className="muted small">{task.branch}</code>}
+        {overlaps.length > 0 && (
+          <span className="warning" title={overlaps.map((o) => o.path).join('\n')}>
+            {overlaps.length} {overlaps.length === 1 ? 'overlap' : 'overlaps'}
           </span>
         )}
       </span>
