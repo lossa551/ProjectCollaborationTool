@@ -6,6 +6,8 @@ import {
   filesOutsideScope,
   overlapsForTask,
   pullForBranch,
+  taskChangedFiles,
+  type PlanItem,
   type GitHubStatus,
   type Lock,
   type LockRules,
@@ -15,6 +17,7 @@ import {
   type TaskChanges,
   type Workspace,
 } from '@pct/shared';
+import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
 import { LockForm, LockList } from './Locks';
 
@@ -38,12 +41,14 @@ export function TaskDetail({
   github,
   overlaps,
   workspaces,
+  planning,
   youId,
   editable,
   online,
   onClose,
 }: {
   task: Task;
+  planning: PlanItem[];
   tasks: Task[];
   participants: Participant[];
   locks: Lock[];
@@ -86,15 +91,8 @@ export function TaskDetail({
   const ownerOffline = task.owner && !participants.some((p) => p.id === task.owner!.id);
   const pull = pullForBranch(github, task.branch);
   const taskOverlaps = overlapsForTask(overlaps, task);
-  // Files changed for this task outside its paths: in anyone's workspace on its branch, or in its pull request.
-  const changedFiles = new Set<string>([
-    ...Object.values(workspaces)
-      .filter((w) => task.branch && w.branch === task.branch)
-      .flatMap((w) => w.files.map((f) => f.path)),
-    ...(pull?.state === 'open' ? pull.files : []),
-    ...(github.branches.find((b) => b.name === task.branch)?.files ?? []),
-  ]);
-  const outside = filesOutsideScope([...changedFiles], task.scope);
+  const outside = filesOutsideScope(taskChangedFiles(task, workspaces, github), task.scope);
+  const feature = task.featureId ? planning.find((i) => i.id === task.featureId) : undefined;
 
   return (
     <aside className="side-panel task-detail">
@@ -171,6 +169,8 @@ export function TaskDetail({
           </button>
         )}
       </form>
+      {feature && <p className="small">Part of the feature “{feature.title}” in the planning space.</p>}
+      <CriteriaSection task={task} editable={editable} />
       {task.branch && (
         <section>
           <h3 className="section-title">GitHub</h3>

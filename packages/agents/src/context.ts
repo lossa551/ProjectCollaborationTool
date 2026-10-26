@@ -1,7 +1,10 @@
 import {
+  CRITERION_STATE_LABELS,
   STAGE_LABELS,
   estimateTokens,
   renderHandoff,
+  renderMemory,
+  type MemoryEntry,
   type AgentProfile,
   type ChatContext,
   type ChatInfo,
@@ -18,6 +21,10 @@ export interface ContextInput {
   task: Task | null;
   /** Name of the person whose PC runs the agent. */
   startedBy: string;
+  /** Project memory: decisions, conventions, known issues and plans. */
+  memory: MemoryEntry[];
+  /** The agent has the record_test_result tool (our own loop); CLI agents report results in the chat instead. */
+  recordsResults: boolean;
 }
 
 interface Piece {
@@ -26,7 +33,7 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, recordsResults }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
@@ -49,7 +56,24 @@ function pieces({ agent, chat, task, startedBy }: ContextInput): Piece[] {
     const lines = [`Task: "${task.title}"`, `Stage: ${STAGE_LABELS[task.stage]}`];
     if (task.scope.length) lines.push(`Allowed paths for this task:\n${task.scope.map((s) => `- ${s}`).join('\n')}`);
     if (task.branch) lines.push(`Branch: ${task.branch}`);
+    if (task.criteria.length) {
+      lines.push(
+        `Acceptance criteria (id, state, text):\n${task.criteria.map((c) => `- [${c.id}] ${CRITERION_STATE_LABELS[c.state]}: ${c.text}`).join('\n')}`,
+        recordsResults
+          ? 'When you have checked a criterion (for example by running the tests), record the result with record_test_result, ' +
+              'saying what you checked. Only mark it verified when you saw it work.'
+          : 'When you have checked a criterion, say in the chat which one, whether it passed and how you checked it, so a person can record the result.',
+      );
+    }
     out.push({ label: 'Task', detail: `${task.title} · ${STAGE_LABELS[task.stage]}`, text: lines.join('\n') });
+  }
+  const remembered = renderMemory(memory);
+  if (remembered) {
+    out.push({
+      label: 'Project memory',
+      detail: `${memory.length} ${memory.length === 1 ? 'entry' : 'entries'}`,
+      text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered}`,
+    });
   }
   if (chat.handoff) {
     out.push({

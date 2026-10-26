@@ -19,6 +19,8 @@ const task: Task = {
   owner: null,
   scope: ['scripts/player/**'],
   branch: null,
+  featureId: null,
+  criteria: [],
   createdAt: 0,
   updatedAt: 0,
   version: 1,

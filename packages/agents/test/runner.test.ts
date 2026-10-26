@@ -89,6 +89,31 @@ async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS) {
 }
 
 describe('agent runner', () => {
+  it('knows project memory and the task’s criteria, and records test results', async () => {
+    const { martin, agentClient, profile, model } = await setup([
+      {
+        text: 'Checked it.',
+        toolCalls: [{ id: 't1', name: 'record_test_result', input: { criterion_id: 'c1', result: 'verified', evidence: 'npm test passed' } }],
+        stop: 'tool_use',
+      },
+      { text: 'Recorded.', toolCalls: [], stop: 'end' },
+    ]);
+    martin.editMemory({ op: 'create', id: 'memory-000001', kind: 'convention', title: 'Tabs in GDScript' });
+    await waitFor(agentClient, (s) => s.memory.length === 1);
+    const taskId = martin.createTask('Double jump', { criteria: [{ id: 'c1', text: 'Second jump works' }] });
+    await waitFor(martin, (s) => s.tasks.length === 1);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Test the jump', taskId });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Please verify the jump' });
+
+    const state = await waitFor(martin, (s) => s.tasks[0]?.criteria[0]?.state === 'verified');
+    expect(state.tasks[0]!.criteria[0]).toMatchObject({ evidence: 'npm test passed', by: 'Builder' });
+    expect(model.requests[0]!.system).toContain('Tabs in GDScript');
+    expect(model.requests[0]!.system).toContain('[c1] Not tested: Second jump works');
+    const chat = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.context?.items.some((i) => i.label === 'Project memory') === true);
+    expect(chat.chats[0]!.context!.items.map((i) => i.label)).toContain('Task');
+  });
+
   it('answers in a shared chat, edits inside its scope and asks before editing outside it', async () => {
     const { martin, agentClient, profile, model, root } = await setup([
       { text: 'Writing the player script.', toolCalls: [{ id: 't1', name: 'write_file', input: { path: 'src/player.gd', content: 'extends Node\n' } }], stop: 'tool_use' },

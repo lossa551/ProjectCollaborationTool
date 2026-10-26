@@ -5,6 +5,8 @@ import type {
   ChatContext,
   ChatInfo,
   ChatMessage,
+  Criterion,
+  CriterionState,
   Handoff,
   GitHubStatus,
   Lock,
@@ -19,6 +21,10 @@ import type {
   Workspace,
 } from './model.js';
 import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
+import type { BloatReport } from './bloat.js';
+import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
+import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
+import { applyPlanOp, readPlanning, type PlanItem, type PlanOp } from './planning.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -55,6 +61,12 @@ export interface SessionState {
   chats: ChatInfo[];
   /** Messages of the chats this client opened (or saw messages in), oldest first. */
   messages: Record<string, ChatMessage[]>;
+  /** The planning space: features, ideas and notes. */
+  planning: PlanItem[];
+  /** Project memory: decisions, conventions, known issues and plans. */
+  memory: MemoryEntry[];
+  /** The last bloat check anyone ran. */
+  bloat: BloatReport | null;
   /** Task changes made while offline, waiting to be sent. */
   pending: number;
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
@@ -104,6 +116,9 @@ const INITIAL_STATE: SessionState = {
   agents: [],
   chats: [],
   messages: {},
+  planning: [],
+  memory: [],
+  bloat: null,
   pending: 0,
   error: null,
 };
@@ -122,7 +137,12 @@ export interface TaskChanges {
   ownerId?: string | null;
   scope?: string[];
   branch?: string | null;
+  /** Acceptance criteria as written; a criterion keeps its result while its id stays. */
+  criteria?: { id: string; text: string }[];
 }
+
+/** Marks document changes that came from the server, so they are not sent back. */
+const REMOTE = Symbol('remote');
 
 // Closing with these codes means retrying will not help.
 const FATAL_CLOSE_CODES = new Set<number>([
@@ -147,6 +167,10 @@ export class SessionClient {
   private queue: TaskMessage[] = [];
   /** Our own workspace, sent again after every reconnect. */
   private workspace: Workspace | null = null;
+  /** The shared documents, edited locally and merged with the server's copy. */
+  private docs = {} as Record<DocId, Y.Doc>;
+  /** Documents the server has sent its state for since this connection opened; live edits go out only for these. */
+  private readonly synced = new Set<DocId>();
 
   constructor(options: SessionClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
@@ -179,6 +203,7 @@ export class SessionClient {
     this.join = options;
     this.attempt = 0;
     this.queue = snapshot ? [...snapshot.queue] : [];
+    this.resetDocs(snapshot?.docs);
     this.setState({
       ...INITIAL_STATE,
       ...(snapshot && {
@@ -190,7 +215,10 @@ export class SessionClient {
         github: snapshot.github,
         agents: snapshot.agents,
         chats: snapshot.chats,
+        bloat: snapshot.bloat,
       }),
+      planning: readPlanning(this.docs.planning),
+      memory: readMemory(this.docs.memory),
       pending: this.queue.length,
       status: 'connecting',
       url: options.url,
@@ -200,9 +228,10 @@ export class SessionClient {
 
   /** What to save so the next connect can start from here; null before the first join. */
   getSnapshot(): SessionSnapshot | null {
-    const { session, tasks, locks, lockRules, activity, github, agents, chats } = this.state;
+    const { session, tasks, locks, lockRules, activity, github, agents, chats, bloat } = this.state;
     if (!session) return null;
-    return { session, tasks, locks, lockRules, activity, github, agents, chats, queue: [...this.queue] };
+    const docs = Object.fromEntries(DOC_IDS.map((id) => [id, encodeBytes(Y.encodeStateAsUpdate(this.docs[id]))]));
+    return { session, tasks, locks, lockRules, activity, github, agents, chats, bloat, docs, queue: [...this.queue] };
   }
 
   /** Task changes are allowed while connected, and offline once we know the session. */
@@ -225,7 +254,10 @@ export class SessionClient {
   }
 
   /** Returns the new task's id. */
-  createTask(title: string, options: { stage?: TaskStage; scope?: string[] } = {}): string {
+  createTask(
+    title: string,
+    options: { stage?: TaskStage; scope?: string[]; featureId?: string | null; criteria?: { id: string; text: string }[] } = {},
+  ): string {
     const id = crypto.randomUUID();
     this.sendTask({ type: 'task.create', id, title, ...options });
     return id;
@@ -240,12 +272,71 @@ export class SessionClient {
       if (changes.ownerId !== undefined) expected.ownerId = task.owner?.id ?? null;
       if (changes.scope !== undefined) expected.scope = task.scope;
       if (changes.branch !== undefined) expected.branch = task.branch;
+      if (changes.criteria !== undefined) expected.criteria = task.criteria.map(({ id, text }) => ({ id, text }));
     }
     this.sendTask({ type: 'task.update', taskId, changes, expected });
   }
 
   deleteTask(taskId: string): void {
     this.sendTask({ type: 'task.delete', taskId });
+  }
+
+  /** Records a test result for an acceptance criterion. */
+  verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void {
+    this.sendTask({ type: 'task.verify', taskId, criterionId, state, evidence });
+  }
+
+  /**
+   * Changes the planning space. Works offline too: the change is kept in the
+   * local copy and merged when the server is back. Returns false when the
+   * item is gone or the session is not known yet.
+   */
+  editPlanning(op: PlanOp): boolean {
+    if (!this.canEditTasks()) return false;
+    return applyPlanOp(this.docs.planning, op, this.authorName());
+  }
+
+  /** Changes project memory; offline like the planning space. */
+  editMemory(op: MemoryOp): boolean {
+    if (!this.canEditTasks()) return false;
+    return applyMemoryOp(this.docs.memory, op, this.authorName());
+  }
+
+  /** Shares the result of a bloat check with the session. */
+  shareBloat(report: BloatReport): void {
+    this.send({ type: 'bloat.report', report });
+  }
+
+  private authorName(): string {
+    return this.state.you?.name ?? this.join?.name ?? 'Someone';
+  }
+
+  /** Starts over with fresh documents, or the ones saved in a snapshot. */
+  private resetDocs(saved: Partial<Record<DocId, string>> = {}): void {
+    for (const doc of Object.values(this.docs)) doc.destroy();
+    this.synced.clear();
+    this.docs = {} as Record<DocId, Y.Doc>;
+    for (const id of DOC_IDS) {
+      const doc = new Y.Doc();
+      const state = saved[id];
+      if (state) {
+        try {
+          Y.applyUpdate(doc, decodeBytes(state), REMOTE);
+        } catch {
+          // A damaged cache only loses the offline copy; the server has the rest.
+        }
+      }
+      doc.on('update', (update: Uint8Array, origin: unknown) => {
+        if (origin !== REMOTE && this.synced.has(id)) this.send({ type: 'doc.update', docId: id, update: encodeBytes(update) });
+        this.refreshDoc(id);
+      });
+      this.docs[id] = doc;
+    }
+  }
+
+  private refreshDoc(id: DocId): void {
+    if (id === 'planning') this.setState({ ...this.state, planning: readPlanning(this.docs.planning) });
+    else this.setState({ ...this.state, memory: readMemory(this.docs.memory) });
   }
 
   /** Sends now when connected; otherwise applies the change locally and queues it. */
@@ -403,7 +494,11 @@ export class SessionClient {
         this.attempt = 0;
         // Changes queued for a different session (the invite now points
         // somewhere else) must not be sent here.
-        if (this.state.session && this.state.session.id !== message.session.id) this.queue = [];
+        if (this.state.session && this.state.session.id !== message.session.id) {
+          this.queue = [];
+          this.resetDocs();
+        }
+        this.synced.clear();
         const queue = this.queue;
         this.queue = [];
         this.setState({
@@ -420,6 +515,9 @@ export class SessionClient {
           workspaces: Object.fromEntries(message.workspaces.map((w) => [w.participantId, w.workspace])),
           agents: message.agents,
           chats: message.chats,
+          bloat: message.bloat,
+          planning: readPlanning(this.docs.planning),
+          memory: readMemory(this.docs.memory),
           // Keep loaded messages of chats that still exist; chat.open fetches what was missed.
           messages: Object.fromEntries(
             Object.entries(this.state.messages).filter(([chatId]) => message.chats.some((c) => c.id === chatId)),
@@ -430,6 +528,10 @@ export class SessionClient {
         if (this.workspace) this.send({ type: 'workspace.update', workspace: this.workspace });
         // Replay offline changes in order; the server checks each for conflicts.
         for (const queued of queue) this.send(queued);
+        // Offline document edits go out once the server says what it has (doc.state).
+        for (const id of DOC_IDS) {
+          this.send({ type: 'doc.sync', docId: id, stateVector: encodeBytes(Y.encodeStateVector(this.docs[id])) });
+        }
         break;
       }
       case 'participant.joined':
@@ -534,6 +636,28 @@ export class SessionClient {
         break;
       case 'chat.stopped':
         break;
+      case 'doc.state': {
+        const doc = this.docs[message.docId];
+        try {
+          Y.applyUpdate(doc, decodeBytes(message.update), REMOTE);
+          const missing = Y.encodeStateAsUpdate(doc, decodeBytes(message.stateVector));
+          if (!isEmptyUpdate(missing)) this.send({ type: 'doc.update', docId: message.docId, update: encodeBytes(missing) });
+          this.synced.add(message.docId);
+        } catch {
+          this.setState({ ...this.state, error: { code: 'bad_message', message: 'Could not read a shared document from the server' } });
+        }
+        break;
+      }
+      case 'doc.changed':
+        try {
+          Y.applyUpdate(this.docs[message.docId], decodeBytes(message.update), REMOTE);
+        } catch {
+          // A broken update is skipped; the next sync fills the gap.
+        }
+        break;
+      case 'bloat.changed':
+        this.setState({ ...this.state, bloat: message.report });
+        break;
       case 'error':
         this.setState({ ...this.state, error: { code: message.code, message: message.message } });
         break;
@@ -545,6 +669,7 @@ export class SessionClient {
   private scheduleReconnect(): void {
     const delay = this.backoff[Math.min(this.attempt, this.backoff.length - 1)] ?? 1000;
     this.attempt += 1;
+    this.synced.clear();
     this.setState({
       ...this.state,
       status: 'reconnecting',
@@ -593,6 +718,8 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           owner: null,
           scope: message.scope ?? [],
           branch: null,
+          featureId: message.featureId ?? null,
+          criteria: (message.criteria ?? []).map(({ id, text }) => newCriterion(id, text)),
           createdAt: now,
           updatedAt: now,
           version: 0,
@@ -608,10 +735,38 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
               stage: message.changes.stage ?? t.stage,
               scope: message.changes.scope ?? t.scope,
               branch: message.changes.branch !== undefined ? message.changes.branch : t.branch,
+              criteria: message.changes.criteria ? mergeCriteria(t.criteria, message.changes.criteria) : t.criteria,
+            }
+          : t,
+      );
+    case 'task.verify':
+      return tasks.map((t) =>
+        t.id === message.taskId
+          ? {
+              ...t,
+              criteria: t.criteria.map((c) =>
+                c.id === message.criterionId ? { ...c, state: message.state, evidence: message.evidence, at: Date.now() } : c,
+              ),
             }
           : t,
       );
     case 'task.delete':
       return tasks.filter((t) => t.id !== message.taskId);
   }
+}
+
+function newCriterion(id: string, text: string): Criterion {
+  return { id, text, state: 'untested', evidence: '', by: null, at: null };
+}
+
+/**
+ * New acceptance criteria from their texts. A criterion whose id is kept keeps
+ * its result, unless its text changed: then it needs testing again.
+ */
+export function mergeCriteria(current: Criterion[], next: { id: string; text: string }[]): Criterion[] {
+  return next.map(({ id, text }) => {
+    const existing = current.find((c) => c.id === id);
+    if (!existing) return newCriterion(id, text);
+    return existing.text === text ? existing : newCriterion(id, text);
+  });
 }

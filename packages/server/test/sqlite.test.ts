@@ -22,6 +22,8 @@ const task: Task = {
   owner: { id: 'm', name: 'Martin', kind: 'human' },
   scope: ['scripts/player/**'],
   branch: null,
+  featureId: null,
+  criteria: [],
   createdAt: 1,
   updatedAt: 2,
   version: 3,
@@ -63,6 +65,29 @@ describe('SqliteStorage', () => {
     expect(await second.findIdentity('hash')).toMatchObject({ id: 'm', name: 'Martin' });
     expect(await second.findIdentity('other')).toBeNull();
     expect((await second.listActivity(3)).map((a) => a.text)).toEqual(['did 2', 'did 3', 'did 4']);
+    await second.close();
+  });
+
+  it('keeps shared documents and the bloat check', async () => {
+    const path = tempDb();
+    const first = new SqliteStorage(path);
+    await first.saveDoc('memory', new Uint8Array([1, 2, 3]));
+    await first.saveDoc('memory', new Uint8Array([4, 5]));
+    await first.saveBloat({
+      ranBy: 'Martin',
+      ranAt: 1,
+      branch: 'main',
+      scanned: 3,
+      truncated: false,
+      duplicates: [],
+      unusedAssets: ['art/old.png'],
+      unusedDependencies: [],
+    });
+    await first.close();
+
+    const second = new SqliteStorage(path);
+    expect(await second.loadDocs()).toEqual({ memory: new Uint8Array([4, 5]) });
+    expect((await second.loadBloat())?.unusedAssets).toEqual(['art/old.png']);
     await second.close();
   });
 

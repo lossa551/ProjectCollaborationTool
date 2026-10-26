@@ -17,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "yjs": "^13.6.33",
     "zod": "^4.1.12"
   }
 }

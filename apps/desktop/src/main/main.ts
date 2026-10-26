@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
+import { randomUUID } from 'node:crypto';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -7,11 +8,15 @@ import {
   Handoff,
   LockAcquireMessage,
   LockRules,
+  MemoryOp,
+  PlanApproval,
+  PlanOp,
   PresenceStatus,
   SOCKET_PATH,
   SessionClient,
   TaskStage,
   TaskUpdateMessage,
+  TaskVerifyMessage,
   decodeInvite,
   encodeInvite,
   parseRepoRef,
@@ -34,6 +39,7 @@ import {
   type SavedSessionInfo,
 } from '../common/api';
 import { LocalAgents, apiKeyStatus, createSocket, findCliTools } from './agents';
+import { runBloatCheck } from './bloat';
 import { loadSnapshot, saveSnapshot } from './cache';
 import { loadIdentity } from './identity';
 import { SessionHistory } from './sessions';
@@ -60,6 +66,8 @@ let workspace: LocalWorkspace | null = null;
 /** Where this app is connected, so agents started here can join the same session. */
 let joined: { url: string; secret: string } | null = null;
 let cliTools: Record<CliTool, boolean> = { 'claude-code': false, codex: false };
+/** Live text edits from the window applied so far; see AppState.textEdits. */
+let textEdits = 0;
 /** The sessions hosted or joined on this PC, and the one in use now. */
 let history: SessionHistory | null = null;
 const sessions = () => (history ??= new SessionHistory(app.getPath('userData')));
@@ -74,6 +82,7 @@ const appState = (): AppState => ({
   localAgents: localAgents.list(),
   apiKeys: apiKeyStatus(),
   cliTools,
+  textEdits,
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
@@ -472,7 +481,8 @@ function chatToTask(chatId: unknown): Result {
   if (chat.taskId && state.tasks.some((t) => t.id === chat.taskId)) return { ok: false, error: 'This chat already has a task.' };
   const agent = state.agents.find((a) => a.id === chat.agentId);
   const scope = chat.handoff?.scope.length ? chat.handoff.scope : (agent?.allowedPaths ?? []);
-  const taskId = client.createTask(chat.title, { stage: 'planning', scope });
+  const criteria = (chat.handoff?.criteria ?? []).map((text) => ({ id: randomUUID(), text }));
+  const taskId = client.createTask(chat.title, { stage: 'planning', scope, criteria });
   client.updateChat(chat.id, { taskId });
   return { ok: true };
 }
@@ -493,7 +503,9 @@ function handOff(request: HandoffRequest): ResultWith<string> {
   if (!parsed.success) return { ok: false, error: 'Some of the handoff is too long or empty.' };
   const handoff = parsed.data;
   const task = state.tasks.find((t) => t.id === request.taskId) ?? null;
-  const title = ChatTitle.safeParse(task ? `${task.title} · ${handoff.stage ?? 'handoff'}` : `Handoff from ${handoff.fromName ?? 'chat'}`);
+  const title = ChatTitle.safeParse(
+    request.title ?? (task ? `${task.title} · ${handoff.stage ?? 'handoff'}` : `Handoff from ${handoff.fromName ?? 'chat'}`),
+  );
   const chatId = client.createChat({
     agentId: target.id,
     title: title.success ? title.data : 'Handoff',
@@ -510,6 +522,47 @@ function handOff(request: HandoffRequest): ResultWith<string> {
     });
   }
   return { ok: true, value: chatId };
+}
+
+/** Creates the approved feature's tasks, each with its criteria, and marks the plan approved. */
+function approvePlan(input: unknown): Result {
+  const parsed = PlanApproval.safeParse(input);
+  if (!parsed.success) return { ok: false, error: `Check the tasks: ${parsed.error.issues[0]?.message ?? 'invalid'}` };
+  const { featureId, tasks } = parsed.data;
+  if (!client.canEditTasks()) return { ok: false, error: 'Join the session first.' };
+  const feature = client.getState().planning.find((i) => i.id === featureId);
+  if (!feature) return { ok: false, error: 'That feature no longer exists.' };
+  if (feature.kind !== 'feature') client.editPlanning({ op: 'set', id: featureId, kind: 'feature' });
+  for (const task of tasks) {
+    client.createTask(task.title, {
+      stage: 'planning',
+      scope: task.scope,
+      featureId,
+      criteria: task.criteria.map((text) => ({ id: randomUUID(), text })),
+    });
+  }
+  client.editPlanning({ op: 'approve', id: featureId });
+  return { ok: true };
+}
+
+let bloatRunning = false;
+
+async function bloatCheck(): Promise<Result> {
+  const state = client.getState();
+  if (state.status !== 'connected') return { ok: false, error: 'The result is shared with the session; it needs the session server.' };
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left): the check reads it.' };
+  if (bloatRunning) return { ok: false, error: 'A bloat check is already running.' };
+  bloatRunning = true;
+  try {
+    const report = await runBloatCheck(folder, state.you?.name ?? 'Someone', workspace?.workspace?.branch ?? null);
+    client.shareBloat(report);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    bloatRunning = false;
+  }
 }
 
 // Folder notes: scanned on request, kept until your project folder changes
@@ -715,6 +768,26 @@ ipcMain.handle(Channel.handOff, (_event, request: HandoffRequest) => {
   if (!request || typeof request.agentId !== 'string') return { ok: false, error: 'Pick an agent to hand off to.' };
   return handOff(request);
 });
+// Every live text edit is counted, applied or not, and the window hears about it.
+const isTextEdit = (op: unknown) => (op as { op?: unknown } | null)?.op === 'text' && typeof (op as { base?: unknown }).base === 'string';
+ipcMain.on(Channel.editPlanning, (_event, op: unknown) => {
+  if (isTextEdit(op)) textEdits++;
+  const parsed = PlanOp.safeParse(op);
+  if (parsed.success) client.editPlanning(parsed.data);
+  pushState();
+});
+ipcMain.handle(Channel.approvePlan, (_event, approval: unknown) => approvePlan(approval));
+ipcMain.on(Channel.editMemory, (_event, op: unknown) => {
+  if (isTextEdit(op)) textEdits++;
+  const parsed = MemoryOp.safeParse(op);
+  if (parsed.success) client.editMemory(parsed.data);
+  pushState();
+});
+ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unknown, state: unknown, evidence: unknown) => {
+  const parsed = TaskVerifyMessage.safeParse({ type: 'task.verify', taskId, criterionId, state, evidence });
+  if (parsed.success) client.verifyCriterion(parsed.data.taskId, parsed.data.criterionId, parsed.data.state, parsed.data.evidence);
+});
+ipcMain.handle(Channel.runBloatCheck, () => bloatCheck());
 ipcMain.handle(Channel.scanFolderNotes, (_event, fresh: unknown) => scanNotes(fresh));
 ipcMain.handle(Channel.folderNoteTask, (_event, folder: unknown) => folderNoteTask(folder));
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {

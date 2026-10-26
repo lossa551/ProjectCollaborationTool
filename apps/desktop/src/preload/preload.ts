@@ -38,6 +38,11 @@ const api: PctApi = {
   stopChat: (chatId) => ipcRenderer.send(Channel.stopChat, chatId),
   chatToTask: (chatId) => ipcRenderer.invoke(Channel.chatToTask, chatId),
   handOff: (request) => ipcRenderer.invoke(Channel.handOff, request),
+  editPlanning: (op) => ipcRenderer.send(Channel.editPlanning, op),
+  approvePlan: (approval) => ipcRenderer.invoke(Channel.approvePlan, approval),
+  editMemory: (op) => ipcRenderer.send(Channel.editMemory, op),
+  verifyCriterion: (taskId, criterionId, state, evidence) => ipcRenderer.send(Channel.verifyCriterion, taskId, criterionId, state, evidence),
+  runBloatCheck: () => ipcRenderer.invoke(Channel.runBloatCheck),
   scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
   folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
   onState(listener) {

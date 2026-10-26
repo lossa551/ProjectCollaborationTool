@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   Activity,
   AgentProfile,
+  BloatReport,
   ChatInfo,
   ChatMessage,
   Lock,
@@ -13,6 +14,7 @@ import {
   RepoRef,
   SessionInfo,
   Task,
+  DocId,
 } from '@pct/shared';
 import type { Identity, Storage } from './storage.js';
 
@@ -21,7 +23,7 @@ import type { Identity, Storage } from './storage.js';
 // checked against the shared schemas when read back; a row that no longer
 // fits (say, from a newer version) is skipped rather than crashing the server.
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const IdentityRecord = z.object({
   id: z.string(),
@@ -69,6 +71,12 @@ export class SqliteStorage implements Storage {
         );
         CREATE INDEX IF NOT EXISTS chat_messages_by_chat ON chat_messages (chat_id, seq);
         PRAGMA user_version = 2;
+      `);
+    }
+    if (version < 3) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, state BLOB NOT NULL);
+        PRAGMA user_version = 3;
       `);
     }
   }
@@ -212,6 +220,30 @@ export class SqliteStorage implements Storage {
          ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
       )
       .run(message.id, message.chatId, JSON.stringify(message));
+  }
+
+  async loadDocs() {
+    const rows = this.db.prepare('SELECT id, state FROM docs').all() as { id: string; state: Uint8Array }[];
+    const out: Partial<Record<DocId, Uint8Array>> = {};
+    for (const row of rows) {
+      const id = DocId.safeParse(row.id);
+      if (id.success) out[id.data] = new Uint8Array(row.state);
+    }
+    return out;
+  }
+
+  async saveDoc(docId: DocId, state: Uint8Array) {
+    this.db
+      .prepare('INSERT INTO docs (id, state) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET state = excluded.state')
+      .run(docId, state);
+  }
+
+  async loadBloat() {
+    return this.getMeta('bloat', BloatReport);
+  }
+
+  async saveBloat(report: BloatReport) {
+    this.setMeta('bloat', report);
   }
 
   async appendActivity(entry: Activity) {

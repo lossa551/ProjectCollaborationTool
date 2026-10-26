@@ -14,6 +14,11 @@ export const SearchInput = z.object({ pattern: z.string().min(1), path: z.string
 export const WriteFileInput = z.object({ path: z.string().min(1), content: z.string() });
 export const EditFileInput = z.object({ path: z.string().min(1), old_text: z.string().min(1), new_text: z.string() });
 export const RunCommandInput = z.object({ command: z.string().min(1).max(4000) });
+export const RecordTestResultInput = z.object({
+  criterion_id: z.string().min(1),
+  result: z.enum(['verified', 'failing']),
+  evidence: z.string().min(1).max(4000),
+});
 
 const object = (properties: Record<string, unknown>, required: string[]) => ({
   type: 'object',
@@ -65,5 +70,18 @@ export const AGENT_TOOLS: ToolSpec[] = [
     description:
       'Run a shell command in the project folder (for example the tests or a build) and get its output. May need a person’s approval. Times out after two minutes.',
     schema: object({ command: { type: 'string' } }, ['command']),
+  },
+  {
+    name: 'record_test_result',
+    description:
+      'Record whether one of the task’s acceptance criteria is met, after you checked it. Everyone in the session sees the result on the task.',
+    schema: object(
+      {
+        criterion_id: { type: 'string', description: 'The id in square brackets in the task’s acceptance criteria.' },
+        result: { type: 'string', enum: ['verified', 'failing'] },
+        evidence: { type: 'string', description: 'What you checked and what happened, e.g. the test command and its outcome.' },
+      },
+      ['criterion_id', 'result', 'evidence'],
+    ),
   },
 ];

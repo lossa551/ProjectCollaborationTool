@@ -3,7 +3,11 @@ import type {
   CliTool,
   FileChange,
   Handoff,
+  CriterionState,
   LockRules,
+  MemoryOp,
+  PlanApproval,
+  PlanOp,
   RepoRef,
   SessionState,
   TaskChanges,
@@ -85,6 +89,12 @@ export interface AppState {
   apiKeys: Record<string, 'saved' | 'env'>;
   /** Command-line agents installed on this PC. */
   cliTools: Record<CliTool, boolean>;
+  /**
+   * How many live text edits from the window have been applied to the shared
+   * documents. An editor whose own edits are still on the way waits for them
+   * before taking in the shared text (see LiveText).
+   */
+  textEdits: number;
 }
 
 export interface HandoffRequest {
@@ -93,6 +103,8 @@ export interface HandoffRequest {
   taskId: string | null;
   /** The agent profile that takes over. */
   agentId: string;
+  /** Title of the new chat; made from the task or the sender otherwise. */
+  title?: string;
   handoff: Omit<Handoff, 'fromChatId' | 'fromName'>;
 }
 
@@ -194,6 +206,16 @@ export interface PctApi {
   chatToTask(chatId: string): Promise<Result>;
   /** Starts a chat with another agent carrying the handoff package; returns the new chat's id. */
   handOff(request: HandoffRequest): Promise<ResultWith<string>>;
+  /** Changes the planning space; works offline and syncs later. */
+  editPlanning(op: PlanOp): void;
+  /** Creates the feature's tasks (with their acceptance criteria) and marks the plan approved. */
+  approvePlan(approval: PlanApproval): Promise<Result>;
+  /** Changes project memory; works offline and syncs later. */
+  editMemory(op: MemoryOp): void;
+  /** Records a test result for one of a task's acceptance criteria. */
+  verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
+  /** Scans your project folder for bloat and shares the result with the session. */
+  runBloatCheck(): Promise<Result>;
   /** Scans your project folder for the Folder notes tab (cached until something in it changes, unless fresh). */
   scanFolderNotes(fresh: boolean): Promise<ResultWith<FolderNotesReport>>;
   /** Makes a task scoped to one folder's AGENTS.md: update it, or write the first one. */
@@ -242,6 +264,11 @@ export const Channel = {
   stopChat: 'pct:stop-chat',
   chatToTask: 'pct:chat-to-task',
   handOff: 'pct:hand-off',
+  editPlanning: 'pct:edit-planning',
+  approvePlan: 'pct:approve-plan',
+  editMemory: 'pct:edit-memory',
+  verifyCriterion: 'pct:verify-criterion',
+  runBloatCheck: 'pct:run-bloat-check',
   scanFolderNotes: 'pct:scan-folder-notes',
   folderNoteTask: 'pct:folder-note-task',
   state: 'pct:state',

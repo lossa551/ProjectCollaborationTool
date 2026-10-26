@@ -5,17 +5,18 @@ import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
-import { FolderNotesScreen } from './FolderNotes';
 import { GitHubScreen, WorkspaceCard } from './GitHub';
 import { LocksScreen } from './Locks';
+import { MemoryScreen } from './Memory';
+import { PlanningScreen } from './Planning';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
-// Nav items from docs/design/interface.md; the ones without a view are still to come.
-type View = 'board' | 'locks' | 'agents' | 'chat' | 'memory';
-const NAV: { label: string; view?: View }[] = [
+// Nav items from docs/design/interface.md.
+type View = 'board' | 'planning' | 'locks' | 'agents' | 'chat' | 'memory';
+const NAV: { label: string; view: View }[] = [
   { label: 'Session board', view: 'board' },
-  { label: 'Planning space' },
+  { label: 'Planning space', view: 'planning' },
   { label: 'Locks and GitHub', view: 'locks' },
   { label: 'Agents', view: 'agents' },
   { label: 'Agent chat', view: 'chat' },
@@ -47,6 +48,12 @@ export function SessionScreen({ state }: { state: AppState }) {
   const [chatId, setChatId] = useState<string | null>(null);
   const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null);
   const openChat = chatId ? session.chats.find((c) => c.id === chatId) : undefined;
+  const showChat = (id: string) => {
+    setNewChatAgentId(null);
+    setChatId(id);
+    setSelectedId(null);
+    setView('chat');
+  };
   const pendingApprovals = Object.values(session.messages)
     .flat()
     .filter((m) => m.approval?.state === 'pending').length;
@@ -90,13 +97,7 @@ export function SessionScreen({ state }: { state: AppState }) {
 
       <nav className="sidebar">
         {NAV.map((item) => (
-          <button
-            key={item.label}
-            className={item.view === view ? 'nav active' : 'nav'}
-            disabled={!item.view}
-            title={item.view ? undefined : 'Coming soon'}
-            onClick={() => item.view && setView(item.view)}
-          >
+          <button key={item.label} className={item.view === view ? 'nav active' : 'nav'} onClick={() => setView(item.view)}>
             {item.label}
             {item.view === 'locks' && abandoned > 0 && <span className="nav-count">{abandoned}</span>}
             {item.view === 'chat' && pendingApprovals > 0 && <span className="nav-count">{pendingApprovals}</span>}
@@ -107,7 +108,11 @@ export function SessionScreen({ state }: { state: AppState }) {
 
       <main className="content">
         <Banner state={state} />
-        {view === 'agents' ? (
+        {view === 'planning' ? (
+          <PlanningScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
+        ) : view === 'memory' ? (
+          <MemoryScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
+        ) : view === 'agents' ? (
           <AgentsScreen
             state={state}
             onOpenChat={(agentId) => {
@@ -127,21 +132,6 @@ export function SessionScreen({ state }: { state: AppState }) {
               setChatId(id);
             }}
           />
-        ) : view === 'memory' ? (
-          <>
-            <div className="tabs">
-              <button className="nav active">Folder notes</button>
-            </div>
-            <FolderNotesScreen
-              state={state}
-              onOpenTask={setSelectedId}
-              onOpenChat={(id) => {
-                setNewChatAgentId(null);
-                setChatId(id);
-                setView('chat');
-              }}
-            />
-          </>
         ) : view === 'board' ? (
           <Board
             tasks={session.tasks}
@@ -192,6 +182,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           github={session.github}
           overlaps={overlaps}
           workspaces={session.workspaces}
+          planning={session.planning}
           youId={session.you?.id ?? null}
           editable={editable}
           online={online}

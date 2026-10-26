@@ -7,6 +7,8 @@ import {
   CloseCode,
   PROTOCOL_VERSION,
   SOCKET_PATH,
+  decodeBytes,
+  encodeBytes,
   parseClientMessage,
   type Activity,
   type ChatInfo,
@@ -20,6 +22,7 @@ import {
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
 import { AgentChats } from './chats.js';
+import { SharedDocs } from './docs.js';
 import { GitHubWatcher, describeGitHubChanges, type GitHubOptions } from './github.js';
 import { LockTable } from './locks.js';
 import { MemoryStorage, type Storage } from './storage.js';
@@ -109,6 +112,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   /** Activity sent to clients when they join; storage keeps the full log. */
   const recentActivity = await storage.listActivity(ACTIVITY_ON_JOIN);
   const chats = new AgentChats(await storage.listAgents(), await storage.listChats(), storage);
+  const docs = new SharedDocs(await storage.loadDocs(), (docId, state) => persist('shared document', storage.saveDoc(docId, state)));
+  let bloat = await storage.loadBloat();
   /** Each participant's local checkout, while they are connected. */
   const workspaces = new Map<string, Workspace>();
 
@@ -265,6 +270,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           workspaces: [...workspaces].map(([participantId, workspace]) => ({ participantId, workspace })),
           agents: chats.listAgents(),
           chats: chats.listChats(),
+          bloat,
         });
         broadcast({ type: 'participant.joined', participant }, conn);
         record(participant, 'joined the session');
@@ -321,6 +327,52 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           for (const text of result.descriptions) record(participant, text, null);
           for (const lock of locks.detachTask(result.task.id)) lockChanged(lock);
           for (const chat of chats.detachTask(result.task.id)) chatChanged(chat);
+          break;
+        }
+        case 'task.verify': {
+          const result = board.verify(message.taskId, message.criterionId, message, participant.name);
+          // A result for a task or criterion deleted in the meantime (often replayed after being offline) is dropped.
+          if (!result.ok) break;
+          if (result.descriptions.length === 0) break;
+          void persist('task', storage.saveTask(result.task));
+          broadcast({ type: 'task.changed', task: result.task });
+          for (const text of result.descriptions) record(participant, text, result.task.id);
+          break;
+        }
+        case 'doc.sync': {
+          let stateVector: Uint8Array;
+          try {
+            stateVector = decodeBytes(message.stateVector);
+          } catch {
+            return fail(conn, 'bad_message', 'Could not read that document state');
+          }
+          const state = docs.stateFor(message.docId, stateVector);
+          send(conn, {
+            type: 'doc.state',
+            docId: message.docId,
+            update: encodeBytes(state.update),
+            stateVector: encodeBytes(state.stateVector),
+          });
+          break;
+        }
+        case 'doc.update': {
+          let update: Uint8Array;
+          try {
+            update = decodeBytes(message.update);
+          } catch {
+            return fail(conn, 'bad_message', 'Could not read that document change');
+          }
+          const result = docs.apply(message.docId, update);
+          if (!result.ok) return fail(conn, 'bad_message', result.message);
+          broadcast({ type: 'doc.changed', docId: message.docId, update: message.update }, conn);
+          for (const text of result.descriptions) record(participant, text);
+          break;
+        }
+        case 'bloat.report': {
+          bloat = message.report;
+          void persist('bloat check', storage.saveBloat(bloat));
+          broadcast({ type: 'bloat.changed', report: bloat });
+          record(participant, 'ran a bloat check');
           break;
         }
         case 'lock.acquire': {
@@ -520,6 +572,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       for (const conn of connections) conn.socket.close(CloseCode.serverShutdown, 'Server shutting down');
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => http.close(() => resolve()));
+      await docs.flush();
       await storage.close();
     },
   };
