@@ -151,6 +151,11 @@ function SavedSessionRow({
     if (backups) return setBackups(null);
     void window.pct.listBackups(session.key).then(setBackups);
   };
+  const remove = async (path: string) => {
+    const result = await window.pct.deleteSnapshot(session.key, path);
+    if (result.ok) void window.pct.listBackups(session.key).then(setBackups);
+    else onRestored(result);
+  };
   const restore = async (path: string) => {
     setRestoring(true);
     const result = await window.pct.restoreBackup(session.key, path);
@@ -195,13 +200,22 @@ function SavedSessionRow({
               {backups.map((backup) => (
                 <li key={backup.path} className="backup-row">
                   <span>
+                    {backup.kind === 'snapshot' && <strong>{backup.label ?? 'Snapshot'} · </strong>}
                     {new Date(backup.madeAt).toLocaleString()}
                     {backup.kind === 'before-restore' && <span className="muted"> · saved before a restore</span>}
+                    {backup.tag && <span className="muted"> · git tag {backup.tag}</span>}
                     <span className="muted"> · {formatSize(backup.bytes)}</span>
                   </span>
-                  <button type="button" className="secondary" disabled={busy || restoring} onClick={() => void restore(backup.path)}>
-                    Restore
-                  </button>
+                  <span className="resume-actions">
+                    {backup.kind === 'snapshot' && (
+                      <button type="button" className="link" disabled={restoring} onClick={() => void remove(backup.path)}>
+                        Delete
+                      </button>
+                    )}
+                    <button type="button" className="secondary" disabled={busy || restoring} onClick={() => void restore(backup.path)}>
+                      Restore
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>

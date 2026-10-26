@@ -61,7 +61,11 @@ hosting; the last 7 daily backups are kept in the app's data folder (or a
 folder you pick under the Resume list, say in OneDrive or on another drive).
 **Restore…** on a hosted session lists its backups and puts the board,
 planning space, project memory, agents and chats back to how they were; what
-the session held before is saved as a backup first. On the Project memory
+the session held before is saved as a backup first. Before a big change, the
+host can click **Snapshot** at the top of the window: a named copy that is
+never deleted automatically and shows up in the same Restore list, optionally
+with a git tag on the commit checked out in your project folder (local; push
+tags to share it). On the Project memory
 page, **Write to docs/project-memory.md** puts every entry in your project
 folder as Markdown, and keeps it up to date as entries change, so it goes
 into git with the code and CLI agents that read repo files see it.

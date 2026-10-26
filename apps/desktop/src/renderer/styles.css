@@ -467,6 +467,17 @@ textarea:disabled {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
 }
 
+.snapshot-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.snapshot-popover p,
+.snapshot-popover h2 {
+  margin: 0;
+}
+
 /* People and presence. People are circles, agents dashed squares (as in the mockup). */
 
 .avatar {

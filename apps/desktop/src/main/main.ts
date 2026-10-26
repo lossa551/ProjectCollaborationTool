@@ -42,6 +42,7 @@ import {
   type MemoryExportState,
   type ResumeRequest,
   type Result,
+  type SnapshotRequest,
   type ResultWith,
   type SavedSessionInfo,
 } from '../common/api';
@@ -65,7 +66,7 @@ import {
   workspaceFolder,
 } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
 import { WorkspaceWatcher } from './workspace';
 import { scanFolderNotes } from './folder-notes';
 import type { FolderNotesReport } from '../common/folder-notes';
@@ -348,6 +349,8 @@ const backups = new SessionBackups(() => {
   return custom ? [custom, defaultBackupFolder()] : [defaultBackupFolder()];
 });
 let backupTimer: ReturnType<typeof setInterval> | null = null;
+/** The database of the session hosted now, for snapshots. */
+let hostedStorage: SqliteStorage | null = null;
 const BACKUP_CHECK_MS = 60 * 60 * 1000;
 
 function startBackups(key: string, storage: SqliteStorage) {
@@ -356,6 +359,7 @@ function startBackups(key: string, storage: SqliteStorage) {
       (file) => file && console.log(`Backed up the session to ${file}`),
       (error) => console.error('Could not back up the session', error),
     );
+  hostedStorage = storage;
   run();
   backupTimer = setInterval(run, BACKUP_CHECK_MS);
 }
@@ -363,6 +367,58 @@ function startBackups(key: string, storage: SqliteStorage) {
 function stopBackups() {
   if (backupTimer) clearInterval(backupTimer);
   backupTimer = null;
+  hostedStorage = null;
+}
+
+const SNAPSHOT_LABEL_LIMIT = 200;
+
+/**
+ * Saves the hosted session as it is now, say before a big change. With tag,
+ * the commit checked out in your project folder is tagged too, so the code
+ * can be found again with the board.
+ */
+async function createSnapshot(input: unknown): Promise<ResultWith<string>> {
+  const request = input as SnapshotRequest | null;
+  const label = typeof request?.label === 'string' ? request.label.trim().slice(0, SNAPSHOT_LABEL_LIMIT) : '';
+  if (!label) return { ok: false, error: 'Give the snapshot a name.' };
+  if (!hostedStorage || !currentKey) return { ok: false, error: 'Only the host can make a snapshot: the session is saved on their PC.' };
+  const now = new Date();
+  try {
+    let tag: string | null = null;
+    if (request?.tag === true) {
+      const folder = workspace?.folder;
+      if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left) to tag its commit.' };
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+      const stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      tag = await tagCommit(folder, `snapshot/${stamp}${slug ? `-${slug}` : ''}`, label);
+    }
+    await backups.snapshot(currentKey, hostedStorage, label, tag, now);
+    return { ok: true, value: tag ? `Snapshot saved, and the current commit tagged ${tag}.` : 'Snapshot saved.' };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+async function deleteSnapshot(key: unknown, path: unknown): Promise<Result> {
+  const entry = typeof key === 'string' ? sessions().get(key) : null;
+  const snapshot = entry ? backups.list(entry.key).find((b) => b.path === path && b.kind === 'snapshot') : null;
+  if (!entry || !snapshot) return { ok: false, error: 'That snapshot is no longer there.' };
+  const answer = await messageBox({
+    type: 'warning',
+    title: 'Delete snapshot',
+    message: `Delete the snapshot "${snapshot.label ?? snapshot.name}"?`,
+    detail: snapshot.tag ? `Its git tag ${snapshot.tag} stays in your project folder.` : undefined,
+    buttons: ['Delete', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  if (answer.response !== 0) return { ok: true };
+  try {
+    backups.deleteSnapshot(entry.key, snapshot.path);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
 }
 
 function listBackups(key: unknown): BackupInfo[] {
@@ -868,6 +924,8 @@ ipcMain.handle(Channel.forgetSession, (_event, key: unknown) => forgetSession(ke
 ipcMain.handle(Channel.listBackups, (_event, key: unknown) => listBackups(key));
 ipcMain.handle(Channel.restoreBackup, (_event, key: unknown, path: unknown) => restoreBackup(key, path));
 ipcMain.handle(Channel.getBackupFolder, () => backupFolder());
+ipcMain.handle(Channel.createSnapshot, (_event, request: unknown) => createSnapshot(request));
+ipcMain.handle(Channel.deleteSnapshot, (_event, key: unknown, path: unknown) => deleteSnapshot(key, path));
 ipcMain.handle(Channel.setBackupFolder, (_event, choose: unknown) => setBackupFolder(choose));
 ipcMain.on(Channel.setPresence, (_event, status: unknown, focus: unknown) => {
   const parsed = PresenceStatus.safeParse(status);

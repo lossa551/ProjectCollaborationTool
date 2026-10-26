@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BackupInfo } from '../common/api';
 
@@ -8,6 +8,8 @@ import type { BackupInfo } from '../common/api';
 // Each session has its own folder of backups, named by its key; a backup is
 // named by its day, so there is at most one a day. Restoring first saves the
 // current state as a backup too, so a restore can itself be undone.
+// Snapshots are made by hand (say, before a big change), carry a label and
+// are never deleted automatically.
 
 /** What a backup is written from: the open session database. */
 export interface BackupSource {
@@ -21,6 +23,26 @@ const KEEP_BEFORE_RESTORE = 3;
 
 const DAILY = /^(\d{4}-\d{2}-\d{2})\.sqlite$/;
 const BEFORE_RESTORE = /^(\d{4}-\d{2}-\d{2})-(\d{4})-before-restore\.sqlite$/;
+const SNAPSHOT = /^(\d{4}-\d{2}-\d{2})-(\d{6})-snapshot\.sqlite$/;
+
+/** What is kept next to a snapshot. */
+interface SnapshotNote {
+  label: string;
+  /** The git tag made on your project folder's commit at the same time. */
+  tag: string | null;
+}
+
+const kindOf = (name: string): BackupInfo['kind'] | null =>
+  DAILY.test(name) ? 'daily' : BEFORE_RESTORE.test(name) ? 'before-restore' : SNAPSHOT.test(name) ? 'snapshot' : null;
+
+function readNote(file: string): SnapshotNote | null {
+  try {
+    const data = JSON.parse(readFileSync(file.replace(/\.sqlite$/, '.json'), 'utf8')) as Partial<SnapshotNote>;
+    return { label: typeof data.label === 'string' ? data.label : '', tag: typeof data.tag === 'string' ? data.tag : null };
+  } catch {
+    return null;
+  }
+}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 /** The local day, as the backup's name. */
@@ -53,11 +75,13 @@ export class SessionBackups {
         continue;
       }
       for (const name of names) {
-        const kind = DAILY.test(name) ? 'daily' : BEFORE_RESTORE.test(name) ? 'before-restore' : null;
+        const kind = kindOf(name);
         if (!kind) continue;
         try {
-          const stat = statSync(join(dir, name));
-          out.push({ name, kind, path: join(dir, name), madeAt: stat.mtimeMs, bytes: stat.size });
+          const path = join(dir, name);
+          const stat = statSync(path);
+          const note = kind === 'snapshot' ? readNote(path) : null;
+          out.push({ name, kind, path, madeAt: stat.mtimeMs, bytes: stat.size, label: note?.label || null, tag: note?.tag ?? null });
         } catch {
           // Removed meanwhile.
         }
@@ -75,6 +99,26 @@ export class SessionBackups {
     await source.backup(file);
     this.prune(dir);
     return file;
+  }
+
+  /** Makes a snapshot with a label; it is kept until you delete it. Returns its path. */
+  async snapshot(key: string, source: BackupSource, label: string, tag: string | null, now = new Date()): Promise<string> {
+    const dir = this.dir(key);
+    const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const file = join(dir, `${dayName(now)}-${time}-snapshot.sqlite`);
+    if (existsSync(file)) throw new Error('A snapshot was just made. Wait a second and try again.');
+    mkdirSync(dir, { recursive: true });
+    await source.backup(file);
+    writeFileSync(file.replace(/\.sqlite$/, '.json'), JSON.stringify({ label, tag } satisfies SnapshotNote, null, 2));
+    return file;
+  }
+
+  /** Deletes a snapshot you made. */
+  deleteSnapshot(key: string, path: string) {
+    const snapshot = this.list(key).find((b) => b.path === path && b.kind === 'snapshot');
+    if (!snapshot) throw new Error('That snapshot is no longer there.');
+    rmSync(snapshot.path, { force: true });
+    rmSync(snapshot.path.replace(/\.sqlite$/, '.json'), { force: true });
   }
 
   /**
@@ -96,7 +140,7 @@ export class SessionBackups {
     });
   }
 
-  /** Keeps the newest daily backups and copies made before a restore; deletes the rest. */
+  /** Keeps the newest daily backups and copies made before a restore; deletes the rest. Snapshots stay. */
   private prune(dir: string) {
     mkdirSync(dir, { recursive: true });
     const names = readdirSync(dir).sort().reverse();

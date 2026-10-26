@@ -132,3 +132,30 @@ describe('writeMemoryFile', () => {
     expect(existsSync(`${file}.tmp`)).toBe(false);
   });
 });
+
+describe('snapshots', () => {
+  it('keeps a labelled snapshot through pruning, restores it and deletes it on request', async () => {
+    const root = folder();
+    const database = join(root, 'hosted', 'key.sqlite');
+    const backups = new SessionBackups(() => [root]);
+    const live = new SqliteStorage(database);
+    await live.saveSession({ id: 's1', name: 'Game', createdAt: 1 });
+    await live.saveTask(task('t1', 'Before the rewrite'));
+    const file = await backups.snapshot('key', live, 'Before the inventory rewrite', 'snapshot/20261026-1540-before', new Date(2026, 0, 1, 15, 40, 5));
+    await expect(backups.snapshot('key', live, 'Again', null, new Date(2026, 0, 1, 15, 40, 5))).rejects.toThrow(/just made/);
+    for (let day = 1; day <= KEEP_DAILY + 2; day++) await backups.daily('key', live, new Date(2026, 9, day));
+    await live.deleteTask('t1');
+    await live.close();
+
+    const snapshot = backups.list('key').find((b) => b.kind === 'snapshot');
+    expect(snapshot).toMatchObject({ path: file, label: 'Before the inventory rewrite', tag: 'snapshot/20261026-1540-before' });
+    expect(backups.list('key').filter((b) => b.kind === 'daily')).toHaveLength(KEEP_DAILY);
+
+    await backups.restore('key', file, database, async (to) => writeFileSync(to, 'x'));
+    expect((await readBack(database)).tasks).toEqual(['Before the rewrite']);
+
+    backups.deleteSnapshot('key', file);
+    expect(backups.list('key').some((b) => b.kind === 'snapshot')).toBe(false);
+    expect(existsSync(file.replace(/\.sqlite$/, '.json'))).toBe(false);
+  });
+});

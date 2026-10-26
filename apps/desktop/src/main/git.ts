@@ -61,6 +61,13 @@ async function remote(args: string[], options: RunOptions): Promise<string> {
 
 const tryRun = (args: string[], cwd: string) => run(args, { cwd }).then((out) => out.trim(), () => null);
 
+/** Tags the checked-out commit (locally; push tags to share it). Returns the tag name. */
+export async function tagCommit(cwd: string, name: string, message: string): Promise<string> {
+  if ((await tryRun(['check-ref-format', `refs/tags/${name}`], cwd)) === null) throw new GitError('That is not a valid tag name.', 'failed');
+  await run(['tag', '-a', name, '-m', message || name], { cwd });
+  return name;
+}
+
 /** The top folder of the git repository that contains this folder. */
 export async function repositoryRoot(folder: string): Promise<string> {
   try {

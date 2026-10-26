@@ -141,11 +141,24 @@ export interface SavedSessionInfo {
 export interface BackupInfo {
   /** File name: the day it was made, and whether it was saved before a restore. */
   name: string;
-  /** daily: made on host start or while hosting; before-restore: the state just before a restore. */
-  kind: 'daily' | 'before-restore';
+  /**
+   * daily: made on host start or while hosting; before-restore: the state
+   * just before a restore; snapshot: made by hand, kept until deleted.
+   */
+  kind: 'daily' | 'before-restore' | 'snapshot';
   path: string;
   madeAt: number;
   bytes: number;
+  /** A snapshot's label. */
+  label: string | null;
+  /** The git tag made with a snapshot. */
+  tag: string | null;
+}
+
+export interface SnapshotRequest {
+  label: string;
+  /** Also tag the current commit in your project folder. */
+  tag: boolean;
 }
 
 export interface BackupFolder {
@@ -200,6 +213,10 @@ export interface PctApi {
   /** Asks, then puts a hosted session back to how it was in the backup. */
   restoreBackup(key: string, path: string): Promise<Result>;
   getBackupFolder(): Promise<BackupFolder>;
+  /** Host only: saves the session as it is now, with a label; the value says what was made. */
+  createSnapshot(request: SnapshotRequest): Promise<ResultWith<string>>;
+  /** Asks, then deletes a snapshot. */
+  deleteSnapshot(key: string, path: string): Promise<Result>;
   /** choose: asks for a folder (say, in OneDrive or on a second drive); otherwise goes back to the default. */
   setBackupFolder(choose: boolean): Promise<Result>;
   leave(): Promise<void>;
@@ -278,6 +295,8 @@ export const Channel = {
   listBackups: 'pct:list-backups',
   restoreBackup: 'pct:restore-backup',
   getBackupFolder: 'pct:get-backup-folder',
+  createSnapshot: 'pct:create-snapshot',
+  deleteSnapshot: 'pct:delete-snapshot',
   setBackupFolder: 'pct:set-backup-folder',
   exportMemory: 'pct:export-memory',
   setMemoryAutoExport: 'pct:set-memory-auto-export',
