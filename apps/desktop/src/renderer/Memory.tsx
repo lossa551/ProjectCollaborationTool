@@ -10,6 +10,7 @@ import {
   type MemorySource,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
+import { FolderNotesScreen } from './FolderNotes';
 import { LiveText } from './LiveText';
 
 // Screen 6: project memory and the bloat check. Memory is what everyone,
@@ -17,7 +18,7 @@ import { LiveText } from './LiveText';
 // context. The bloat check points at things that make the project bigger
 // than it needs to be.
 
-type Tab = MemoryKind | 'bloat';
+type Tab = MemoryKind | 'bloat' | 'folder-notes';
 
 const HINTS: Record<MemoryKind, string> = {
   decision: 'How the project is built and why, so nobody (and no agent) undoes it by accident.',
@@ -51,8 +52,13 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
         <button className={tab === 'bloat' ? 'nav active' : 'nav'} onClick={() => setTab('bloat')}>
           Bloat check
         </button>
+        <button className={tab === 'folder-notes' ? 'nav active' : 'nav'} onClick={() => setTab('folder-notes')}>
+          Folder notes
+        </button>
       </div>
-      {tab === 'bloat' ? (
+      {tab === 'folder-notes' ? (
+        <FolderNotesScreen state={state} onOpenTask={onOpenTask} onOpenChat={onOpenChat} />
+      ) : tab === 'bloat' ? (
         <BloatCheck state={state} onOpenTask={onOpenTask} />
       ) : (
         <MemoryList key={tab} kind={tab} state={state} onOpenChat={onOpenChat} />

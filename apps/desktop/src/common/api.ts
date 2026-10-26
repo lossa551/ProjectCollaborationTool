@@ -14,6 +14,7 @@ import type {
   TaskStage,
   Workspace,
 } from '@pct/shared';
+import type { FolderNotesReport } from './folder-notes';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -215,6 +216,10 @@ export interface PctApi {
   verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
   /** Scans your project folder for bloat and shares the result with the session. */
   runBloatCheck(): Promise<Result>;
+  /** Scans your project folder for the Folder notes tab (cached until something in it changes, unless fresh). */
+  scanFolderNotes(fresh: boolean): Promise<ResultWith<FolderNotesReport>>;
+  /** Makes a task scoped to one folder's AGENTS.md: update it, or write the first one. */
+  folderNoteTask(folder: string): Promise<ResultWith<string>>;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -264,6 +269,8 @@ export const Channel = {
   editMemory: 'pct:edit-memory',
   verifyCriterion: 'pct:verify-criterion',
   runBloatCheck: 'pct:run-bloat-check',
+  scanFolderNotes: 'pct:scan-folder-notes',
+  folderNoteTask: 'pct:folder-note-task',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

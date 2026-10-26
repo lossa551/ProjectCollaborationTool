@@ -43,6 +43,8 @@ const api: PctApi = {
   editMemory: (op) => ipcRenderer.send(Channel.editMemory, op),
   verifyCriterion: (taskId, criterionId, state, evidence) => ipcRenderer.send(Channel.verifyCriterion, taskId, criterionId, state, evidence),
   runBloatCheck: () => ipcRenderer.invoke(Channel.runBloatCheck),
+  scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
+  folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);
