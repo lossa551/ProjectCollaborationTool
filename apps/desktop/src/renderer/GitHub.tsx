@@ -10,7 +10,7 @@ import {
   type Task,
   type Workspace,
 } from '@pct/shared';
-import type { AppState, LocalWorkspace } from '../common/api';
+import type { AppState, GitAction, LocalWorkspace } from '../common/api';
 
 export const taskForBranch = (tasks: Task[], branch: string | null) => (branch ? tasks.find((t) => t.branch === branch) : undefined);
 
@@ -73,6 +73,7 @@ export function GitHubScreen({
   return (
     <div className="locks-screen">
       <RepoCard state={state} />
+      <GitCard state={state} />
 
       {github.repo && (
         <section className="card">
@@ -212,6 +213,216 @@ function RepoCard({ state }: { state: AppState }) {
   );
 }
 
+/** Your own checkout: clone, pull, commit, push and branches, using the git on this PC. */
+function GitCard({ state }: { state: AppState }) {
+  const local = state.workspace;
+  const repo = state.session.github.repo;
+  const defaultBranch = state.session.github.defaultBranch ?? 'main';
+  const [busy, setBusy] = useState<string | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [message, setMessage] = useState('');
+  const [newBranch, setNewBranch] = useState('');
+  const [fromLatest, setFromLatest] = useState(true);
+
+  const act = async (label: string, run: () => Promise<{ ok: true; value?: string } | { ok: false; error: string }>) => {
+    setBusy(label);
+    setResult(null);
+    try {
+      const outcome = await run();
+      setResult(outcome.ok ? (outcome.value ? { ok: true, text: outcome.value } : null) : { ok: false, text: outcome.error });
+      return outcome.ok;
+    } finally {
+      setBusy(null);
+    }
+  };
+  const git = (label: string, action: GitAction) => act(label, () => window.pct.gitAction(action));
+  const cloneLabel = repo ? `Clone ${repo.owner}/${repo.name}` : null;
+  const folderButtons = (
+    <div className="lock-form">
+      {cloneLabel && (
+        <button disabled={busy !== null} onClick={() => void act('Cloning', () => window.pct.cloneRepo())}>
+          {cloneLabel}…
+        </button>
+      )}
+      <button className="secondary" disabled={busy !== null} onClick={() => void act('Opening', () => window.pct.chooseWorkspace())}>
+        {local ? 'Choose another folder' : 'Use a folder I already cloned'}
+      </button>
+    </div>
+  );
+  const footer = (
+    <>
+      {busy && <p className="muted small">{busy === 'Cloning' ? 'Cloning… big projects can take a while.' : `${busy}…`}</p>}
+      {result && <p className={result.ok ? 'good small' : 'error small'}>{result.text}</p>}
+    </>
+  );
+
+  if (!local || local.error || !local.git || !local.workspace) {
+    return (
+      <section className="card">
+        <h2>Your copy</h2>
+        {!local ? (
+          <p className="muted">
+            Pick the folder where your copy of the project lives
+            {repo ? `, or let the app clone ${repo.owner}/${repo.name} from GitHub for you` : '. Link the repository above and the app can clone it for you'}.
+          </p>
+        ) : local.error ? (
+          <p className="warning">
+            {local.error} <span className="muted small">({local.folder})</span>
+          </p>
+        ) : (
+          <p className="muted">Reading {local.folder}…</p>
+        )}
+        {folderButtons}
+        {footer}
+      </section>
+    );
+  }
+
+  const info = local.git;
+  const branch = local.workspace.branch;
+  const mismatch = repo && local.remote && (local.remote.owner !== repo.owner || local.remote.name !== repo.name);
+  const changed = info.uncommitted;
+  const disabled = busy !== null;
+
+  return (
+    <section className="card">
+      <h2>Your copy</h2>
+      <p className="small">
+        <code>{local.folder}</code>
+        {' · '}
+        {branch ? <code>{branch}</code> : <span className="warning">no branch checked out</span>}
+        {' · '}
+        <span className="muted">
+          {info.upstream
+            ? info.ahead === 0 && info.behind === 0
+              ? `up to date with ${info.upstream}`
+              : [info.ahead > 0 && `${info.ahead} to push`, info.behind > 0 && `${info.behind} to pull`].filter(Boolean).join(', ')
+            : 'not on GitHub yet'}
+        </span>
+      </p>
+      {mismatch && (
+        <p className="warning small">
+          This folder is a clone of {local.remote!.owner}/{local.remote!.name}, not the linked {repo.owner}/{repo.name}.
+        </p>
+      )}
+      {info.conflicted.length > 0 || info.merging ? (
+        <div className="git-merge">
+          <p className="warning small">
+            {info.conflicted.length > 0
+              ? `Merge in progress with conflicts in ${info.conflicted.length} ${info.conflicted.length === 1 ? 'file' : 'files'}. Fix them in your editor, then commit. Or abort to undo the pull.`
+              : 'Merge in progress: conflicts are fixed. Commit to finish it.'}
+          </p>
+          {info.conflicted.length > 0 && (
+            <ul className="git-files">
+              {info.conflicted.map((path) => (
+                <li key={path}>
+                  <code>{path}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          <button className="secondary" disabled={disabled} onClick={() => confirm('Abort the merge and undo the pull?') && void git('Aborting', { type: 'abort-merge' })}>
+            Abort merge
+          </button>
+        </div>
+      ) : null}
+
+      <div className="lock-form">
+        <button disabled={disabled || !branch} onClick={() => void git('Pulling', { type: 'pull' })}>
+          Pull{info.behind > 0 ? ` (${info.behind})` : ''}
+        </button>
+        <button disabled={disabled || !branch} onClick={() => void git('Pushing', { type: 'push' })}>
+          Push{info.ahead > 0 ? ` (${info.ahead})` : !info.upstream ? ' branch' : ''}
+        </button>
+        <button className="secondary" disabled={disabled} onClick={() => void git('Checking GitHub', { type: 'fetch' })}>
+          Check for changes
+        </button>
+      </div>
+
+      <h3 className="section-title gh-subtitle">Commit</h3>
+      {changed.length === 0 ? (
+        <p className="muted small">No uncommitted changes.</p>
+      ) : (
+        <details className="git-changes">
+          <summary className="small">
+            {changed.length} uncommitted {changed.length === 1 ? 'change' : 'changes'}
+          </summary>
+          <ul className="git-files">
+            {changed.slice(0, 200).map((file) => (
+              <li key={file.path}>
+                <span className="muted small">{file.change}</span> <code>{file.path}</code>
+              </li>
+            ))}
+            {changed.length > 200 && <li className="muted small">and {changed.length - 200} more</li>}
+          </ul>
+        </details>
+      )}
+      <form
+        className="lock-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void git('Committing', { type: 'commit', message }).then((ok) => ok && setMessage(''));
+        }}
+      >
+        <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What did you change?" disabled={disabled} />
+        <button type="submit" disabled={disabled || !message.trim() || (changed.length === 0 && !info.merging)}>
+          Commit all
+        </button>
+      </form>
+
+      <h3 className="section-title gh-subtitle">Branch</h3>
+      <div className="lock-form">
+        <select
+          value={branch ?? ''}
+          disabled={disabled}
+          onChange={(e) => e.target.value && e.target.value !== branch && void git('Switching', { type: 'switch', branch: e.target.value })}
+        >
+          {!branch && <option value="">(no branch)</option>}
+          <optgroup label="On this PC">
+            {info.branches.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </optgroup>
+          {info.remoteBranches.length > 0 && (
+            <optgroup label="Only on GitHub">
+              {info.remoteBranches.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+      </div>
+      <form
+        className="lock-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void git('Creating branch', { type: 'create-branch', branch: newBranch.trim(), from: fromLatest ? defaultBranch : null }).then(
+            (ok) => ok && setNewBranch(''),
+          );
+        }}
+      >
+        <input value={newBranch} onChange={(e) => setNewBranch(e.target.value)} placeholder="New branch, e.g. task/double-jump" disabled={disabled} />
+        <select value={fromLatest ? 'latest' : 'current'} onChange={(e) => setFromLatest(e.target.value === 'latest')} disabled={disabled}>
+          <option value="latest">from the latest {defaultBranch}</option>
+          <option value="current">from {branch ?? 'here'}</option>
+        </select>
+        <button type="submit" disabled={disabled || !newBranch.trim()}>
+          Create and switch
+        </button>
+      </form>
+      {footer}
+      <details className="git-more">
+        <summary className="muted small">Folder</summary>
+        {folderButtons}
+      </details>
+    </section>
+  );
+}
+
 function GitHubStatusLine({ github }: { github: GitHubStatus }) {
   if (!github.fetchedAt) return <span className="muted"> · loading…</span>;
   const time = new Date(github.fetchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -236,8 +447,8 @@ function TokenForm({ source }: { source: 'saved' | 'cli' | 'none' }) {
           : source === 'cli'
             ? 'Using the token of the GitHub CLI you are signed in to.'
             : 'No token yet. Without one, status updates every 10 minutes and private repositories are not visible.'}{' '}
-        Make a fine-grained token with read access to contents, pull requests and commit statuses. It is stored encrypted on this PC and never
-        sent to anyone else.
+        Make a fine-grained token with read access to pull requests and commit statuses, and read and write access to contents if you want to
+        push from the app. It is stored encrypted on this PC and never sent to anyone else.
       </p>
       <form
         className="lock-form"
@@ -358,6 +569,7 @@ export function WorkspaceCard({ local, tasks, onOpenTask }: { local: LocalWorksp
         <button className="secondary" onClick={() => void choose()}>
           Choose project folder
         </button>
+        <span className="muted small">No copy yet? Clone it from the GitHub page.</span>
         {error && <span className="error small">{error}</span>}
       </div>
     );

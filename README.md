@@ -14,7 +14,10 @@ when it is back). GitHub status: link the repository and see branches, pull
 requests, checks, reviews and merge conflicts on the task cards; each person
 picks their project folder so others see their branch and changed files,
 whether those stay inside the task's allowed paths, and where two people (or a
-pull request or a lock) touch the same file. Agents: set up agents for a model
+pull request or a lock) touch the same file. The GitHub page also runs
+everyday git for your own copy with the git on your PC: clone the linked
+repository into a folder (it becomes your project folder), pull, commit, push,
+and switch or create branches. Agents: set up agents for a model
 API (Claude, DeepSeek, OpenAI, a local model through Ollama, or any
 OpenAI-compatible API) or a command-line agent (Claude Code, Codex CLI), start
 them on your PC, and chat with them together in shared agent chats. Every edit
@@ -89,7 +92,11 @@ Windows; a session hosted before the list existed stays in
 `hosted-session.sqlite`), so resuming it brings back the same board and invite
 code. The list itself is `sessions.json` in the same folder. The host's GitHub token is
 set under **Locks and GitHub** and stored encrypted on that PC; the friend
-needs no token, since the server sends everyone the same GitHub status.
+needs no token, since the server sends everyone the same GitHub status. The
+Git actions on that page sign in to github.com with the token saved in the app
+(or the GitHub CLI's) when there is one, and otherwise with git's own sign-in
+(Git Credential Manager on Windows). Pushing needs a token with write access
+to contents; if GitHub refuses the token, git's own sign-in is tried.
 
 ## Playing together over Tailscale
 

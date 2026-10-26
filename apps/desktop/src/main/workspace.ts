@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { WORKSPACE_FILE_LIMIT, parseRepoRef, type FileChange, type Workspace } from '@pct/shared';
 import type { LocalWorkspace } from '../common/api';
+import { readGitInfo } from './git';
 
 // Watches your local checkout of the project with git: which branch is checked
 // out and which files changed since it left the default branch, committed or
@@ -22,15 +23,7 @@ function git(cwd: string, args: string[]): Promise<string> {
 
 const tryGit = (cwd: string, args: string[]) => git(cwd, args).then((out) => out.trim(), () => null);
 
-/** The top folder of the git repository that contains this folder. */
-export async function repositoryRoot(folder: string): Promise<string> {
-  try {
-    return (await git(folder, ['rev-parse', '--show-toplevel'])).trim();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(message.includes('Git is not installed') ? message : 'That folder is not inside a git repository.');
-  }
-}
+export { repositoryRoot } from './git';
 
 const CHANGE: Record<string, FileChange> = { A: 'added', C: 'added', M: 'modified', T: 'modified', D: 'deleted', R: 'renamed' };
 
@@ -66,7 +59,7 @@ export class WorkspaceWatcher {
     private readonly defaultBranch: () => string | null,
     private readonly onChange: (state: LocalWorkspace) => void,
   ) {
-    this.state = { folder, remote: null, workspace: null, error: null };
+    this.state = { folder, remote: null, workspace: null, git: null, error: null };
   }
 
   getState(): LocalWorkspace {
@@ -90,7 +83,7 @@ export class WorkspaceWatcher {
     try {
       this.publish(await this.read());
     } catch (error) {
-      this.publish({ ...this.state, workspace: null, error: error instanceof Error ? error.message : String(error) });
+      this.publish({ ...this.state, workspace: null, git: null, error: error instanceof Error ? error.message : String(error) });
     } finally {
       this.busy = false;
     }
@@ -124,7 +117,7 @@ export class WorkspaceWatcher {
       truncated: all.length > WORKSPACE_FILE_LIMIT,
       updatedAt: Date.now(),
     };
-    return { folder: cwd, remote, workspace, error: null };
+    return { folder: cwd, remote, workspace, git: await readGitInfo(cwd), error: null };
   }
 
   private async baseRef(): Promise<string | null> {

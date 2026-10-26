@@ -1,0 +1,255 @@
+import { execFile } from 'node:child_process';
+import type { FileChange } from '@pct/shared';
+import type { GitAction, GitInfo } from '../common/api';
+
+// Runs the git installed on this PC for the everyday actions on the GitHub
+// page: clone, fetch, pull, commit, push and branches. For github.com it signs
+// in with the app's GitHub token when there is one (passed in the environment,
+// never written to the repository's config); if GitHub refuses that token, it
+// tries again with git's own sign-in (Git Credential Manager on Windows).
+
+export class GitError extends Error {
+  constructor(
+    message: string,
+    readonly code: 'no-git' | 'not-a-repo' | 'dubious' | 'failed',
+    /** For 'dubious': the repository folder as git names it. */
+    readonly folder: string | null = null,
+  ) {
+    super(message);
+  }
+}
+
+interface RunOptions {
+  cwd: string;
+  token?: string | null;
+  timeout?: number;
+}
+
+const NETWORK_TIMEOUT = 5 * 60_000;
+
+function run(args: string[], { cwd, token, timeout = 15_000 }: RunOptions): Promise<string> {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (token) {
+    const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+    env.GIT_CONFIG_COUNT = '1';
+    env.GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader';
+    env.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${basic}`;
+  }
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, env, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!error) return resolve(String(stdout));
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return reject(new GitError('Git is not installed or not on the PATH.', 'no-git'));
+      const text = String(stderr).trim() || String(stdout).trim() || error.message;
+      reject(new GitError(text, /dubious ownership/i.test(text) ? 'dubious' : 'failed'));
+    });
+  });
+}
+
+const refused = (error: unknown) => error instanceof GitError && /\b(403|401)\b|denied|Authentication failed|could not read Username/i.test(error.message);
+
+/** Runs a command that talks to GitHub: with the token first, then with git's own sign-in if GitHub refuses it. */
+async function remote(args: string[], options: RunOptions): Promise<string> {
+  const timeout = options.timeout ?? NETWORK_TIMEOUT;
+  if (!options.token) return run(args, { ...options, timeout });
+  try {
+    return await run(args, { ...options, timeout });
+  } catch (error) {
+    if (!refused(error)) throw error;
+    return run(args, { ...options, token: null, timeout });
+  }
+}
+
+const tryRun = (args: string[], cwd: string) => run(args, { cwd }).then((out) => out.trim(), () => null);
+
+/** The top folder of the git repository that contains this folder. */
+export async function repositoryRoot(folder: string): Promise<string> {
+  try {
+    return (await run(['rev-parse', '--show-toplevel'], { cwd: folder })).trim();
+  } catch (error) {
+    if (error instanceof GitError && error.code !== 'failed') {
+      if (error.code === 'dubious') {
+        const named = /repository at '([^']+)'/.exec(error.message)?.[1] ?? folder;
+        throw new GitError('Git does not trust that folder because another Windows user owns it.', 'dubious', named);
+      }
+      throw error;
+    }
+    throw new GitError('That folder is not inside a git repository.', 'not-a-repo');
+  }
+}
+
+/** Tells git to trust a folder owned by another user (git's safe.directory setting). */
+export async function trustFolder(folder: string): Promise<void> {
+  await run(['config', '--global', '--add', 'safe.directory', folder.replace(/\\/g, '/')], { cwd: folder });
+}
+
+export async function clone(url: string, target: string, parent: string, token: string | null): Promise<void> {
+  await remote(['clone', '--', url, target], { cwd: parent, token, timeout: 60 * 60_000 });
+}
+
+function change(xy: string): FileChange {
+  if (xy.includes('D')) return 'deleted';
+  if (xy.includes('R') || xy.includes('C')) return 'renamed';
+  if (xy.includes('A')) return 'added';
+  return 'modified';
+}
+
+/** Parses `git status --porcelain=v2 --branch -z`. Branch lists and merge state are filled in by the caller. */
+export function parseStatus(output: string): Pick<GitInfo, 'upstream' | 'ahead' | 'behind' | 'uncommitted' | 'conflicted'> {
+  const info: Pick<GitInfo, 'upstream' | 'ahead' | 'behind' | 'uncommitted' | 'conflicted'> = {
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    uncommitted: [],
+    conflicted: [],
+  };
+  const parts = output.split('\0');
+  // Splits off the first n space-separated fields; the rest is the path, which may contain spaces.
+  const fields = (entry: string, n: number) => {
+    const out: string[] = [];
+    let rest = entry;
+    for (let i = 0; i < n; i++) {
+      const space = rest.indexOf(' ');
+      if (space < 0) return null;
+      out.push(rest.slice(0, space));
+      rest = rest.slice(space + 1);
+    }
+    return { fields: out, path: rest };
+  };
+  for (let i = 0; i < parts.length; i++) {
+    const entry = parts[i]!;
+    if (entry.startsWith('# branch.upstream ')) info.upstream = entry.slice('# branch.upstream '.length);
+    else if (entry.startsWith('# branch.ab ')) {
+      const match = /\+(\d+) -(\d+)/.exec(entry);
+      if (match) {
+        info.ahead = Number(match[1]);
+        info.behind = Number(match[2]);
+      }
+    } else if (entry.startsWith('1 ')) {
+      const parsed = fields(entry, 8);
+      if (parsed) info.uncommitted.push({ path: parsed.path, change: change(parsed.fields[1]!) });
+    } else if (entry.startsWith('2 ')) {
+      const parsed = fields(entry, 9);
+      if (parsed) info.uncommitted.push({ path: parsed.path, change: 'renamed' });
+      i++; // the old path
+    } else if (entry.startsWith('u ')) {
+      const parsed = fields(entry, 10);
+      if (parsed) info.conflicted.push(parsed.path);
+    } else if (entry.startsWith('? ')) {
+      info.uncommitted.push({ path: entry.slice(2), change: 'untracked' });
+    }
+  }
+  return info;
+}
+
+/** Branches, upstream, uncommitted files and merge state of the repository. */
+export async function readGitInfo(cwd: string): Promise<GitInfo> {
+  const status = parseStatus(await run(['status', '--porcelain=v2', '--branch', '-z'], { cwd }));
+  const refs = (await tryRun(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'], cwd)) ?? '';
+  const branches: string[] = [];
+  const remoteBranches: string[] = [];
+  for (const ref of refs.split('\n')) {
+    if (ref.startsWith('refs/heads/')) branches.push(ref.slice('refs/heads/'.length));
+    else if (ref.startsWith('refs/remotes/origin/') && ref !== 'refs/remotes/origin/HEAD') remoteBranches.push(ref.slice('refs/remotes/origin/'.length));
+  }
+  const merging = (await tryRun(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], cwd)) !== null;
+  return { ...status, merging, branches, remoteBranches: remoteBranches.filter((b) => !branches.includes(b)) };
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Makes git's messages for the usual problems readable. */
+function explain(error: unknown): Error {
+  if (!(error instanceof GitError)) return error instanceof Error ? error : new Error(String(error));
+  const text = error.message;
+  if (/Please tell me who you are|empty ident/i.test(text)) {
+    return new Error('Git does not know your name yet. Run once in a terminal: git config --global user.name "Your Name" and git config --global user.email you@example.com');
+  }
+  if (/\[rejected\]|non-fast-forward|fetch first/i.test(text)) return new Error('GitHub has commits on this branch that you do not have. Pull first, then push.');
+  if (/would be overwritten/i.test(text)) return new Error('You have uncommitted changes to files this would change. Commit them first.');
+  if (refused(error)) return new Error('GitHub refused the sign-in. Use a token with write access to contents, or sign in to git on this PC.');
+  return new Error(text.split('\n').filter((line) => !line.startsWith('hint:')).slice(-4).join('\n'));
+}
+
+async function hasRef(cwd: string, ref: string) {
+  return (await tryRun(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], cwd)) !== null;
+}
+
+/** Runs one action in the repository and says what happened. */
+export async function runGitAction(cwd: string, action: GitAction, token: string | null): Promise<string> {
+  try {
+    return await perform(cwd, action, token);
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
+async function perform(cwd: string, action: GitAction, token: string | null): Promise<string> {
+  const info = () => readGitInfo(cwd);
+  const branch = async () => {
+    const head = (await run(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })).trim();
+    if (head === 'HEAD') throw new Error('No branch is checked out (detached HEAD). Switch to a branch first.');
+    return head;
+  };
+  switch (action.type) {
+    case 'fetch': {
+      await remote(['fetch', '--prune', 'origin'], { cwd, token });
+      const { upstream, behind } = await info();
+      return upstream ? (behind > 0 ? `${plural(behind, 'new commit')} on GitHub. Pull to get them.` : 'Up to date with GitHub.') : 'Fetched from GitHub.';
+    }
+    case 'pull': {
+      const name = await branch();
+      const { upstream } = await info();
+      await remote(['fetch', '--prune', 'origin'], { cwd, token });
+      const args = ['pull', '--no-rebase', '--no-edit'];
+      if (!upstream) {
+        if (!(await hasRef(cwd, `origin/${name}`))) return `${name} is not on GitHub yet. Push it to share it.`;
+        args.push('origin', name);
+      }
+      try {
+        const out = await remote(args, { cwd, token });
+        return /Already up to date/i.test(out) ? 'Already up to date.' : 'Pulled the latest changes.';
+      } catch (error) {
+        const { conflicted } = await info();
+        if (conflicted.length > 0) {
+          return `Pulled, but ${plural(conflicted.length, 'file')} ${conflicted.length === 1 ? 'has' : 'have'} conflicts. Fix them in your editor and commit, or abort the merge.`;
+        }
+        throw error;
+      }
+    }
+    case 'commit': {
+      const message = action.message.trim();
+      if (!message) throw new Error('Write a commit message first.');
+      const { conflicted } = await info();
+      if (conflicted.length > 0) throw new Error(`Fix the conflicts in ${plural(conflicted.length, 'file')} first.`);
+      await run(['add', '-A'], { cwd });
+      if ((await tryRun(['diff', '--cached', '--quiet'], cwd)) !== null && !(await info()).merging) return 'Nothing to commit.';
+      await run(['commit', '-m', message], { cwd, timeout: 60_000 });
+      return 'Committed.';
+    }
+    case 'push': {
+      const name = await branch();
+      const { upstream } = await info();
+      await remote(upstream ? ['push'] : ['push', '-u', 'origin', name], { cwd, token });
+      return upstream ? 'Pushed.' : `Pushed ${name} to GitHub.`;
+    }
+    case 'switch': {
+      await run(['switch', action.branch], { cwd, timeout: 60_000 });
+      return `Switched to ${action.branch}.`;
+    }
+    case 'create-branch': {
+      const name = action.branch.trim();
+      if (!name || (await tryRun(['check-ref-format', '--branch', name], cwd)) === null) throw new Error('That is not a valid branch name.');
+      if (action.from) {
+        await remote(['fetch', 'origin', action.from], { cwd, token });
+        await run(['switch', '--no-track', '-c', name, `origin/${action.from}`], { cwd, timeout: 60_000 });
+        return `Created ${name} from the latest ${action.from}.`;
+      }
+      await run(['switch', '-c', name], { cwd, timeout: 60_000 });
+      return `Created ${name}.`;
+    }
+    case 'abort-merge': {
+      await run(['merge', '--abort'], { cwd });
+      return 'Merge aborted. Your branch is back to how it was before the pull.';
+    }
+  }
+}
