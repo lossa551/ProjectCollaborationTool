@@ -99,3 +99,14 @@ directly inside the shared session.
   as it is. Only the conversation is branched for now; once agents have their
   own worktrees and per-turn checkpoints (#32, #33) the branch also starts
   from the files as they were at that message (#41).
+- Each agent turn that changed files ends with a **checkpoint** in the chat
+  (#33): the turn is committed in the agent's copy (chat title + turn number)
+  and the checkpoint lists its files. Anyone in the session can press **Undo
+  this turn** (a new commit puts back every file that turn changed; later
+  turns stay) or **Go back to here** (after confirming, the copy is reset to
+  the end of that turn; the old state is kept under `refs/pct-backup/...`, so
+  a later checkpoint can bring it back). The agent on its owner's PC does it,
+  says so in the chat, records it in the activity feed under the person's
+  name, frees locks on files that are no longer changed, and tells the agent
+  with its next prompt. Branching from a message can start from the last
+  checkpoint before it (`checkpointAt`).

@@ -22,7 +22,7 @@ import type { Storage } from './storage.js';
 
 export type ChatResult<T> =
   | { ok: true; value: T; description: string | null }
-  | { ok: false; code: 'not_found' | 'not_allowed' | 'conflict'; message: string };
+  | { ok: false; code: 'not_found' | 'not_allowed' | 'conflict' | 'bad_message'; message: string };
 
 /** Messages kept in memory per chat, and sent when a chat is opened. */
 export const CHAT_HISTORY_LIMIT = 500;
@@ -179,6 +179,7 @@ export class AgentChats {
       streaming: false,
       tool: null,
       approval: null,
+      checkpoint: null,
       at: now,
       updatedAt: now,
     });
@@ -255,9 +256,13 @@ export class AgentChats {
     if (!this.chats.has(chatId)) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
     const index = list.findIndex((m) => m.id === input.id);
     const existing = index >= 0 ? list[index] : undefined;
-    if (existing && existing.author.id !== by.id) {
+    // The chat's agent keeps its checkpoints up to date even when an earlier run of it (another PC) posted them.
+    const ownCheckpoint = isChatAgent && existing?.kind === 'checkpoint' && existing.author.kind === 'agent';
+    if (existing && existing.author.id !== by.id && !ownCheckpoint) {
       return { ok: false, code: 'not_allowed', message: 'You can only change your own messages' };
     }
+    if (existing && existing.kind !== input.kind) return { ok: false, code: 'conflict', message: 'A message keeps its kind' };
+    if (input.kind === 'checkpoint' && !input.checkpoint) return { ok: false, code: 'bad_message', message: 'A checkpoint needs its commit' };
 
     let approval: ChatMessage['approval'] = null;
     if (input.approval && isChatAgent) {
@@ -274,12 +279,13 @@ export class AgentChats {
     const message: ChatMessage = {
       id: input.id,
       chatId,
-      author: owner(by),
+      author: existing && ownCheckpoint ? existing.author : owner(by),
       kind: input.kind,
       text: input.text,
       streaming: isChatAgent ? (input.streaming ?? false) : false,
       tool: isChatAgent ? (input.tool ?? null) : null,
       approval,
+      checkpoint: isChatAgent && input.kind === 'checkpoint' ? (input.checkpoint ?? null) : null,
       at: existing?.at ?? now,
       updatedAt: now,
     };
@@ -317,6 +323,26 @@ export class AgentChats {
       value: message,
       description: `${approve ? 'approved' : 'denied'} ${agentName}: ${existing.approval.action}`,
     };
+  }
+
+  /**
+   * Checks a person's request to undo a turn (or go back to it) before it is
+   * passed to the chat's agent, which does it in its copy. The agent must be
+   * running and between turns.
+   */
+  async checkUndo(chatId: string, messageId: string, by: Participant, agentRunning: boolean): Promise<ChatResult<ChatMessage>> {
+    if (by.kind !== 'human') return { ok: false, code: 'not_allowed', message: 'Only a person can undo an agent’s turn' };
+    const chat = this.chats.get(chatId);
+    if (!chat) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
+    const message = (await this.history(chatId)).find((m) => m.id === messageId);
+    if (!message?.checkpoint) return { ok: false, code: 'not_found', message: 'That turn is no longer in the chat' };
+    const agentName = this.agents.get(chat.agentId)?.name ?? 'The agent';
+    if (!agentRunning) {
+      const where = chat.worktree ? ` on ${chat.worktree.owner.name}’s PC` : '';
+      return { ok: false, code: 'conflict', message: `${agentName} is not running. Start it${where} to undo its turns.` };
+    }
+    if (chat.state !== 'idle') return { ok: false, code: 'conflict', message: `Wait until ${agentName} finishes its turn, or stop it, before undoing` };
+    return { ok: true, value: message, description: null };
   }
 
   setAgentState(

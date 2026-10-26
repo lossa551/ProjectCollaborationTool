@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
 import {
   CLI_TOOLS,
+  WORKSPACE_FILE_LIMIT,
   approvalActivity,
   lockWaitActivity,
   notesForPaths,
@@ -21,6 +22,7 @@ import {
   type SessionClient,
   type Task,
   type ToolStatus,
+  type UndoMode,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { describeContext, systemPrompt, type ContextInput } from './context.js';
@@ -40,11 +42,16 @@ import {
 import {
   agentBranchName,
   canMakeWorktrees,
+  changedBetween,
   commitAll,
   createWorktree,
   defaultWorktreeFolder,
+  headCommit,
+  isAncestor,
   pickBase,
   removeWorktree,
+  resetTo,
+  revertCommit,
   worktreeReady,
   worktreeStatus,
 } from './worktree.js';
@@ -121,6 +128,10 @@ interface ChatRun {
   doneNoticed: boolean;
   /** Its task was finished during a turn: look at the copy once the turn ends. */
   doneDuringTurn: boolean;
+  /** Highest turn number checkpointed, so quick turns in a row do not wait for the server's echo. */
+  lastTurn: number;
+  /** Told to the agent with its next prompt, e.g. that a person undid one of its turns. */
+  notes: string[];
 }
 
 /** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
@@ -218,6 +229,8 @@ export class AgentRunner {
         worktree: null,
         doneNoticed: false,
         doneDuringTurn: false,
+        lastTurn: 0,
+        notes: [],
       };
       this.runs.set(chatId, run);
     }
@@ -276,6 +289,9 @@ export class AgentRunner {
       case 'task.changed':
         if (message.task.stage === 'done') void this.taskDone(message.task);
         break;
+      case 'chat.undo':
+        if (this.chat(message.chatId)) void this.undoTurn(message.chatId, message.messageId, message.mode, message.by);
+        break;
       case 'chat.stopped': {
         const run = this.runs.get(message.chatId);
         if (run?.abort) {
@@ -313,13 +329,15 @@ export class AgentRunner {
         if (fresh.length === 0) break;
         if (run.history === null) run.history = rebuildHistory(messages.filter((m) => !fresh.includes(m)));
         for (const m of fresh) run.handled.add(m.id);
-        const prompt = fresh.map(formatPrompt).join('\n\n');
+        const prompt = [...run.notes.splice(0), ...fresh.map(formatPrompt)].join('\n\n');
 
         run.abort = new AbortController();
         run.stoppedBy = null;
         run.approvedPaths.clear();
         try {
           await this.workspaceFor(chat, run);
+          // Edits made in the copy by hand since the last turn are not part of this one.
+          await this.saveCopy(run, 'Changes made in the copy between agent turns');
           run.folderNotes = await this.loadFolderNotes(chat);
           this.setState(chatId, 'working', 'Thinking');
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
@@ -333,6 +351,7 @@ export class AgentRunner {
           }
           repairHistory(run.history);
         }
+        await this.checkpoint(chatId, run);
         run.abort = null;
       } while (run.again && !this.stopped);
     } finally {
@@ -426,6 +445,7 @@ export class AgentRunner {
       truncated: false,
       commits: known?.commits ?? 0,
       uncommitted: known?.uncommitted ?? 0,
+      head: known?.head ?? null,
       updatedAt: Date.now(),
     };
     if (!known) {
@@ -443,8 +463,161 @@ export class AgentRunner {
     return run.files;
   }
 
+  /** Commits anything uncommitted in the chat's copy. */
+  private async saveCopy(run: ChatRun, message: string): Promise<void> {
+    if (!run.worktree) return;
+    try {
+      await commitAll(run.worktree.folder, message);
+    } catch (error) {
+      this.log(`could not save ${run.worktree.folder}: ${String(error)}`);
+    }
+  }
+
+  /** The chat's checkpoint messages, oldest first. */
+  private checkpoints(chatId: string): ChatMessage[] {
+    return (this.client.getState().messages[chatId] ?? []).filter((m) => m.kind === 'checkpoint' && m.checkpoint);
+  }
+
+  /**
+   * Saves what the turn changed in the chat's copy as a commit, and posts a
+   * checkpoint for it in the chat so people can undo the turn later. Turns
+   * that changed nothing get none.
+   */
+  private async checkpoint(chatId: string, run: ChatRun) {
+    const worktree = run.worktree;
+    const chat = this.chat(chatId);
+    if (!worktree || !chat) return;
+    try {
+      const parent = await headCommit(worktree.folder);
+      const turn = Math.max(run.lastTurn, ...this.checkpoints(chatId).map((m) => m.checkpoint!.turn)) + 1;
+      const commit = await commitAll(worktree.folder, `${chat.title} - turn ${turn}`);
+      if (!commit || !parent) return;
+      run.lastTurn = turn;
+      const files = await changedBetween(worktree.folder, parent, commit);
+      const count = `${files.length} ${files.length === 1 ? 'file' : 'files'}`;
+      this.client.postChat(chatId, {
+        kind: 'checkpoint',
+        text: `Turn ${turn}: ${count} changed, saved as ${commit.slice(0, 7)} on ${worktree.branch}.`,
+        checkpoint: {
+          turn,
+          commit,
+          parent,
+          branch: worktree.branch,
+          files: files.slice(0, WORKSPACE_FILE_LIMIT),
+          truncated: files.length > WORKSPACE_FILE_LIMIT,
+          undone: null,
+          revertCommit: null,
+        },
+      });
+    } catch (error) {
+      this.log(`could not save a checkpoint for chat ${chatId}: ${String(error)}`);
+      this.notice(chatId, `Could not save this turn as a checkpoint, so it cannot be undone from here: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * Undoes the turn of a checkpoint (a new commit puts its files back), or
+   * takes the copy back to the end of that turn, as a person asked. Locks on
+   * files that are no longer changed are freed, the chat and the activity
+   * feed say who did it, and the agent is told with its next prompt.
+   */
+  private async undoTurn(chatId: string, messageId: string, mode: UndoMode, by: string) {
+    const chat = this.chat(chatId);
+    const checkpoint = this.checkpoints(chatId).find((m) => m.id === messageId)?.checkpoint;
+    if (!chat || !checkpoint) return;
+    const run = this.run(chatId);
+    const agentName = this.profile()?.name ?? 'The agent';
+    const turn = `turn ${checkpoint.turn}`;
+    const fail = (why: string) => this.notice(chatId, `Could not ${mode === 'undo' ? `undo ${turn}` : `go back to ${turn}`} for ${by}: ${why}.`);
+    const worktree = run.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
+    if (run.busy) return fail(`${agentName} is working; wait until it finishes or stop it first`);
+    if (!worktree || !(await worktreeReady(worktree.folder, worktree.branch))) return fail('the agent’s copy of the project is gone');
+    if (worktree.branch !== checkpoint.branch) return fail(`that turn was made in another copy (${checkpoint.branch})`);
+    if (mode === 'undo' && checkpoint.undone) return fail('it is already undone');
+
+    run.busy = true;
+    try {
+      if (!run.worktree) {
+        run.worktree = worktree;
+        run.files = new ProjectFiles(worktree.folder);
+      }
+      await this.saveCopy(run, 'Changes made in the copy between agent turns');
+      const folder = worktree.folder;
+      let restored: string[];
+      let revert: string | null = null;
+      if (mode === 'undo') {
+        revert = await revertCommit(folder, checkpoint.commit, `Undo turn ${checkpoint.turn} of ${chat.title} (${by})`);
+        restored = checkpoint.files.map((f) => f.path);
+      } else {
+        const head = await headCommit(folder);
+        if (!head || head === checkpoint.commit) return fail('the copy is already there');
+        restored = (await changedBetween(folder, checkpoint.commit, head)).map((f) => f.path);
+        await resetTo(folder, checkpoint.commit, `refs/pct-backup/${worktree.branch}/${Date.now()}`);
+      }
+      await this.markCheckpoints(chatId, folder, worktree.branch, { by, mode, messageId, revert });
+
+      const list = listPaths(restored);
+      if (mode === 'undo') {
+        this.notice(chatId, `${by} undid turn ${checkpoint.turn}. Back to how they were before it: ${list}.`);
+        run.notes.push(
+          `Note from the collaboration app: ${by} undid your turn ${checkpoint.turn}. These files are back to how they were before it: ${list}. ` +
+            'Read them again before you build on anything from that turn.',
+        );
+      } else {
+        this.notice(
+          chatId,
+          `${by} took the copy back to the end of turn ${checkpoint.turn}. ${restored.length > 0 ? `Changed back: ${list}. ` : ''}` +
+            'Later turns can be brought back with "Go back to here" on them.',
+        );
+        run.notes.push(
+          `Note from the collaboration app: ${by} took your copy back to how it was at the end of your turn ${checkpoint.turn}; ` +
+            `everything you changed after that is gone${restored.length > 0 ? ` (${list})` : ''}. Read files again before you build on later work.`,
+        );
+      }
+      run.busy = false;
+      const what = mode === 'undo' ? `undid turn ${checkpoint.turn} of "${chat.title}"` : `took "${chat.title}" back to turn ${checkpoint.turn}`;
+      await this.reportWorktree(chatId, `${what} (${agentName}, ${restored.length} ${restored.length === 1 ? 'file' : 'files'})`, by);
+      // Files only that turn touched are not changed any more: their locks go.
+      await this.releaseUnchanged((lock) => lock.chatId === chatId);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      run.busy = false;
+      // Someone posted while the copy was being changed.
+      if (run.again && !this.stopped) {
+        run.again = false;
+        void this.turn(chatId);
+      }
+    }
+  }
+
+  /**
+   * Brings every checkpoint of the copy's branch up to date with what the
+   * copy holds now: a turn counts as undone when its commit is not in the
+   * copy any more, or the commit that undid it is.
+   */
+  private async markCheckpoints(
+    chatId: string,
+    folder: string,
+    branch: string,
+    change: { by: string; mode: UndoMode; messageId: string; revert: string | null },
+  ) {
+    const head = await headCommit(folder);
+    if (!head) return;
+    for (const m of this.checkpoints(chatId)) {
+      const checkpoint = m.checkpoint!;
+      if (checkpoint.branch !== branch) continue;
+      const revertCandidate = m.id === change.messageId && change.revert ? change.revert : checkpoint.revertCommit;
+      const revertCommit = revertCandidate && (await isAncestor(folder, revertCandidate, head)) ? revertCandidate : null;
+      const kept = !revertCommit && (await isAncestor(folder, checkpoint.commit, head));
+      const undone = kept ? null : (checkpoint.undone ?? { by: change.by, at: Date.now(), how: change.mode });
+      if (undone === checkpoint.undone && revertCommit === checkpoint.revertCommit) continue;
+      this.client.postChat(chatId, { id: m.id, kind: 'checkpoint', text: m.text, checkpoint: { ...checkpoint, undone, revertCommit } });
+    }
+  }
+
   /** Tells everyone what the chat's copy holds now. */
-  private async reportWorktree(chatId: string, note?: string) {
+  private async reportWorktree(chatId: string, note?: string, noteBy?: string) {
     const run = this.runs.get(chatId);
     const worktree = run?.worktree;
     if (!run || !worktree || !this.chat(chatId)) return;
@@ -458,7 +631,7 @@ export class AgentRunner {
     // Removed (task done, chat deleted) while reading: nothing to report.
     if (run.worktree !== worktree || !this.chat(chatId)) return;
     run.worktree = next;
-    this.client.setChatWorktree(chatId, next, note);
+    this.client.setChatWorktree(chatId, next, note, noteBy);
   }
 
   /**
@@ -1096,6 +1269,13 @@ export class AgentRunner {
       }
     }
   }
+}
+
+/** Paths for a chat line: the first few, then how many more. */
+function listPaths(paths: string[], max = 8): string {
+  if (paths.length === 0) return 'no files';
+  const shown = paths.slice(0, max).join(', ');
+  return paths.length > max ? `${shown} and ${paths.length - max} more` : shown;
 }
 
 /** A message from a person that the agent should answer. */

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
-import { WORKSPACE_FILE_LIMIT, parseNameStatus, type ChatWorktree } from '@pct/shared';
+import { WORKSPACE_FILE_LIMIT, parseNameStatus, type ChatWorktree, type FileChange } from '@pct/shared';
 
 // Each agent chat works in its own git worktree: a second checkout of the
 // project on its own branch (agent/<name>), next to the person's project
@@ -9,8 +9,10 @@ import { WORKSPACE_FILE_LIMIT, parseNameStatus, type ChatWorktree } from '@pct/s
 // never mix with the person's uncommitted changes, and two agents never see
 // each other's half-done work. Everything here runs the git on this PC.
 //
-// Checkpoints (one commit per agent turn, for undo) and starting a branched
-// chat at an earlier commit build on createWorktree's `from` and commitAll.
+// Checkpoints: each agent turn that changed files is committed (commitAll),
+// so a turn can be undone (revertCommit) or the copy taken back to the end of
+// one (resetTo). A branched chat can start its copy at a checkpoint with
+// createWorktree's `from`.
 
 export class WorktreeError extends Error {}
 
@@ -118,7 +120,7 @@ export async function createWorktree({ root, folder, branch, from }: CreateWorkt
   return { baseCommit: exists ? ((await tryGit(root, ['merge-base', start, branch])) ?? start) : start };
 }
 
-export type WorktreeStatus = Pick<ChatWorktree, 'files' | 'truncated' | 'commits' | 'uncommitted'>;
+export type WorktreeStatus = Pick<ChatWorktree, 'files' | 'truncated' | 'commits' | 'uncommitted' | 'head'>;
 
 /**
  * What the agent changed in its copy: files since the branch left its base
@@ -147,7 +149,8 @@ export async function worktreeStatus(folder: string, base: { branch: string | nu
     uncommitted++;
     if (entry[0] === 'R' || entry[0] === 'C') i++;
   }
-  return { files: files.slice(0, WORKSPACE_FILE_LIMIT), truncated: files.length > WORKSPACE_FILE_LIMIT, commits, uncommitted };
+  const head = await headCommit(folder);
+  return { files: files.slice(0, WORKSPACE_FILE_LIMIT), truncated: files.length > WORKSPACE_FILE_LIMIT, commits, uncommitted, head };
 }
 
 /** Commits everything in the copy. Returns the new commit, or null when nothing changed. */
@@ -156,6 +159,56 @@ export async function commitAll(folder: string, message: string): Promise<string
   if ((await tryGit(folder, ['diff', '--cached', '--quiet'])) !== null) return null;
   await git(folder, ['commit', '-q', '--no-verify', '-m', message]);
   return tryGit(folder, ['rev-parse', 'HEAD']);
+}
+
+/** The commit checked out in the folder. */
+export async function headCommit(folder: string): Promise<string | null> {
+  return commitOf(folder, 'HEAD');
+}
+
+/** Files that differ between two commits. */
+export async function changedBetween(folder: string, from: string, to: string): Promise<{ path: string; change: FileChange }[]> {
+  return parseNameStatus(await git(folder, ['-c', 'core.quotepath=off', 'diff', '--name-status', '-z', '--no-renames', from, to]));
+}
+
+/** Whether the commit is the other one or one of its ancestors (false when either is unknown). */
+export async function isAncestor(folder: string, commit: string, of: string): Promise<boolean> {
+  return (await tryGit(folder, ['merge-base', '--is-ancestor', commit, of])) !== null;
+}
+
+/**
+ * Undoes one commit with a new commit that puts back every file it changed.
+ * When later commits changed the same lines it stops, leaves the copy as it
+ * was, and says which files are in the way. Returns the new commit.
+ */
+export async function revertCommit(folder: string, commit: string, message: string): Promise<string> {
+  try {
+    await git(folder, ['revert', '--no-commit', '--no-edit', commit]);
+  } catch (error) {
+    const conflicted = ((await tryGit(folder, ['-c', 'core.quotepath=off', 'diff', '--name-only', '--diff-filter=U'])) ?? '').split('\n').filter(Boolean);
+    await tryGit(folder, ['revert', '--abort']);
+    // Everything was committed before, so nothing of the person's is lost here.
+    await tryGit(folder, ['reset', '-q', '--hard', 'HEAD']);
+    if (conflicted.length > 0) {
+      throw new WorktreeError(`later turns changed the same parts of ${conflicted.join(', ')}. Use "Go back to here" on the turn before it instead`);
+    }
+    throw error;
+  }
+  if ((await tryGit(folder, ['diff', '--cached', '--quiet'])) !== null) {
+    await tryGit(folder, ['revert', '--quit']);
+    throw new WorktreeError('its changes are already gone from the copy');
+  }
+  await git(folder, ['commit', '-q', '--no-verify', '-m', message]);
+  return (await headCommit(folder))!;
+}
+
+/**
+ * Takes the copy back to a commit. What it pointed at before is kept under
+ * the backup ref, so later turns can still be brought back.
+ */
+export async function resetTo(folder: string, commit: string, backupRef: string): Promise<void> {
+  await git(folder, ['update-ref', backupRef, 'HEAD']);
+  await git(folder, ['reset', '-q', '--hard', commit]);
 }
 
 /** Whether every commit on the branch is already in the other one. */

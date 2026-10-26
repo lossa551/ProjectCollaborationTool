@@ -450,6 +450,8 @@ export const ChatWorktree = z.object({
   commits: z.number().int().min(0),
   /** Files changed but not committed in the copy. */
   uncommitted: z.number().int().min(0),
+  /** The commit checked out in the copy now, so people can see which turn it is at. */
+  head: z.string().max(64).nullable().default(null),
   updatedAt: z.number(),
 });
 export type ChatWorktree = z.infer<typeof ChatWorktree>;
@@ -473,7 +475,7 @@ export const ChatInfo = z.object({
 });
 export type ChatInfo = z.infer<typeof ChatInfo>;
 
-export const ChatMessageKind = z.enum(['text', 'tool', 'approval', 'notice', 'handoff']);
+export const ChatMessageKind = z.enum(['text', 'tool', 'approval', 'notice', 'handoff', 'checkpoint']);
 export type ChatMessageKind = z.infer<typeof ChatMessageKind>;
 
 export const ToolStatus = z.enum(['running', 'done', 'failed', 'blocked']);
@@ -501,6 +503,49 @@ export const ChatApproval = z.object({
 });
 export type ChatApproval = z.infer<typeof ChatApproval>;
 
+/** Undo this turn reverts its commit; go back resets the copy to the state after it. */
+export const UndoMode = z.enum(['undo', 'go-back']);
+export type UndoMode = z.infer<typeof UndoMode>;
+
+/**
+ * The end of an agent turn that changed files: the agent's copy was saved as
+ * a commit on its branch, so the turn can be undone, or the copy taken back
+ * to it. A branched chat keeps its parent's checkpoints, so it can start its
+ * own copy from one of them.
+ */
+export const ChatCheckpoint = z.object({
+  /** Counts the chat's turns that changed files, from 1. */
+  turn: z.number().int().min(1),
+  /** The copy after the turn. */
+  commit: z.string().min(4).max(64),
+  /** The copy before it. */
+  parent: z.string().min(4).max(64),
+  /** The agent branch the commit is on. */
+  branch: BranchName,
+  files: z
+    .array(z.object({ path: z.string().min(1).max(1024), change: FileChange }))
+    .max(WORKSPACE_FILE_LIMIT),
+  truncated: z.boolean(),
+  /** Set while the turn's changes are not in the copy: undone, or the copy went back to before it. */
+  undone: z.object({ by: z.string().max(64), at: z.number(), how: UndoMode }).nullable(),
+  /** The commit that undid the turn, after "Undo this turn". */
+  revertCommit: z.string().max(64).nullable().default(null),
+});
+export type ChatCheckpoint = z.infer<typeof ChatCheckpoint>;
+
+/**
+ * The last checkpoint at or before a message, still in its copy. Where a
+ * chat branched from that message would start its own copy.
+ */
+export function checkpointAt(messages: ChatMessage[], messageId: string): ChatCheckpoint | null {
+  const end = messages.findIndex((m) => m.id === messageId);
+  for (let i = end; i >= 0; i--) {
+    const checkpoint = messages[i]!.checkpoint;
+    if (checkpoint && !checkpoint.undone) return checkpoint;
+  }
+  return null;
+}
+
 export const CHAT_TEXT_LIMIT = 100_000;
 
 export const ChatMessage = z.object({
@@ -513,6 +558,8 @@ export const ChatMessage = z.object({
   streaming: z.boolean(),
   tool: ChatTool.nullable(),
   approval: ChatApproval.nullable(),
+  /** Only on checkpoint messages. */
+  checkpoint: ChatCheckpoint.nullable().default(null),
   at: z.number(),
   updatedAt: z.number(),
 });

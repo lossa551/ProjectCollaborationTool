@@ -15,7 +15,9 @@ import {
   ChatMessageKind,
   ChatTitle,
   ChatTool,
+  ChatCheckpoint,
   ChatWorktree,
+  UndoMode,
   CHAT_TEXT_LIMIT,
   CRITERIA_LIMIT,
   CriterionState,
@@ -42,7 +44,7 @@ import { BloatReport } from './bloat.js';
 import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 10;
+export const PROTOCOL_VERSION = 11;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -267,6 +269,8 @@ export const ChatPostMessage = z.object({
     tool: ChatTool.nullable().optional(),
     /** Agents open an approval card with state "pending"; only people decide it. */
     approval: z.object({ action: z.string().max(500), reason: z.string().max(1000), state: ApprovalState }).nullable().optional(),
+    /** Agents only, on checkpoint messages. */
+    checkpoint: ChatCheckpoint.nullable().optional(),
   }),
 });
 
@@ -299,12 +303,22 @@ export const ChatWorktreeMessage = z.object({
   worktree: ChatWorktree.nullable(),
   /** What happened, e.g. "merged agent/jump into main". */
   note: z.string().trim().min(1).max(300).optional(),
+  /** The agent did it for this person (say, an undo): the note is theirs in the activity feed. */
+  noteBy: z.string().trim().min(1).max(64).optional(),
 });
 
 /** Asks the chat's agent to stop what it is doing. */
 export const ChatStopMessage = z.object({
   type: z.literal('chat.stop'),
   chatId: z.string(),
+});
+
+/** A person asks the chat's agent to undo a turn, or take its copy back to one (a checkpoint message). */
+export const ChatUndoMessage = z.object({
+  type: z.literal('chat.undo'),
+  chatId: z.string(),
+  messageId: z.string(),
+  mode: UndoMode,
 });
 
 export const ClientMessage = z.discriminatedUnion('type', [
@@ -336,6 +350,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   ChatAgentMessage,
   ChatWorktreeMessage,
   ChatStopMessage,
+  ChatUndoMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -457,6 +472,15 @@ export const ChatStoppedMessage = z.object({
   by: z.string(),
 });
 
+/** Someone asked the chat's agent to undo a turn; its runner does it in the chat's copy. */
+export const ChatUndoRequestedMessage = z.object({
+  type: z.literal('chat.undo'),
+  chatId: z.string(),
+  messageId: z.string(),
+  mode: UndoMode,
+  by: z.string(),
+});
+
 /**
  * The answer to doc.sync: what the client is missing, and the server's state
  * vector so the client can send back what the server is missing.
@@ -526,6 +550,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   ChatMessageMessage,
   ChatHistoryMessage,
   ChatStoppedMessage,
+  ChatUndoRequestedMessage,
   DocStateMessage,
   DocChangedMessage,
   BloatChangedMessage,

@@ -13,6 +13,7 @@ import type {
   TaskChanges,
   TaskStage,
   Workspace,
+  UndoMode,
 } from '@pct/shared';
 import type { FolderNotesReport } from './folder-notes';
 
@@ -268,6 +269,8 @@ export interface PctApi {
   postChat(chatId: string, text: string): void;
   decideApproval(chatId: string, messageId: string, approve: boolean): void;
   stopChat(chatId: string): void;
+  /** Asks the chat's agent to undo the turn of a checkpoint message, or take its copy back to it. */
+  undoTurn(chatId: string, messageId: string, mode: UndoMode): void;
   /** Creates a task from the chat and links the chat to it. */
   chatToTask(chatId: string): Promise<Result>;
   /** Starts a chat with another agent carrying the handoff package; returns the new chat's id. */
@@ -345,6 +348,7 @@ export const Channel = {
   postChat: 'pct:post-chat',
   decideApproval: 'pct:decide-approval',
   stopChat: 'pct:stop-chat',
+  undoTurn: 'pct:undo-turn',
   chatToTask: 'pct:chat-to-task',
   handOff: 'pct:hand-off',
   editPlanning: 'pct:edit-planning',

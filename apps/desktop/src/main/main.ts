@@ -1216,6 +1216,9 @@ ipcMain.on(Channel.decideApproval, (_event, chatId: unknown, messageId: unknown,
 ipcMain.on(Channel.stopChat, (_event, chatId: unknown) => {
   if (typeof chatId === 'string') client.stopChat(chatId);
 });
+ipcMain.on(Channel.undoTurn, (_event, chatId: unknown, messageId: unknown, mode: unknown) => {
+  if (typeof chatId === 'string' && typeof messageId === 'string' && (mode === 'undo' || mode === 'go-back')) client.undoTurn(chatId, messageId, mode);
+});
 ipcMain.handle(Channel.chatToTask, (_event, chatId: unknown) => chatToTask(chatId));
 ipcMain.handle(Channel.handOff, (_event, request: HandoffRequest) => {
   if (!request || typeof request.agentId !== 'string') return { ok: false, error: 'Pick an agent to hand off to.' };

@@ -6,12 +6,17 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   agentBranchName,
   canMakeWorktrees,
+  changedBetween,
   commitAll,
   createWorktree,
   defaultWorktreeFolder,
+  headCommit,
+  isAncestor,
   mainCheckout,
   pickBase,
   removeWorktree,
+  resetTo,
+  revertCommit,
   slugify,
   worktreeDiff,
   worktreeReady,
@@ -70,6 +75,7 @@ describe('agent copies', () => {
       truncated: false,
       commits: 0,
       uncommitted: 2,
+      head: baseCommit,
     });
     const diff = await worktreeDiff(folder, where);
     expect(diff).toContain('+v2');
@@ -91,7 +97,7 @@ describe('agent copies', () => {
 
     // Merged into main: nothing left to merge.
     sh(root, 'merge', '-q', '--no-ff', '-m', 'merge', 'agent/jump');
-    expect(await worktreeStatus(folder, where)).toEqual({ files: [], truncated: false, commits: 0, uncommitted: 0 });
+    expect(await worktreeStatus(folder, where)).toMatchObject({ files: [], truncated: false, commits: 0, uncommitted: 0 });
 
     await removeWorktree(root, folder, 'agent/jump', true);
     expect(existsSync(folder)).toBe(false);
@@ -110,5 +116,47 @@ describe('agent copies', () => {
     const folder = join(parent, 'game-agents', 'jump');
     await createWorktree({ root, folder, branch: 'agent/jump', from: base.ref });
     expect(existsSync(join(folder, 'src/task.gd'))).toBe(true);
+  });
+
+  it('undoes one turn’s commit, refuses when later turns changed the same lines, and goes back to a turn and forward again', async () => {
+    const { parent, root } = project();
+    const folder = join(parent, 'game-agents', 'undo');
+    await createWorktree({ root, folder, branch: 'agent/undo', from: 'HEAD' });
+    const start = (await headCommit(folder))!;
+    writeFileSync(join(folder, 'src/player.gd'), 'v2\n');
+    writeFileSync(join(folder, 'src/jump.gd'), 'jump\n');
+    const turn1 = (await commitAll(folder, 'Jump - turn 1'))!;
+    expect(await changedBetween(folder, start, turn1)).toEqual([
+      { path: 'src/jump.gd', change: 'added' },
+      { path: 'src/player.gd', change: 'modified' },
+    ]);
+    writeFileSync(join(folder, 'src/dash.gd'), 'dash\n');
+    const turn2 = (await commitAll(folder, 'Jump - turn 2'))!;
+
+    // Undo turn 1: its files go back, turn 2 stays.
+    const undo = await revertCommit(folder, turn1, 'Undo turn 1');
+    expect(sh(folder, 'show', 'HEAD:src/player.gd')).toBe('v1');
+    expect(existsSync(join(folder, 'src/jump.gd'))).toBe(false);
+    expect(existsSync(join(folder, 'src/dash.gd'))).toBe(true);
+    expect(sh(folder, 'status', '--porcelain')).toBe('');
+    expect(await isAncestor(folder, undo, 'HEAD')).toBe(true);
+    await expect(revertCommit(folder, turn1, 'again')).rejects.toThrow(/already gone/);
+
+    // A later turn changed the same line: nothing changes, and the reason names the file.
+    writeFileSync(join(folder, 'src/dash.gd'), 'dash v2\n');
+    await commitAll(folder, 'Jump - turn 3');
+    const before = await headCommit(folder);
+    await expect(revertCommit(folder, turn2, 'Undo turn 2')).rejects.toThrow(/src\/dash\.gd/);
+    expect(await headCommit(folder)).toBe(before);
+    expect(sh(folder, 'status', '--porcelain')).toBe('');
+
+    // Back to the end of turn 1, then forward again: the backup ref keeps the later turns.
+    await resetTo(folder, turn1, 'refs/pct-backup/agent/undo/1');
+    expect(await headCommit(folder)).toBe(turn1);
+    expect(existsSync(join(folder, 'src/dash.gd'))).toBe(false);
+    expect(await isAncestor(folder, turn2, 'HEAD')).toBe(false);
+    expect(sh(root, 'rev-parse', 'refs/pct-backup/agent/undo/1')).toBe(before);
+    await resetTo(folder, before!, 'refs/pct-backup/agent/undo/2');
+    expect(sh(folder, 'show', 'HEAD:src/dash.gd')).toBe('dash v2');
   });
 });

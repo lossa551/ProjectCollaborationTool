@@ -415,7 +415,8 @@ describe('agent copies (worktrees)', () => {
     expect(copy.base).toBe('main');
     expect(copy.folder.startsWith(`${root}-agents`)).toBe(true);
     expect(copy.files).toEqual([{ path: 'src/player.gd', change: 'modified' }]);
-    expect(copy.uncommitted).toBe(1);
+    // The turn was saved as a checkpoint commit on the agent's branch.
+    expect(copy).toMatchObject({ commits: 1, uncommitted: 0 });
     // The person's own folder and branch are untouched.
     expect(readFileSync(joinPath(root, 'src/player.gd'), 'utf8')).toBe('extends Node\n');
     expect(git('status', '--porcelain')).toBe('');
@@ -489,4 +490,120 @@ describe('agent copies (worktrees)', () => {
     await expect.poll(() => existsSync(bossCopy.folder)).toBe(false);
     expect(git('show', `${bossCopy.branch}:src/boss.gd`)).toBe('boss');
   });
+
+  /** Waits until the chat's agent is idle with this many checkpoints, and returns them. */
+  async function checkpoints(client: SessionClient, chatId: string, count: number) {
+    const state = await waitFor(
+      client,
+      (s) =>
+        s.chats.find((c) => c.id === chatId)?.state === 'idle' &&
+        (s.messages[chatId] ?? []).filter((m) => m.kind === 'checkpoint').length === count,
+    );
+    return state.messages[chatId]!.filter((m) => m.kind === 'checkpoint');
+  }
+
+  it('saves each turn that changed files as a checkpoint, and undoes one turn for everyone to see', async () => {
+    const { martin, profile, model, root } = await setup([
+      write('t1', 'src/player.gd', 'extends Node2D\n'),
+      write('t2', 'src/jump.gd', 'jump\n'),
+      { text: 'Jump done.', toolCalls: [], stop: 'end' },
+      { text: 'Nothing to change.', toolCalls: [], stop: 'end' },
+      write('t3', 'src/dash.gd', 'dash\n'),
+      { text: 'Dash done.', toolCalls: [], stop: 'end' },
+      { text: 'Understood.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const friend = await join('Friend');
+    await waitFor(friend, (s) => s.status === 'connected');
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    friend.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    const [first] = await checkpoints(martin, chatId, 1);
+    expect(first!.checkpoint).toMatchObject({ turn: 1, undone: null, files: [{ path: 'src/jump.gd' }, { path: 'src/player.gd' }] });
+    martin.postChat(chatId, { kind: 'text', text: 'Anything else?' });
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Nothing to change.') && s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    martin.postChat(chatId, { kind: 'text', text: 'Add a dash' });
+    const [, second] = await checkpoints(martin, chatId, 2);
+    // A turn without changes gets no checkpoint, so numbers count turns that changed files.
+    expect(second!.checkpoint).toMatchObject({ turn: 2, files: [{ path: 'src/dash.gd', change: 'added' }] });
+    const copy = (await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.worktree?.head === second!.checkpoint!.commit)).chats.find((c) => c.id === chatId)!.worktree!;
+    const gitCopy = gitIn(copy.folder);
+    expect(gitCopy('log', '--format=%s', '-2')).toBe('Jump - turn 2\nJump - turn 1');
+    expect(martin.getState().locks.map((l) => l.path).sort()).toEqual(['src/dash.gd', 'src/jump.gd', 'src/player.gd']);
+
+    friend.undoTurn(chatId, first!.id, 'undo');
+    const undone = await waitFor(martin, (s) => !!s.messages[chatId]?.find((m) => m.id === first!.id)?.checkpoint?.undone);
+    // Every file turn 1 changed is back, and nothing else moved.
+    expect(readFileSync(joinPath(copy.folder, 'src/player.gd'), 'utf8')).toBe('extends Node\n');
+    expect(existsSync(joinPath(copy.folder, 'src/jump.gd'))).toBe(false);
+    expect(readFileSync(joinPath(copy.folder, 'src/dash.gd'), 'utf8')).toBe('dash\n');
+    expect(gitCopy('status', '--porcelain')).toBe('');
+    expect(undone.messages[chatId]!.find((m) => m.id === first!.id)!.checkpoint!.undone).toMatchObject({ by: 'Friend', how: 'undo' });
+    expect(undone.messages[chatId]!.find((m) => m.id === second!.id)!.checkpoint!.undone).toBeNull();
+    // Both people see it in the chat and the activity feed, and only that turn's locks are freed.
+    for (const client of [martin, friend]) {
+      const state = await waitFor(client, (s) => s.activity.some((a) => a.text.startsWith('undid turn 1 of "Jump"')) && s.locks.length === 1);
+      expect(state.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.startsWith('Friend undid turn 1. Back to how they were before it: src/jump.gd, src/player.gd'))).toBe(true);
+      expect(state.activity.find((a) => a.text.startsWith('undid turn 1'))!.actorName).toBe('Friend');
+      expect(state.locks.map((l) => l.path)).toEqual(['src/dash.gd']);
+    }
+
+    // The agent hears about it with the next message.
+    martin.postChat(chatId, { kind: 'text', text: 'Carry on' });
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Understood.'));
+    const prompt = model.requests.at(-1)!.messages.at(-1)!;
+    expect(prompt).toMatchObject({ role: 'user' });
+    expect((prompt as { text: string }).text).toContain('Friend undid your turn 1');
+  });
+
+  it('goes back to a checkpoint after confirming, and can go forward to a later one again', async () => {
+    const { martin, profile, root } = await setup([
+      write('t1', 'src/jump.gd', 'jump\n'),
+      { text: 'Jump done.', toolCalls: [], stop: 'end' },
+      write('t2', 'src/dash.gd', 'dash\n'),
+      { text: 'Dash done.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Moves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    await checkpoints(martin, chatId, 1);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a dash' });
+    const [first, second] = await checkpoints(martin, chatId, 2);
+    const folder = (await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.worktree?.head === second!.checkpoint!.commit)).chats.find((c) => c.id === chatId)!.worktree!.folder;
+
+    martin.undoTurn(chatId, first!.id, 'go-back');
+    let state = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.worktree?.head === first!.checkpoint!.commit);
+    expect(existsSync(joinPath(folder, 'src/jump.gd'))).toBe(true);
+    expect(existsSync(joinPath(folder, 'src/dash.gd'))).toBe(false);
+    state = await waitFor(martin, (s) => !!s.messages[chatId]?.find((m) => m.id === second!.id)?.checkpoint?.undone);
+    expect(state.messages[chatId]!.find((m) => m.id === second!.id)!.checkpoint!.undone).toMatchObject({ by: 'Martin', how: 'go-back' });
+    expect(state.messages[chatId]!.find((m) => m.id === first!.id)!.checkpoint!.undone).toBeNull();
+    await waitFor(martin, (s) => s.locks.map((l) => l.path).join() === 'src/jump.gd');
+
+    martin.undoTurn(chatId, second!.id, 'go-back');
+    await waitFor(martin, (s) => s.messages[chatId]?.find((m) => m.id === second!.id)?.checkpoint?.undone === null);
+    expect(readFileSync(joinPath(folder, 'src/dash.gd'), 'utf8')).toBe('dash\n');
+    await waitFor(martin, (s) => s.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.startsWith('Martin took the copy back to the end of turn 2.')));
+  });
+
+  it('turns down an undo while the agent is not running', async () => {
+    const { martin, profile, root } = await setup([write('t1', 'src/jump.gd', 'jump\n'), { text: 'Done.', toolCalls: [], stop: 'end' }]);
+    commitProject(root);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    const [first] = await checkpoints(martin, chatId, 1);
+    for (const runner of runners.splice(0)) await runner.stop();
+    for (const client of clients.filter((c) => c.getState().you?.kind === 'agent')) client.disconnect();
+    await waitFor(martin, (s) => !s.participants.some((p) => p.kind === 'agent'));
+    martin.undoTurn(chatId, first!.id, 'undo');
+    const state = await waitFor(martin, (s) => s.error?.code === 'conflict');
+    expect(state.error!.message).toMatch(/Builder is not running\. Start it on Martin’s PC/);
+  });
 });
+

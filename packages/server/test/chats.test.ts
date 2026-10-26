@@ -184,6 +184,7 @@ describe('agent chats', () => {
       truncated: false,
       commits: 0,
       uncommitted: 1,
+      head: null,
       updatedAt: 1,
     };
     agent.setChatWorktree(chatId, copy);

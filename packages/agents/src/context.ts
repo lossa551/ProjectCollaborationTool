@@ -49,7 +49,8 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
         (worktree
           ? `You run on ${startedBy}'s PC, in your own copy of the project (a git worktree on branch ${worktree.branch}` +
             `${worktree.base ? `, started from ${worktree.base}` : ''}). Your changes stay in this copy until a person reviews and ` +
-            'merges them; do not commit, switch branches or merge yourself. '
+            'merges them; do not commit, switch branches or merge yourself. The app saves each of your turns as a commit, so people ' +
+            'can undo a turn; when they do, you are told which files went back. '
           : `You run on ${startedBy}'s PC, in their project folder. `) +
         'People in the session can read this chat and post in it; messages from them start with their name.',
       agent.responsibilities.trim() ? `Your responsibilities:\n${agent.responsibilities.trim()}` : '',

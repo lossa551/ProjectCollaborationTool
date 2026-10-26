@@ -19,6 +19,7 @@ import type {
   SessionInfo,
   Task,
   TaskStage,
+  UndoMode,
   Workspace,
 } from './model.js';
 import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
@@ -454,12 +455,17 @@ export class SessionClient {
   }
 
   /** Reports the agent's own copy of the project for a chat; null once it is gone. */
-  setChatWorktree(chatId: string, worktree: ChatWorktree | null, note?: string): void {
-    this.send({ type: 'chat.worktree', chatId, worktree, ...(note && { note: note.slice(0, 300) }) });
+  setChatWorktree(chatId: string, worktree: ChatWorktree | null, note?: string, noteBy?: string): void {
+    this.send({ type: 'chat.worktree', chatId, worktree, ...(note && { note: note.slice(0, 300) }), ...(note && noteBy && { noteBy: noteBy.slice(0, 64) }) });
   }
 
   stopChat(chatId: string): void {
     this.send({ type: 'chat.stop', chatId });
+  }
+
+  /** Asks the chat's agent to undo the turn of a checkpoint message, or take its copy back to it. */
+  undoTurn(chatId: string, messageId: string, mode: UndoMode): void {
+    this.send({ type: 'chat.undo', chatId, messageId, mode });
   }
 
   private open(): void {
@@ -669,6 +675,7 @@ export class SessionClient {
         });
         break;
       case 'chat.stopped':
+      case 'chat.undo':
         break;
       case 'doc.state': {
         const doc = this.docs[message.docId];
