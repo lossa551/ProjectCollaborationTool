@@ -44,7 +44,7 @@ function project() {
   return { parent, root };
 }
 
-describe('agent copies', () => {
+describe('agent copies', { timeout: 30_000 }, () => {
   it('names branches and folders after the task, short enough for Windows', () => {
     expect(slugify('Double jump: the "air" part!')).toBe('double-jump-the-air-part');
     expect(slugify('???')).toBe('work');

@@ -17,10 +17,10 @@ afterEach(async () => {
   for (const client of clients.splice(0)) client.disconnect();
   await server?.close();
   server = null;
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
-function waitFor(client: SessionClient, check: (state: SessionState) => boolean, timeoutMs = 4000) {
+function waitFor(client: SessionClient, check: (state: SessionState) => boolean, timeoutMs = 15_000) {
   return new Promise<SessionState>((resolve, reject) => {
     if (check(client.getState())) return resolve(client.getState());
     const timer = setTimeout(() => {
@@ -371,7 +371,8 @@ describe('agent runner', () => {
   });
 });
 
-describe('agent copies (worktrees)', () => {
+// Git starts slowly on Windows, and every turn here runs it a few times.
+describe('agent copies (worktrees)', { timeout: 30_000 }, () => {
   const gitIn = (cwd: string) => (...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
 
   /** A project folder with one commit on main. */
