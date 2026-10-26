@@ -3,6 +3,7 @@ import { STAGE_LABELS, type Activity, type ChatInfo, type Lock, type Participant
 import { filesOutsideScope, type Overlap } from './overlap.js';
 import { samePath } from './paths.js';
 import { featureStatus, plannedTasks, type FeatureState } from './planning.js';
+import { issuesToClose, newIssues } from './issues.js';
 
 // The Home screen (issue #34): what needs you, who is doing what, the state of
 // the features, and what changed while you were away. Worked out here, in one
@@ -25,7 +26,7 @@ export function approvalActivity(action: string): string {
   return `${APPROVAL_ACTIVITY_PREFIX}${action}`;
 }
 
-export type NeedKind = 'approval' | 'lock-wait' | 'pull' | 'outside-scope' | 'overlap' | 'abandoned-lock' | 'plan';
+export type NeedKind = 'approval' | 'lock-wait' | 'pull' | 'outside-scope' | 'overlap' | 'abandoned-lock' | 'plan' | 'close-issue';
 
 /** Where you act on an item. */
 export type NeedTarget =
@@ -33,6 +34,7 @@ export type NeedTarget =
   | { screen: 'task'; taskId: string }
   | { screen: 'planning'; itemId: string }
   | { screen: 'overlaps' }
+  | { screen: 'issues' }
   | { screen: 'url'; url: string };
 
 export interface NeedItem {
@@ -44,12 +46,16 @@ export interface NeedItem {
   detail: string | null;
   target: NeedTarget;
   /** Done in place on Home instead of going somewhere. */
-  act: { type: 'release-lock' | 'recover-lock'; lockId: string } | null;
+  act:
+    | { type: 'release-lock' | 'recover-lock'; lockId: string }
+    /** Closing needs the person to confirm the comment first; see issuesToClose. */
+    | { type: 'close-issue'; number: number; comment: string; featureId: string }
+    | null;
 }
 
 type OverviewInput = Pick<
   SessionState,
-  'participants' | 'tasks' | 'locks' | 'github' | 'workspaces' | 'agents' | 'chats' | 'messages' | 'planning'
+  'participants' | 'tasks' | 'locks' | 'github' | 'workspaces' | 'agents' | 'chats' | 'messages' | 'planning' | 'issueMarks'
 >;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -228,6 +234,18 @@ export function needsYou(input: OverviewInput, youId: string | null, overlaps: O
     });
   }
 
+  for (const close of issuesToClose(input)) {
+    items.push({
+      id: `close-issue:${close.issue.number}`,
+      kind: 'close-issue',
+      tone: 'warn',
+      text: `"${close.feature.title}" is done: close issue #${close.issue.number}?`,
+      detail: close.issue.title,
+      target: { screen: 'url', url: close.issue.url },
+      act: { type: 'close-issue', number: close.issue.number, comment: close.comment, featureId: close.feature.id },
+    });
+  }
+
   return items;
 }
 
@@ -304,7 +322,7 @@ export interface DigestLine {
 }
 
 export interface DigestGroup {
-  key: 'stages' | 'pulls' | 'criteria' | 'agents' | 'plans' | 'memory' | 'people';
+  key: 'stages' | 'pulls' | 'issues' | 'criteria' | 'agents' | 'plans' | 'memory' | 'people';
   title: string;
   lines: DigestLine[];
 }
@@ -350,6 +368,15 @@ export function sinceLastHere(
         text: `#${p.number} ${p.title}: ${p.state === 'merged' ? 'merged' : pullProblems(p).join(', ')}`,
         target: { screen: 'url', url: p.url },
       })),
+    });
+  }
+
+  const opened = newIssues(input, since);
+  if (opened.length > 0) {
+    groups.push({
+      key: 'issues',
+      title: 'New issues',
+      lines: opened.map((i) => ({ text: `#${i.number} ${i.title} (${i.author})`, target: { screen: 'url', url: i.url } })),
     });
   }
 

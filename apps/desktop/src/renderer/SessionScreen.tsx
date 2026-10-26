@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { chatWorkspaces, findOverlaps, needsYou, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
+import { chatWorkspaces, findOverlaps, issuesOfTask, needsYou, untriagedIssues, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
@@ -7,6 +7,7 @@ import { Avatar } from './Avatar';
 import { Board } from './Board';
 import { GitHubScreen, OverlapsScreen, WorkspaceCard } from './GitHub';
 import { HomeScreen } from './Home';
+import { IssuesScreen } from './Issues';
 import { LocksScreen } from './Locks';
 import { MemoryScreen } from './Memory';
 import { PlanningScreen } from './Planning';
@@ -26,7 +27,7 @@ const NAV: { label: string; view: View }[] = [
   { label: 'Memory', view: 'memory' },
 ];
 
-type CodeTab = 'github' | 'locks' | 'overlaps';
+export type CodeTab = 'github' | 'issues' | 'locks' | 'overlaps';
 
 const STATUS_LABEL = {
   idle: 'Not connected',
@@ -126,6 +127,11 @@ export function SessionScreen({ state }: { state: AppState }) {
   // One "needs you" list for the Home nav count, Home itself and (later) notifications.
   const needs = useMemo(() => needsYou(session, youId, overlaps), [session, youId, overlaps]);
   const approvals = needs.filter((n) => n.kind === 'approval').length;
+  const toTriage = useMemo(() => untriagedIssues(session).length, [session.github, session.planning, session.tasks, session.issueMarks]);
+  const openFeature = (id: string) => {
+    setPlanFocus({ id, filter: null });
+    setView('planning');
+  };
   const doing = useMemo(() => new Map(whoIsDoing(session).map((d) => [d.participant.id, d])), [session]);
 
   const go = (target: NeedTarget) => {
@@ -138,7 +144,8 @@ export function SessionScreen({ state }: { state: AppState }) {
         setPlanFocus({ id: target.itemId, filter: null });
         return setView('planning');
       case 'overlaps':
-        setCodeTab('overlaps');
+      case 'issues':
+        setCodeTab(target.screen);
         return setView('code');
       case 'url':
         window.open(target.url);
@@ -281,6 +288,9 @@ export function SessionScreen({ state }: { state: AppState }) {
               <button className={codeTab === 'github' ? 'nav active' : 'nav'} onClick={() => setCodeTab('github')}>
                 GitHub
               </button>
+              <button className={codeTab === 'issues' ? 'nav active' : 'nav'} onClick={() => setCodeTab('issues')}>
+                Issues{toTriage > 0 && <span className="nav-count" title="Not linked or triaged">{toTriage}</span>}
+              </button>
               <button className={codeTab === 'locks' ? 'nav active' : 'nav'} onClick={() => setCodeTab('locks')}>
                 Locks{session.locks.some((l) => l.abandoned) && <span className="nav-count">{session.locks.filter((l) => l.abandoned).length}</span>}
               </button>
@@ -290,6 +300,8 @@ export function SessionScreen({ state }: { state: AppState }) {
             </div>
             {codeTab === 'github' ? (
               <GitHubScreen state={state} participants={participants} onOpenTask={setSelectedId} />
+            ) : codeTab === 'issues' ? (
+              <IssuesScreen state={state} onOpenFeature={openFeature} onOpenTask={setSelectedId} />
             ) : codeTab === 'overlaps' ? (
               <OverlapsScreen overlaps={overlaps} youId={youId} />
             ) : (
@@ -322,6 +334,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           agents={session.agents}
           onOpenChat={showChat}
           planning={session.planning}
+          issues={issuesOfTask(session, selected)}
           youId={youId}
           editable={editable}
           online={online}

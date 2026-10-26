@@ -19,6 +19,7 @@ import {
   type Task,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
+import { PlanIssues } from './Issues';
 import { LiveText } from './LiveText';
 import { RoadmapView } from './Roadmap';
 
@@ -287,6 +288,8 @@ function PlanEditor({
           )}
         </label>
       ))}
+
+      {item.kind !== 'note' && <PlanIssues item={item} state={state} />}
 
       {!isFeature && (
         <button className="secondary" disabled={!editable} onClick={() => window.pct.editPlanning({ op: 'set', id: item.id, kind: 'feature' })}>

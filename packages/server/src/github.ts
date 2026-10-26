@@ -4,6 +4,7 @@ import {
   type CheckRun,
   type CheckState,
   type GitHubStatus,
+  type Issue,
   type PullRequest,
   type RepoRef,
 } from '@pct/shared';
@@ -29,6 +30,10 @@ export interface GitHubOptions {
 /** Most open pull requests looked at in detail. */
 const MAX_OPEN_PULLS = 30;
 const CLOSED_PULLS = 20;
+/** Open issues are read 100 to a page, up to this many pages. */
+const ISSUE_PAGES = 5;
+/** Issue text kept in the status, enough to start a feature from. */
+const ISSUE_BODY_KEPT = 4000;
 
 const FAILED = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure', 'stale']);
 
@@ -36,6 +41,7 @@ export class GitHubError extends Error {
   constructor(
     message: string,
     readonly retryAt: number | null = null,
+    readonly status: number | null = null,
   ) {
     super(message);
   }
@@ -84,6 +90,20 @@ interface ApiPull {
   mergeable?: boolean | null;
   requested_reviewers?: unknown[];
   requested_teams?: unknown[];
+}
+interface ApiIssue {
+  number: number;
+  title: string;
+  html_url: string;
+  body: string | null;
+  user: { login: string } | null;
+  labels: (string | { name?: string; color?: string | null })[];
+  assignees?: { login: string }[] | null;
+  comments: number;
+  created_at: string;
+  updated_at: string;
+  /** Set when the "issue" is a pull request; those are left out. */
+  pull_request?: unknown;
 }
 interface ApiReview {
   user: { login: string } | null;
@@ -231,6 +251,7 @@ export class GitHubWatcher {
     const openPulls = await this.get<ApiPull[]>(`${base}/pulls?state=open&sort=updated&direction=desc&per_page=${MAX_OPEN_PULLS}`);
     const closedPulls = await this.get<ApiPull[]>(`${base}/pulls?state=closed&sort=updated&direction=desc&per_page=${CLOSED_PULLS}`);
     const defaultSha = apiBranches.find((b) => b.name === defaultBranch)?.commit.sha ?? '';
+    const issues = await this.openIssues(base);
 
     const pulls: PullRequest[] = [];
     for (const pull of openPulls) pulls.push(await this.openPull(base, pull, defaultSha));
@@ -264,7 +285,77 @@ export class GitHubWatcher {
       fetchedAt: Date.now(),
       branches,
       pulls,
+      issues,
     };
+  }
+
+  /** Open issues, most recently updated first; none when the repository has issues turned off. */
+  private async openIssues(base: string): Promise<Issue[]> {
+    const issues: Issue[] = [];
+    for (let page = 1; page <= ISSUE_PAGES; page++) {
+      let batch: ApiIssue[];
+      try {
+        batch = await this.get<ApiIssue[]>(`${base}/issues?state=open&sort=updated&direction=desc&per_page=100&page=${page}`);
+      } catch (error) {
+        if (error instanceof GitHubError && (error.status === 410 || error.status === 404)) return issues;
+        throw error;
+      }
+      for (const issue of batch) if (!issue.pull_request) issues.push(issueOf(issue));
+      if (batch.length < 100) break;
+    }
+    return issues;
+  }
+
+  /** Opens an issue; needs a token that can write issues. */
+  async createIssue(title: string, body: string): Promise<{ number: number; url: string }> {
+    const repo = this.writableRepo();
+    const created = await this.write<ApiIssue>('POST', `/repos/${repo.owner}/${repo.name}/issues`, { title, body });
+    void this.refresh();
+    return { number: created.number, url: created.html_url };
+  }
+
+  /** Comments on an issue, then closes it as completed. */
+  async closeIssue(number: number, comment: string): Promise<{ number: number; url: string }> {
+    const repo = this.writableRepo();
+    const path = `/repos/${repo.owner}/${repo.name}/issues/${number}`;
+    await this.write('POST', `${path}/comments`, { body: comment });
+    const closed = await this.write<ApiIssue>('PATCH', path, { state: 'closed', state_reason: 'completed' });
+    void this.refresh();
+    return { number: closed.number, url: closed.html_url };
+  }
+
+  private writableRepo(): RepoRef {
+    if (!this.repo) throw new GitHubError('Link the session to a GitHub repository first.');
+    if (!this.token) throw new GitHubError('Changing issues needs a GitHub token on the host. The host can add one under Code, GitHub.');
+    return this.repo;
+  }
+
+  private async write<T>(method: 'POST' | 'PATCH', path: string, body: unknown): Promise<T> {
+    let response: Response;
+    try {
+      response = await this.fetch(`${this.apiUrl}${path}`, {
+        method,
+        headers: {
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+          'user-agent': 'ProjectCollaborationTool',
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.token}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(20_000),
+      });
+    } catch {
+      throw new GitHubError('Could not reach GitHub.');
+    }
+    if (response.ok) return (await response.json()) as T;
+    const repo = `${this.repo!.owner}/${this.repo!.name}`;
+    if (response.status === 403 || response.status === 404) {
+      throw new GitHubError(`The host's GitHub token can't change issues in ${repo}. Give it "Issues: read and write" access.`, null, response.status);
+    }
+    if (response.status === 410) throw new GitHubError(`Issues are turned off for ${repo}.`, null, 410);
+    if (response.status === 422) throw new GitHubError('GitHub did not accept that issue. Check the title.', null, 422);
+    throw this.failure(response);
   }
 
   private async openPull(base: string, pull: ApiPull, defaultSha: string): Promise<PullRequest> {
@@ -377,9 +468,11 @@ export class GitHubWatcher {
         this.token
           ? `Can't see ${repo} on GitHub. Check the name, and that the host's token has access to it.`
           : `Can't find ${repo} on GitHub. If it is private, the host needs to add a GitHub token.`,
+        null,
+        response.status,
       );
     }
-    return new GitHubError(`GitHub answered with an error (${response.status}).`);
+    return new GitHubError(`GitHub answered with an error (${response.status}).`, null, response.status);
   }
 }
 
@@ -399,6 +492,21 @@ function summary(pull: ApiPull): PullRequest {
     checkRuns: [],
     files: [],
     updatedAt: Date.parse(pull.updated_at) || 0,
+  };
+}
+
+function issueOf(issue: ApiIssue): Issue {
+  return {
+    number: issue.number,
+    title: issue.title,
+    url: issue.html_url,
+    author: issue.user?.login ?? 'unknown',
+    labels: issue.labels.flatMap((l) => (typeof l === 'string' ? [{ name: l, color: '888888' }] : l.name ? [{ name: l.name, color: l.color || '888888' }] : [])),
+    assignees: (issue.assignees ?? []).map((a) => a.login),
+    body: (issue.body ?? '').slice(0, ISSUE_BODY_KEPT),
+    comments: issue.comments,
+    createdAt: Date.parse(issue.created_at) || 0,
+    updatedAt: Date.parse(issue.updated_at) || 0,
   };
 }
 
@@ -436,9 +544,9 @@ function stripTime(status: GitHubStatus) {
 }
 
 /** Lines for the activity feed about what changed on GitHub between two polls. */
-export function describeGitHubChanges(previous: GitHubStatus, next: GitHubStatus): { text: string; branch: string }[] {
+export function describeGitHubChanges(previous: GitHubStatus, next: GitHubStatus): { text: string; branch: string | null }[] {
   if (!previous.fetchedAt || !sameRepo(previous.repo, next.repo) || !next.fetchedAt) return [];
-  const lines: { text: string; branch: string }[] = [];
+  const lines: { text: string; branch: string | null }[] = [];
   const before = new Map(previous.pulls.map((p) => [p.number, p]));
   for (const pull of next.pulls) {
     const old = before.get(pull.number);
@@ -463,6 +571,12 @@ export function describeGitHubChanges(previous: GitHubStatus, next: GitHubStatus
     if (old.review !== pull.review && (pull.review === 'approved' || pull.review === 'changes_requested')) {
       lines.push({ text: `${name} ${pull.review === 'approved' ? 'was approved' : 'needs changes'}`, branch: pull.branch });
     }
+  }
+  const known = new Set(previous.issues.map((i) => i.number));
+  for (const issue of next.issues) {
+    // Only ones opened since the last poll; an old issue that was reopened or relabelled is not news.
+    if (known.has(issue.number) || issue.createdAt <= previous.fetchedAt) continue;
+    lines.push({ text: `${issue.author} opened issue #${issue.number} "${issue.title}"`, branch: null });
   }
   return lines;
 }

@@ -2548,3 +2548,89 @@ input.milestone-date {
   background: rgba(229, 96, 79, 0.14);
   color: #f3c3bc;
 }
+
+/* GitHub issues (issue #43) */
+
+.issue-head {
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0;
+}
+
+.issue-head h2 {
+  margin: 0;
+}
+
+.issue-head select {
+  width: auto;
+}
+
+.issue-head label {
+  align-items: center;
+  gap: 6px;
+}
+
+.gh-list li.issue-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.issue-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.issue-line select {
+  width: auto;
+  max-width: 320px;
+}
+
+.issue-title {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.issue-title:hover {
+  text-decoration: underline;
+}
+
+.issue-label {
+  font-size: 11px;
+  padding: 0 7px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.issue-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+}
+
+.issue-chip {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.plan-issues .gh-list {
+  margin: 6px 0;
+}
+
+.plan-issues .gh-list a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.plan-issues select {
+  width: auto;
+  max-width: 360px;
+}

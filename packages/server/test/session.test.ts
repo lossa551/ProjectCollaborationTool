@@ -114,3 +114,29 @@ describe('session server', () => {
     expect(await res.json()).toEqual({ ok: true, protocol: PROTOCOL_VERSION, session: 'Health' });
   });
 });
+
+describe('GitHub issues through the session', () => {
+  it('opens an issue for a person with the host token, and refuses agents', async () => {
+    const posts: string[] = [];
+    const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        posts.push(new URL(String(input)).pathname);
+        return Response.json({ number: 9, html_url: 'https://github.com/martin/game/issues/9' }, { status: 201 });
+      }
+      return Response.json({ message: 'Not Found' }, { status: 404 });
+    }) as typeof globalThis.fetch;
+    server = await startServer({ port: 0, host: '127.0.0.1', github: { token: 'tok', fetch, apiUrl: 'https://api.test' } });
+    const martin = join('Martin');
+    await waitFor(martin, (s) => s.status === 'connected');
+    martin.linkRepo({ owner: 'martin', name: 'game' });
+
+    expect(await martin.createIssue('Wall jump', 'Plan')).toEqual({ ok: true, number: 9, url: 'https://github.com/martin/game/issues/9' });
+    expect(posts).toEqual(['/repos/martin/game/issues']);
+    await waitFor(martin, (s) => s.activity.some((a) => a.text === 'opened issue #9 "Wall jump" on GitHub'));
+
+    const agent = join('Builder', server.secret, 'agent');
+    await waitFor(agent, (s) => s.status === 'connected');
+    expect(await agent.closeIssue(9, 'done')).toEqual({ ok: false, error: 'Only people change issues on GitHub.' });
+    expect(posts).toHaveLength(1);
+  });
+});

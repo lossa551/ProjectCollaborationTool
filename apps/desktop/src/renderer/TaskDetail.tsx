@@ -12,6 +12,7 @@ import {
   type ChatInfo,
   type PlanItem,
   type GitHubStatus,
+  type Issue,
   type Lock,
   type LockRules,
   type Overlap,
@@ -23,6 +24,7 @@ import {
 import { WorktreeSummary } from './AgentChat';
 import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
+import { IssueChips } from './Issues';
 import { LockForm, LockList } from './Locks';
 
 /** The folder notes in your project folder, read again when a workspace changes. */
@@ -63,6 +65,7 @@ export function TaskDetail({
   agents,
   onOpenChat,
   planning,
+  issues,
   youId,
   editable,
   online,
@@ -70,6 +73,8 @@ export function TaskDetail({
 }: {
   task: Task;
   planning: PlanItem[];
+  /** Open GitHub issues linked to the task. */
+  issues: Issue[];
   tasks: Task[];
   participants: Participant[];
   locks: Lock[];
@@ -221,6 +226,11 @@ export function TaskDetail({
         )}
       </form>
       {feature && <p className="small">Part of the feature “{feature.title}” in the planning space.</p>}
+      {issues.length > 0 && (
+        <p className="small">
+          GitHub issues: <IssueChips issues={issues} />
+        </p>
+      )}
       <CriteriaSection task={task} editable={editable} />
       {task.branch && (
         <section>

@@ -90,6 +90,26 @@ export const PlanItem = z.object({
 export type PlanItem = z.infer<typeof PlanItem>;
 
 const ItemId = z.string().min(8).max(64);
+export const IssueNumber = z.number().int().positive().max(100_000_000);
+
+/** What an issue can be linked to. */
+export const IssueLinkKind = z.enum(['feature', 'task']);
+export type IssueLinkKind = z.infer<typeof IssueLinkKind>;
+
+/**
+ * What people noted about one issue. Links made by hand are true; false undoes
+ * a link that a "#123" mention would make. Kept in the planning document's
+ * 'issues' map, one key per link, so concurrent picks merge.
+ */
+export interface IssueMarks {
+  /** "feature:<id>" or "task:<id>". */
+  links: Record<string, boolean>;
+  triaged: { by: string; at: number } | null;
+  /** Someone chose not to close it although its feature is done. */
+  keepOpen: boolean;
+}
+
+export const linkKey = (kind: IssueLinkKind, id: string) => `${kind}:${id}`;
 const MilestoneId = z.string().min(3).max(64);
 
 /** One change to the planning space; applied to the Yjs document by whoever makes it. */
@@ -119,6 +139,18 @@ export const PlanOp = z.discriminatedUnion('op', [
     order: z.number().finite().optional(),
   }),
   z.object({ op: z.literal('milestone-delete'), id: MilestoneId }),
+  /**
+   * Notes on a GitHub issue (issue #43): link it to a feature or task (or undo
+   * a link its "#123" mention made), mark it triaged, or keep it open after
+   * its feature is done.
+   */
+  z.object({
+    op: z.literal('issue'),
+    number: IssueNumber,
+    link: z.object({ kind: IssueLinkKind, id: ItemId, linked: z.boolean() }).optional(),
+    triaged: z.boolean().optional(),
+    keepOpen: z.boolean().optional(),
+  }),
 ]);
 export type PlanOp = z.infer<typeof PlanOp>;
 
@@ -201,11 +233,47 @@ function applyMilestoneOp(doc: Y.Doc, op: Extract<PlanOp, { op: 'milestone' | 'm
   return true;
 }
 
+// One flat map of "<number>:<field>" keys: a nested map created by two people
+// at once would keep only one of them, and so lose the other's links.
+const issueMarksOf = (doc: Y.Doc) => doc.getMap<unknown>('issues');
+
+/** Notes on GitHub issues, by issue number. */
+export function readIssueMarks(doc: Y.Doc): Record<number, IssueMarks> {
+  const out: Record<number, IssueMarks> = {};
+  for (const [key, value] of issueMarksOf(doc).entries()) {
+    const match = /^(\d+):(.+)$/.exec(key);
+    if (!match) continue;
+    const number = Number(match[1]);
+    const field = match[2]!;
+    const marks = (out[number] ??= { links: {}, triaged: null, keepOpen: false });
+    if (/^(feature|task):/.test(field) && typeof value === 'boolean') marks.links[field] = value;
+    else if (field === 'keepOpen') marks.keepOpen = value === true;
+    else if (field === 'triaged' && isTriage(value)) marks.triaged = { by: value.by, at: value.at };
+  }
+  return out;
+}
+
+const isTriage = (value: unknown): value is { by: string; at: number } =>
+  typeof value === 'object' && value !== null && typeof (value as { by?: unknown }).by === 'string' && typeof (value as { at?: unknown }).at === 'number';
+
+function applyIssueOp(doc: Y.Doc, op: Extract<PlanOp, { op: 'issue' }>, by: string, now: number) {
+  const map = issueMarksOf(doc);
+  const key = (field: string) => `${op.number}:${field}`;
+  if (op.link) map.set(key(linkKey(op.link.kind, op.link.id)), op.link.linked);
+  if (op.triaged === true) map.set(key('triaged'), { by, at: now });
+  else if (op.triaged === false) map.delete(key('triaged'));
+  if (op.keepOpen !== undefined) map.set(key('keepOpen'), op.keepOpen);
+}
+
 /** Applies a change; returns false when the item it refers to is gone. */
 export function applyPlanOp(doc: Y.Doc, op: PlanOp, by: string, now = Date.now()): boolean {
   const items = itemsOf(doc, 'planning');
   let ok = true;
   doc.transact(() => {
+    if (op.op === 'issue') {
+      applyIssueOp(doc, op, by, now);
+      return;
+    }
     if (op.op === 'milestone' || op.op === 'milestone-delete') {
       ok = applyMilestoneOp(doc, op, now);
       return;

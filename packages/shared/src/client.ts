@@ -26,7 +26,7 @@ import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import type { BloatReport } from './bloat.js';
 import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
 import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
-import { DEFAULT_MILESTONES, applyPlanOp, readMilestones, readPlanning, type Milestone, type PlanItem, type PlanOp } from './planning.js';
+import { DEFAULT_MILESTONES, applyPlanOp, readIssueMarks, readMilestones, readPlanning, type IssueMarks, type Milestone, type PlanItem, type PlanOp } from './planning.js';
 import {
   CloseCode,
   PROTOCOL_VERSION,
@@ -67,6 +67,8 @@ export interface SessionState {
   planning: PlanItem[];
   /** The roadmap's milestones, in order. */
   milestones: Milestone[];
+  /** What people noted about GitHub issues: links, triage, keep open. By issue number. */
+  issueMarks: Record<number, IssueMarks>;
   /** Project memory: decisions, conventions, known issues and plans. */
   memory: MemoryEntry[];
   /** The last bloat check anyone ran. */
@@ -122,11 +124,18 @@ const INITIAL_STATE: SessionState = {
   messages: {},
   planning: [],
   milestones: DEFAULT_MILESTONES,
+  issueMarks: {},
   memory: [],
   bloat: null,
   pending: 0,
   error: null,
 };
+
+/** What came of a change to a GitHub issue. */
+export type IssueResult = { ok: true; number: number; url: string } | { ok: false; error: string };
+
+/** How long to wait for GitHub through the server before giving up. */
+const ISSUE_TIMEOUT_MS = 45_000;
 
 /** How many messages the client keeps per chat. */
 export const CHAT_MESSAGE_LIMIT = 500;
@@ -177,6 +186,8 @@ export class SessionClient {
   private docs = {} as Record<DocId, Y.Doc>;
   /** Documents the server has sent its state for since this connection opened; live edits go out only for these. */
   private readonly synced = new Set<DocId>();
+  /** GitHub issue requests waiting for the server's answer, by request id. */
+  private readonly issueRequests = new Map<string, (result: IssueResult) => void>();
 
   constructor(options: SessionClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
@@ -225,6 +236,7 @@ export class SessionClient {
       }),
       planning: readPlanning(this.docs.planning),
       milestones: readMilestones(this.docs.planning),
+      issueMarks: readIssueMarks(this.docs.planning),
       memory: readMemory(this.docs.memory),
       pending: this.queue.length,
       status: 'connecting',
@@ -253,6 +265,7 @@ export class SessionClient {
     const socket = this.socket;
     this.socket = null;
     socket?.close(1000, 'leaving');
+    this.failIssueRequests();
     if (this.state.status !== 'idle') this.setState({ ...this.state, status: 'closed' });
   }
 
@@ -348,8 +361,10 @@ export class SessionClient {
   }
 
   private refreshDoc(id: DocId): void {
-    if (id === 'planning') this.setState({ ...this.state, planning: readPlanning(this.docs.planning), milestones: readMilestones(this.docs.planning) });
-    else this.setState({ ...this.state, memory: readMemory(this.docs.memory) });
+    if (id === 'planning') {
+      const doc = this.docs.planning;
+      this.setState({ ...this.state, planning: readPlanning(doc), milestones: readMilestones(doc), issueMarks: readIssueMarks(doc) });
+    } else this.setState({ ...this.state, memory: readMemory(this.docs.memory) });
   }
 
   /** Sends now when connected; otherwise applies the change locally and queues it. */
@@ -386,6 +401,36 @@ export class SessionClient {
 
   linkRepo(repo: RepoRef | null): void {
     this.send({ type: 'github.link', repo });
+  }
+
+  /** Opens an issue on GitHub; the host's server does it with its token. */
+  createIssue(title: string, body: string): Promise<IssueResult> {
+    return this.issueRequest({ type: 'github.issue.create', requestId: crypto.randomUUID(), title, body });
+  }
+
+  /** Comments on an issue and closes it as completed. */
+  closeIssue(number: number, comment: string): Promise<IssueResult> {
+    return this.issueRequest({ type: 'github.issue.close', requestId: crypto.randomUUID(), number, comment });
+  }
+
+  private issueRequest(message: Extract<ClientMessage, { type: 'github.issue.create' | 'github.issue.close' }>): Promise<IssueResult> {
+    if (this.state.status !== 'connected') return Promise.resolve({ ok: false, error: 'GitHub can be changed only while connected to the session.' });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => finish({ ok: false, error: 'GitHub did not answer in time. Check on GitHub whether it worked.' }), ISSUE_TIMEOUT_MS);
+      const finish = (result: IssueResult) => {
+        clearTimeout(timer);
+        this.issueRequests.delete(message.requestId);
+        resolve(result);
+      };
+      this.issueRequests.set(message.requestId, finish);
+      this.send(message);
+    });
+  }
+
+  private failIssueRequests(): void {
+    for (const finish of [...this.issueRequests.values()]) {
+      finish({ ok: false, error: 'The connection dropped before GitHub answered. Check on GitHub whether it worked.' });
+    }
   }
 
   /** Shares your local checkout with the session; null stops sharing it. */
@@ -557,6 +602,7 @@ export class SessionClient {
           bloat: message.bloat,
           planning: readPlanning(this.docs.planning),
           milestones: readMilestones(this.docs.planning),
+          issueMarks: readIssueMarks(this.docs.planning),
           memory: readMemory(this.docs.memory),
           // Keep loaded messages of chats that still exist; chat.open fetches what was missed.
           messages: Object.fromEntries(
@@ -635,6 +681,11 @@ export class SessionClient {
       case 'github.status':
         this.setState({ ...this.state, github: message.status });
         break;
+      case 'github.issue.result':
+        this.issueRequests.get(message.requestId)?.(
+          message.issue ? { ok: true, ...message.issue } : { ok: false, error: message.error ?? 'GitHub refused the change.' },
+        );
+        break;
       case 'workspace.changed': {
         const { [message.participantId]: _old, ...rest } = this.state.workspaces;
         this.setState({
@@ -708,6 +759,7 @@ export class SessionClient {
   }
 
   private scheduleReconnect(): void {
+    this.failIssueRequests();
     const delay = this.backoff[Math.min(this.attempt, this.backoff.length - 1)] ?? 1000;
     this.attempt += 1;
     this.synced.clear();

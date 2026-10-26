@@ -3,6 +3,7 @@ import type {
   CliTool,
   FileChange,
   Handoff,
+  IssueLinkKind,
   CriterionState,
   LockRules,
   MemoryOp,
@@ -245,6 +246,10 @@ export interface PctApi {
   gitAction(action: GitAction): Promise<ResultWith<string>>;
   /** "owner/name" or a GitHub URL; null unlinks. */
   linkRepo(repo: string | null): Promise<Result>;
+  /** Opens an issue on GitHub (through the host's token) and links it to a feature or task. Returns its number. */
+  createIssue(request: { title: string; body: string; link: { kind: IssueLinkKind; id: string } | null }): Promise<ResultWith<number>>;
+  /** Comments on an issue and closes it as completed. Ask the person first. */
+  closeIssue(number: number, comment: string): Promise<Result>;
   /** Host only: saves (or with null removes) the token the session server uses for GitHub. */
   setGitHubToken(token: string | null): Promise<Result>;
   copyText(text: string): void;
@@ -332,6 +337,8 @@ export const Channel = {
   gitAction: 'pct:git-action',
   linkRepo: 'pct:link-repo',
   setGitHubToken: 'pct:set-github-token',
+  createIssue: 'pct:create-issue',
+  closeIssue: 'pct:close-issue',
   copyText: 'pct:copy-text',
   saveAgent: 'pct:save-agent',
   deleteAgent: 'pct:delete-agent',

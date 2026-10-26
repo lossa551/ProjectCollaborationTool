@@ -163,7 +163,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     (status, previous) => {
       broadcast({ type: 'github.status', status });
       for (const change of describeGitHubChanges(previous, status)) {
-        const task = board.list().find((t) => t.branch === change.branch);
+        const task = change.branch ? board.list().find((t) => t.branch === change.branch) : undefined;
         record(null, change.text, task?.id ?? null);
       }
     },
@@ -421,6 +421,31 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           void persist('GitHub repository', storage.saveGitHubRepo(repo));
           github.setRepo(repo);
           record(participant, repo ? `linked the session to ${repo.owner}/${repo.name} on GitHub` : 'unlinked the GitHub repository');
+          break;
+        }
+        case 'github.issue.create':
+        case 'github.issue.close': {
+          const answer = (issue: { number: number; url: string } | null, error: string | null) =>
+            send(conn, { type: 'github.issue.result', requestId: message.requestId, issue, error });
+          // People decide what goes on GitHub; agents work through tasks.
+          if (participant.kind !== 'human') return answer(null, 'Only people change issues on GitHub.');
+          // Not awaited: the connection's other messages should not wait on GitHub.
+          void (async () => {
+            try {
+              if (message.type === 'github.issue.create') {
+                const issue = await github.createIssue(message.title, message.body);
+                record(participant, `opened issue #${issue.number} "${message.title}" on GitHub`);
+                answer(issue, null);
+              } else {
+                const title = github.getStatus().issues.find((i) => i.number === message.number)?.title;
+                const issue = await github.closeIssue(message.number, message.comment);
+                record(participant, `closed issue #${issue.number}${title ? ` "${title}"` : ''} on GitHub`);
+                answer(issue, null);
+              }
+            } catch (error) {
+              answer(null, error instanceof Error ? error.message : String(error));
+            }
+          })();
           break;
         }
         case 'workspace.update':
