@@ -10,7 +10,7 @@ import {
   type ChatMessage,
   type Task,
 } from '@pct/shared';
-import type { AppState } from '../common/api';
+import type { AppState, WorktreeAction } from '../common/api';
 import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
 
@@ -194,6 +194,7 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
   const online = session.status === 'connected';
   const [text, setText] = useState('');
   const [branchFrom, setBranchFrom] = useState<ChatMessage | null>(null);
+  const [diff, setDiff] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const parent = chat.branchedFrom ? session.chats.find((c) => c.id === chat.branchedFrom!.chatId) : undefined;
   const last = messages?.[messages.length - 1];
@@ -251,22 +252,35 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
           </button>
         )}
       </header>
-      <div className="messages">
-        {messages === undefined && <p className="muted">Loading…</p>}
-        {messages?.length === 0 && <p className="muted">No messages yet. Everyone in the session can see and post in this chat.</p>}
-        {messages?.map((m) => (
-          <Message
-            key={m.id}
-            message={m}
-            youId={session.you?.id ?? null}
-            online={online}
-            branches={session.chats.filter((c) => c.branchedFrom?.chatId === chat.id && c.branchedFrom.messageId === m.id)}
-            onBranch={() => setBranchFrom(m)}
-            onSelect={onSelect}
-          />
-        ))}
-        <div ref={end} />
-      </div>
+      {chat.worktree && (
+        <WorktreeBar
+          state={state}
+          chat={chat}
+          agentName={agent?.name ?? 'Agent'}
+          reviewing={diff !== null}
+          onReview={(text) => setDiff(text)}
+        />
+      )}
+      {diff !== null ? (
+        <DiffView text={diff} onClose={() => setDiff(null)} />
+      ) : (
+        <div className="messages">
+          {messages === undefined && <p className="muted">Loading…</p>}
+          {messages?.length === 0 && <p className="muted">No messages yet. Everyone in the session can see and post in this chat.</p>}
+          {messages?.map((m) => (
+            <Message
+              key={m.id}
+              message={m}
+              youId={session.you?.id ?? null}
+              online={online}
+              branches={session.chats.filter((c) => c.branchedFrom?.chatId === chat.id && c.branchedFrom.messageId === m.id)}
+              onBranch={() => setBranchFrom(m)}
+              onSelect={onSelect}
+            />
+          ))}
+          <div ref={end} />
+        </div>
+      )}
       {!runner && agent && (
         <p className="banner small">
           {agent.name} is not running. Start it on the Agents screen; it answers what was posted here once it is up.
@@ -437,6 +451,168 @@ function BranchForm({ state, chat, from, onDone }: { state: AppState; chat: Chat
   );
 }
 
+/** One line about an agent chat's own copy: branch, what changed, whose PC. */
+export function WorktreeSummary({ chat, agentName, youId }: { chat: ChatInfo; agentName: string; youId: string | null }) {
+  const copy = chat.worktree;
+  if (!copy) return null;
+  const files = copy.files.length;
+  return (
+    <span className="worktree-summary">
+      <code title={copy.folder}>{copy.branch}</code>
+      <span className="muted">
+        {' '}
+        {files === 0 ? 'no changes to merge' : `${files}${copy.truncated ? '+' : ''} ${files === 1 ? 'file' : 'files'} changed`}
+        {copy.commits > 0 && ` · ${copy.commits} ${copy.commits === 1 ? 'commit' : 'commits'}`}
+        {copy.base && ` · from ${copy.base}`}
+        {` · ${agentName} on ${copy.owner.id === youId ? 'your' : `${copy.owner.name}’s`} PC`}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The chat's own copy of the project, under the chat header: what it changed,
+ * and on the PC that holds it the actions to review, merge, push or discard.
+ */
+function WorktreeBar({
+  state,
+  chat,
+  agentName,
+  reviewing,
+  onReview,
+}: {
+  state: AppState;
+  chat: ChatInfo;
+  agentName: string;
+  reviewing: boolean;
+  onReview: (diff: string | null) => void;
+}) {
+  const copy = chat.worktree!;
+  const youId = state.session.you?.id ?? null;
+  const mine = copy.owner.id === youId;
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [showFiles, setShowFiles] = useState(false);
+  const idle = chat.state === 'idle';
+  const hasChanges = copy.files.length > 0;
+  const yourBranch = state.workspace?.workspace?.branch ?? null;
+
+  const act = async (action: WorktreeAction) => {
+    setBusy(true);
+    setResult(null);
+    const r = await window.pct.worktreeAction(chat.id, action);
+    setBusy(false);
+    if (r.ok) {
+      if (r.value) setResult({ ok: true, text: r.value });
+      if (action === 'discard' && r.value) onReview(null);
+    } else setResult({ ok: false, text: r.error });
+  };
+  const review = async () => {
+    if (reviewing) return onReview(null);
+    setBusy(true);
+    const r = await window.pct.worktreeDiff(chat.id);
+    setBusy(false);
+    if (r.ok) onReview(r.value);
+    else setResult({ ok: false, text: r.error });
+  };
+  const waitTitle = idle ? undefined : `Wait until ${agentName} finishes its turn, or stop it`;
+
+  return (
+    <div className="worktree-bar small">
+      <div className="worktree-line">
+        <span>
+          <WorktreeSummary chat={chat} agentName={agentName} youId={youId} />
+          {hasChanges && (
+            <button className="link" onClick={() => setShowFiles((v) => !v)}>
+              {showFiles ? 'Hide files' : 'Show files'}
+            </button>
+          )}
+        </span>
+        {mine && (
+          <span className="worktree-actions">
+            <button className="secondary" disabled={busy || !hasChanges} onClick={() => void review()}>
+              {reviewing ? 'Back to chat' : 'Review changes'}
+            </button>
+            <button
+              disabled={busy || !idle || !hasChanges || !yourBranch}
+              title={waitTitle ?? (yourBranch ? `Merge ${copy.branch} into ${yourBranch} in your project folder` : 'Choose your project folder first')}
+              onClick={() => void act('merge')}
+            >
+              Merge into {yourBranch ?? 'my branch'}
+            </button>
+            <button
+              className="secondary"
+              disabled={busy || !idle || !hasChanges}
+              title={waitTitle ?? 'Push the branch to GitHub and open a pull request'}
+              onClick={() => void act('pull-request')}
+            >
+              Open a pull request
+            </button>
+            <button className="secondary" disabled={busy} onClick={() => void act('open')}>
+              Open folder
+            </button>
+            <button className="danger" disabled={busy || !idle} title={waitTitle ?? 'Throw away the copy and its branch'} onClick={() => void act('discard')}>
+              Discard
+            </button>
+          </span>
+        )}
+      </div>
+      {showFiles && (
+        <ul className="worktree-files">
+          {copy.files.map((f) => (
+            <li key={f.path}>
+              <span className={`change change-${f.change}`}>{f.change === 'untracked' ? 'new' : f.change}</span> <code>{f.path}</code>
+            </li>
+          ))}
+          {copy.truncated && <li className="muted">and more…</li>}
+        </ul>
+      )}
+      {!mine && hasChanges && (
+        <p className="muted">
+          {copy.owner.name} can review and merge these changes, or open a pull request so you can see them on GitHub.
+        </p>
+      )}
+      {result && <p className={result.ok ? 'muted' : 'error'}>{result.text}</p>}
+    </div>
+  );
+}
+
+/** A unified diff, coloured by line. */
+function DiffView({ text, onClose }: { text: string; onClose: () => void }) {
+  const lines = text.split('\n');
+  const kind = (line: string) =>
+    line.startsWith('diff --git')
+      ? 'diff-file'
+      : line.startsWith('@@')
+        ? 'diff-hunk'
+        : line.startsWith('+') && !line.startsWith('+++')
+          ? 'diff-add'
+          : line.startsWith('-') && !line.startsWith('---')
+            ? 'diff-del'
+            : '';
+  return (
+    <div className="diff-view">
+      <div className="diff-head">
+        <span className="muted small grow">Changes in the agent’s copy since it started. Your project folder has none of these until you merge.</span>
+        <button className="secondary" onClick={onClose}>
+          Back to chat
+        </button>
+      </div>
+      {text.trim() ? (
+        <pre>
+          {lines.map((line, i) => (
+            <div key={i} className={kind(line)}>
+              {line || ' '}
+            </div>
+          ))}
+        </pre>
+      ) : (
+        <p className="muted">No changes.</p>
+      )}
+    </div>
+  );
+}
+
 /** Side panel for the open chat: what the agent knows, its task, and handing off. */
 export function ChatSidePanel({
   state,
@@ -553,7 +729,8 @@ export function ChatSidePanel({
             className="danger"
             disabled={!online}
             onClick={() => {
-              if (confirm(`Delete the chat "${chat.title}" for everyone?`)) window.pct.deleteChat(chat.id);
+              setError(null);
+              void window.pct.deleteChat(chat.id).then((r) => !r.ok && setError(r.error));
             }}
           >
             Delete chat
@@ -786,8 +963,8 @@ function HeldLocks({ state, chat }: { state: AppState; chat: ChatInfo }) {
             ))}
           </ul>
           <p className="muted small">
-            The agent locks a file before its first edit and frees it when the turn ends, unless the file still has
-            uncommitted changes. Locks on a task are freed when the task is done.
+            The agent locks a file before its first edit and frees it when the turn ends, unless it changed the file
+            and the change is not merged yet. Merging or discarding its copy frees them, and so does finishing the task.
           </p>
         </>
       ) : (

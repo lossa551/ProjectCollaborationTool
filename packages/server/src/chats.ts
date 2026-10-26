@@ -7,6 +7,7 @@ import type {
   ChatInfo,
   ChatMessage,
   ChatPostMessage,
+  ChatWorktree,
   Handoff,
   Participant,
   TaskOwner,
@@ -102,6 +103,7 @@ export class AgentChats {
       createdBy: owner(by),
       handoff: input.handoff ?? null,
       branchedFrom: null,
+      worktree: null,
       state: 'idle',
       activity: null,
       context: null,
@@ -149,6 +151,7 @@ export class AgentChats {
       createdBy: owner(by),
       handoff: parent.handoff,
       branchedFrom: { chatId: parent.id, messageId: input.fromMessageId, title: parent.title },
+      worktree: null,
       state: 'idle',
       activity: null,
       context: null,
@@ -332,6 +335,24 @@ export class AgentChats {
       activity: state === 'idle' ? null : activity !== undefined ? activity : chat.activity,
       context: context !== undefined ? context : chat.context,
     };
+    this.chats.set(chatId, next);
+    return { ok: true, value: next, description: null };
+  }
+
+  /**
+   * Records the agent's own copy of the project for a chat. The chat's agent
+   * reports it, and so may the person whose PC holds it (after merging or
+   * discarding it while the agent is not running).
+   */
+  setWorktree(chatId: string, worktree: ChatWorktree | null, by: Participant): ChatResult<ChatInfo> {
+    const chat = this.chats.get(chatId);
+    if (!chat) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
+    const isAgent = by.kind === 'agent' && by.agent?.profileId === chat.agentId;
+    const owner = worktree?.owner.id ?? chat.worktree?.owner.id;
+    if (!isAgent && !(by.kind === 'human' && (owner === undefined || owner === by.id))) {
+      return { ok: false, code: 'not_allowed', message: 'Only the chat’s agent or the person whose PC holds its copy can change it' };
+    }
+    const next: ChatInfo = { ...chat, worktree };
     this.chats.set(chatId, next);
     return { ok: true, value: next, description: null };
   }

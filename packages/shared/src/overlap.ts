@@ -1,15 +1,16 @@
-import { pullForBranch, type GitHubStatus, type Lock, type Task, type Workspace } from './model.js';
+import { pullForBranch, type AgentProfile, type ChatInfo, type GitHubStatus, type Lock, type Task, type Workspace } from './model.js';
 import { matchesAny } from './paths.js';
 
-// Who else is changing the same file: local workspaces, pushed branches, open
-// pull requests and locks. Two sources on the same branch, or from the same
+// Who else is changing the same file: local workspaces (people's, and each
+// agent chat's own copy), pushed branches, open pull requests and locks. Two sources on the same branch, or from the same
 // person, are one piece of work and never overlap with each other.
 
 export type WorkSource =
-  | { kind: 'workspace'; participantId: string; name: string; branch: string | null }
+  /** chatId and taskId are set for an agent chat's own copy. */
+  | { kind: 'workspace'; participantId: string; name: string; branch: string | null; chatId?: string; taskId?: string | null }
   | { kind: 'pull'; number: number; title: string; branch: string }
   | { kind: 'branch'; branch: string }
-  | { kind: 'lock'; lockId: string; holderId: string; name: string; taskId: string | null; exclusive: boolean };
+  | { kind: 'lock'; lockId: string; holderId: string; name: string; taskId: string | null; chatId: string | null; exclusive: boolean };
 
 export interface Overlap {
   path: string;
@@ -20,6 +21,27 @@ export interface WorkspaceEntry {
   participantId: string;
   name: string;
   workspace: Workspace;
+  /** For an agent chat's own copy. */
+  chatId?: string;
+  taskId?: string | null;
+}
+
+/** Each agent chat's own copy as a workspace, so its changes count as work in progress. */
+export function chatWorkspaces(chats: ChatInfo[], agents: AgentProfile[]): WorkspaceEntry[] {
+  return chats.flatMap((chat) => {
+    const copy = chat.worktree;
+    if (!copy || copy.files.length === 0) return [];
+    const agent = agents.find((a) => a.id === chat.agentId)?.name ?? 'Agent';
+    return [
+      {
+        participantId: `chat:${chat.id}`,
+        name: agent,
+        chatId: chat.id,
+        taskId: chat.taskId,
+        workspace: { branch: copy.branch, base: copy.base, files: copy.files, truncated: copy.truncated, updatedAt: copy.updatedAt },
+      },
+    ];
+  });
 }
 
 export function findOverlaps(input: { workspaces: WorkspaceEntry[]; github: GitHubStatus; locks: Lock[] }): Overlap[] {
@@ -32,8 +54,9 @@ export function findOverlaps(input: { workspaces: WorkspaceEntry[]; github: GitH
     entry.sources.push(source);
   };
 
-  for (const { participantId, name, workspace } of workspaces) {
-    for (const file of workspace.files) add(file.path, { kind: 'workspace', participantId, name, branch: workspace.branch });
+  for (const { participantId, name, workspace, chatId, taskId } of workspaces) {
+    const chat = chatId ? { chatId, taskId: taskId ?? null } : {};
+    for (const file of workspace.files) add(file.path, { kind: 'workspace', participantId, name, branch: workspace.branch, ...chat });
   }
   const openPulls = github.pulls.filter((p) => p.state === 'open');
   for (const pull of openPulls) {
@@ -50,6 +73,7 @@ export function findOverlaps(input: { workspaces: WorkspaceEntry[]; github: GitH
       holderId: lock.holder.id,
       name: lock.holder.name,
       taskId: lock.taskId,
+      chatId: lock.chatId,
       exclusive: lock.kind === 'exclusive',
     });
   }
@@ -66,12 +90,12 @@ function workKeys(source: WorkSource, defaultBranch: string | null): string[] {
   const branch = (name: string | null) => (name && name !== defaultBranch ? [`b:${name}`] : []);
   switch (source.kind) {
     case 'workspace':
-      return [`p:${source.participantId}`, ...branch(source.branch)];
+      return [`p:${source.participantId}`, ...branch(source.branch), ...(source.chatId ? [`c:${source.chatId}`] : [])];
     case 'pull':
     case 'branch':
       return branch(source.branch);
     case 'lock':
-      return [`p:${source.holderId}`];
+      return [`p:${source.holderId}`, ...(source.chatId ? [`c:${source.chatId}`] : [])];
   }
 }
 
@@ -93,6 +117,7 @@ function countGroups(sources: WorkSource[], defaultBranch: string | null): numbe
 /** Whether a source is part of this task's work. */
 export function belongsToTask(source: WorkSource, task: Task): boolean {
   if (source.kind === 'lock') return source.taskId === task.id;
+  if (source.kind === 'workspace' && source.chatId) return source.taskId === task.id;
   return !!task.branch && source.branch === task.branch;
 }
 
@@ -105,13 +130,17 @@ export function overlapsForTask(overlaps: Overlap[], task: Task): Overlap[] {
   });
 }
 
-/** Files a task is not supposed to change. A task without a scope allows everything. */
-/** Files changed for a task: in anyone's workspace on its branch, its open pull request, or its branch on GitHub. */
-export function taskChangedFiles(task: Task, workspaces: Record<string, Workspace>, github: GitHubStatus): string[] {
-  if (!task.branch) return [];
+/**
+ * Files changed for a task: in its agents' own copies, in anyone's workspace
+ * on its branch, its open pull request, or its branch on GitHub.
+ */
+export function taskChangedFiles(task: Task, workspaces: Record<string, Workspace>, github: GitHubStatus, chats: ChatInfo[] = []): string[] {
+  const copies = chats.filter((c) => c.taskId === task.id && c.worktree).flatMap((c) => c.worktree!.files.map((f) => f.path));
+  if (!task.branch) return [...new Set(copies)];
   const pull = pullForBranch(github, task.branch);
   return [
     ...new Set([
+      ...copies,
       ...Object.values(workspaces)
         .filter((w) => w.branch === task.branch)
         .flatMap((w) => w.files.map((f) => f.path)),
@@ -121,6 +150,7 @@ export function taskChangedFiles(task: Task, workspaces: Record<string, Workspac
   ];
 }
 
+/** Files a task is not supposed to change. A task without a scope allows everything. */
 export function filesOutsideScope(paths: string[], scope: string[]): string[] {
   return scope.length === 0 ? [] : paths.filter((path) => !matchesAny(path, scope));
 }
@@ -129,6 +159,7 @@ export function filesOutsideScope(paths: string[], scope: string[]): string[] {
 export function describeSource(source: WorkSource, youId: string | null): string {
   switch (source.kind) {
     case 'workspace':
+      if (source.chatId) return `${source.name}'s copy (${source.branch})`;
       return source.participantId === youId ? 'your workspace' : `${source.name}'s workspace`;
     case 'pull':
       return `PR #${source.number}`;

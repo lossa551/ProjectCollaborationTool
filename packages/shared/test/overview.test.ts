@@ -60,6 +60,7 @@ const chat = (id: string, extra: Partial<ChatInfo> = {}): ChatInfo => ({
   createdBy: { id: 'me', name: 'Martin', kind: 'human' },
   handoff: null,
   branchedFrom: null,
+  worktree: null,
   state: 'idle',
   activity: null,
   context: null,

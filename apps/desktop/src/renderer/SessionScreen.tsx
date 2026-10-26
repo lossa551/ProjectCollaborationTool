@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { findOverlaps, needsYou, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
+import { chatWorkspaces, findOverlaps, needsYou, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
@@ -110,15 +110,18 @@ export function SessionScreen({ state }: { state: AppState }) {
   const overlaps = useMemo(
     () =>
       findOverlaps({
-        workspaces: Object.entries(session.workspaces).map(([participantId, workspace]) => ({
-          participantId,
-          name: session.participants.find((p) => p.id === participantId)?.name ?? 'Someone',
-          workspace,
-        })),
+        workspaces: [
+          ...Object.entries(session.workspaces).map(([participantId, workspace]) => ({
+            participantId,
+            name: session.participants.find((p) => p.id === participantId)?.name ?? 'Someone',
+            workspace,
+          })),
+          ...chatWorkspaces(session.chats, session.agents),
+        ],
         github: session.github,
         locks: session.locks,
       }),
-    [session.workspaces, session.participants, session.github, session.locks],
+    [session.workspaces, session.participants, session.github, session.locks, session.chats, session.agents],
   );
   // One "needs you" list for the Home nav count, Home itself and (later) notifications.
   const needs = useMemo(() => needsYou(session, youId, overlaps), [session, youId, overlaps]);
@@ -315,6 +318,9 @@ export function SessionScreen({ state }: { state: AppState }) {
           github={session.github}
           overlaps={overlaps}
           workspaces={session.workspaces}
+          chats={session.chats}
+          agents={session.agents}
+          onOpenChat={showChat}
           planning={session.planning}
           youId={youId}
           editable={editable}

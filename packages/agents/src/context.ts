@@ -27,6 +27,8 @@ export interface ContextInput {
   memory: MemoryEntry[];
   /** AGENTS.md notes for the folders the task touches, shallowest first (see notesForPaths). */
   folderNotes: FolderNote[];
+  /** The chat's own copy of the project (branch and what it started from); null when it works in the project folder. */
+  worktree: { branch: string; base: string | null } | null;
   /** The agent has the record_test_result tool (our own loop); CLI agents report results in the chat instead. */
   recordsResults: boolean;
 }
@@ -37,15 +39,19 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults, worktree }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
     detail: agent.responsibilities.trim() ? agent.responsibilities.trim().slice(0, 200) : 'No responsibilities written yet',
     text: [
       `You are ${agent.name}, an AI agent in a shared live session where people and other agents work on the same project. ` +
-        `You run on ${startedBy}'s PC, in their project folder. People in the session can read this chat and post in it; ` +
-        'messages from them start with their name.',
+        (worktree
+          ? `You run on ${startedBy}'s PC, in your own copy of the project (a git worktree on branch ${worktree.branch}` +
+            `${worktree.base ? `, started from ${worktree.base}` : ''}). Your changes stay in this copy until a person reviews and ` +
+            'merges them; do not commit, switch branches or merge yourself. '
+          : `You run on ${startedBy}'s PC, in their project folder. `) +
+        'People in the session can read this chat and post in it; messages from them start with their name.',
       agent.responsibilities.trim() ? `Your responsibilities:\n${agent.responsibilities.trim()}` : '',
       'Every file edit and command you make is checked by the app against file locks, your allowed paths, the task’s allowed ' +
         'paths and the approval rules. The app locks each file for you before your first edit to it, so others can see what ' +

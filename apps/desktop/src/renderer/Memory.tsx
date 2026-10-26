@@ -248,10 +248,10 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
   const outside = useMemo(
     () =>
       session.tasks.flatMap((task) => {
-        const files = filesOutsideScope(taskChangedFiles(task, session.workspaces, session.github), task.scope);
+        const files = filesOutsideScope(taskChangedFiles(task, session.workspaces, session.github, session.chats), task.scope);
         return files.length ? [{ task, files }] : [];
       }),
-    [session.tasks, session.workspaces, session.github],
+    [session.tasks, session.workspaces, session.github, session.chats],
   );
 
   const run = async () => {

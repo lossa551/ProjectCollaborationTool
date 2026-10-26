@@ -5,6 +5,7 @@ import type {
   ChatContext,
   ChatInfo,
   ChatMessage,
+  ChatWorktree,
   Criterion,
   CriterionState,
   Handoff,
@@ -450,6 +451,11 @@ export class SessionClient {
       ...(context !== undefined && { context }),
       ...(activity !== undefined && { activity }),
     });
+  }
+
+  /** Reports the agent's own copy of the project for a chat; null once it is gone. */
+  setChatWorktree(chatId: string, worktree: ChatWorktree | null, note?: string): void {
+    this.send({ type: 'chat.worktree', chatId, worktree, ...(note && { note: note.slice(0, 300) }) });
   }
 
   stopChat(chatId: string): void {

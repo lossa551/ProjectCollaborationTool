@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clone, parseStatus, readGitInfo, repositoryRoot, runGitAction, tagCommit } from '../src/main/git';
+import { clone, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit } from '../src/main/git';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -152,5 +152,38 @@ describe('tagCommit', () => {
     expect(sh(mine, 'rev-parse', 'snapshot/20261026-1540-before-rewrite^{commit}')).toBe(sh(mine, 'rev-parse', 'HEAD'));
     expect(sh(mine, 'tag', '-l', '--format=%(contents:subject)', 'snapshot/*')).toBe('Before the rewrite');
     await expect(tagCommit(mine, 'bad..name', 'x')).rejects.toThrow(/not a valid tag/);
+  });
+});
+
+describe("merging an agent's copy", () => {
+  it('merges the agent branch into your branch and pushes it for a pull request', async () => {
+    const { root, origin, mine } = await setup();
+    const { createWorktree, commitAll, worktreeStatus } = await import('@pct/agents');
+    const folder = join(root, 'mine-agents', 'jump');
+    const { baseCommit } = await createWorktree({ root: mine, folder, branch: 'agent/jump', from: 'HEAD' });
+    writeFileSync(join(folder, 'jump.gd'), 'jump\n');
+    await commitAll(folder, 'Builder: jump');
+
+    expect(await pushBranch(folder, 'agent/jump', null)).toBe('Pushed agent/jump to GitHub.');
+    expect(sh(origin, 'branch', '--list', 'agent/jump')).toContain('agent/jump');
+
+    expect(await mergeBranch(mine, 'agent/jump', "Merge Builder's work: jump")).toBe('Merged agent/jump into main.');
+    expect(sh(mine, 'show', 'HEAD:jump.gd')).toBe('jump');
+    expect(sh(mine, 'log', '-1', '--format=%s')).toBe("Merge Builder's work: jump");
+    expect(await worktreeStatus(folder, { branch: 'main', commit: baseCommit })).toMatchObject({ commits: 0, files: [] });
+  });
+
+  it('leaves a conflict for you to fix, like a pull', async () => {
+    const { root, mine } = await setup();
+    const { createWorktree, commitAll } = await import('@pct/agents');
+    const folder = join(root, 'mine-agents', 'clash');
+    await createWorktree({ root: mine, folder, branch: 'agent/clash', from: 'HEAD' });
+    writeFileSync(join(folder, 'game.gd'), 'agent\n');
+    await commitAll(folder, 'agent');
+    writeFileSync(join(mine, 'game.gd'), 'person\n');
+    await expect(mergeBranch(mine, 'agent/clash', 'merge')).rejects.toThrow(/uncommitted changes/);
+    sh(mine, 'commit', '-qam', 'person');
+    expect(await mergeBranch(mine, 'agent/clash', 'merge')).toMatch(/1 file has conflicts/);
+    expect((await readGitInfo(mine)).conflicted).toEqual(['game.gd']);
   });
 });

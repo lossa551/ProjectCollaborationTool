@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
 import {
   CLI_TOOLS,
   approvalActivity,
@@ -12,6 +13,7 @@ import {
   type ChatInfo,
   type ChatMessage,
   type ChatTool,
+  type ChatWorktree,
   type FolderNote,
   type Lock,
   type LockKind,
@@ -35,6 +37,17 @@ import {
   SearchInput,
   WriteFileInput,
 } from './tools.js';
+import {
+  agentBranchName,
+  canMakeWorktrees,
+  commitAll,
+  createWorktree,
+  defaultWorktreeFolder,
+  pickBase,
+  removeWorktree,
+  worktreeReady,
+  worktreeStatus,
+} from './worktree.js';
 
 // Runs one agent on this PC. It is connected to the session as its own
 // participant (kind "agent") and answers in every chat that belongs to its
@@ -58,8 +71,15 @@ export interface AgentRunnerOptions {
   client: SessionClient;
   profileId: string;
   startedBy: string;
-  /** The project folder the agent works in. */
+  /** The person's project folder. Each chat works in its own copy of it (see worktrees). */
   root: string;
+  /** The person whose PC runs the agent; owns the chats' copies. Defaults to startedBy with no id. */
+  startedById?: string;
+  /**
+   * Each chat gets its own git worktree on an agent/... branch (the default).
+   * folder says where a copy goes; false works in the project folder itself.
+   */
+  worktrees?: false | { folder?: (root: string, branch: string) => string };
   /** Model for API agents. Throws when it cannot be made (say, no API key). */
   createModel?: (agent: AgentProfile) => ModelAdapter;
   cli?: CliSettings;
@@ -93,6 +113,14 @@ interface ChatRun {
   state: ChatAgentState;
   /** Folder notes for the task's paths, read at the start of each turn. */
   folderNotes: FolderNote[];
+  /** Where this chat works: its own copy, or the project folder. Set at the start of its first turn. */
+  files: ProjectFiles | null;
+  /** The chat's copy, as last reported. */
+  worktree: ChatWorktree | null;
+  /** Said in the chat that its task is done but the copy has unmerged work. */
+  doneNoticed: boolean;
+  /** Its task was finished during a turn: look at the copy once the turn ends. */
+  doneDuringTurn: boolean;
 }
 
 /** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
@@ -186,6 +214,10 @@ export class AgentRunner {
         approvedPaths: new Set(),
         state: 'idle',
         folderNotes: [],
+        files: null,
+        worktree: null,
+        doneNoticed: false,
+        doneDuringTurn: false,
       };
       this.runs.set(chatId, run);
     }
@@ -235,6 +267,15 @@ export class AgentRunner {
         if (this.chat(m.chatId) && isPrompt(m) && !this.run(m.chatId).handled.has(m.id)) this.schedule(m.chatId);
         break;
       }
+      case 'chat.removed': {
+        const run = this.runs.get(message.chatId);
+        this.runs.delete(message.chatId);
+        if (run?.worktree) void this.retireWorktree(run.worktree);
+        break;
+      }
+      case 'task.changed':
+        if (message.task.stage === 'done') void this.taskDone(message.task);
+        break;
       case 'chat.stopped': {
         const run = this.runs.get(message.chatId);
         if (run?.abort) {
@@ -277,9 +318,10 @@ export class AgentRunner {
         run.abort = new AbortController();
         run.stoppedBy = null;
         run.approvedPaths.clear();
-        run.folderNotes = await this.loadFolderNotes(chat);
-        this.setState(chatId, 'working', 'Thinking');
         try {
+          await this.workspaceFor(chat, run);
+          run.folderNotes = await this.loadFolderNotes(chat);
+          this.setState(chatId, 'working', 'Thinking');
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
           else await this.runCliAgent(chat, agent, run, prompt, messages, fresh);
         } catch (error) {
@@ -298,7 +340,11 @@ export class AgentRunner {
       run.abort = null;
       if (!this.stopped) {
         this.setState(chatId, 'idle');
+        await this.reportWorktree(chatId);
         await this.releaseUnchanged((lock) => lock.chatId === chatId);
+        const task = this.client.getState().tasks.find((t) => t.id === this.chat(chatId)?.taskId);
+        if (run.doneDuringTurn && task?.stage === 'done') await this.taskDone(task);
+        run.doneDuringTurn = false;
       }
     }
   }
@@ -312,11 +358,172 @@ export class AgentRunner {
     const { locks, you } = this.client.getState();
     const mine = locks.filter((l) => l.holder.id === you?.id && which(l));
     if (mine.length === 0) return;
-    const changed = [...(await this.files.changedFiles())];
+    // Each chat's own copy, or the project folder for locks taken outside a chat.
+    const changedIn = new Map<string, string[]>();
+    const changed = async (chatId: string | null) => {
+      const key = chatId ?? '';
+      let files = changedIn.get(key);
+      if (!files) {
+        const run = chatId ? this.runs.get(chatId) : undefined;
+        files = run?.worktree && run.files ? await this.worktreeFiles(run) : [...(await (run?.files ?? this.files).changedFiles())];
+        changedIn.set(key, files);
+      }
+      return files;
+    };
     for (const lock of mine) {
       const busy = !stopping && lock.chatId !== null && this.runs.get(lock.chatId)?.busy;
-      if (!busy && !changed.some((file) => samePath(file, lock.path))) this.client.releaseLock(lock.id);
+      if (!busy && !(await changed(lock.chatId)).some((file) => samePath(file, lock.path))) this.client.releaseLock(lock.id);
     }
+  }
+
+  /** Files the chat's copy changed and nobody merged yet, committed or not. */
+  private async worktreeFiles(run: ChatRun): Promise<string[]> {
+    const worktree = run.worktree!;
+    try {
+      const status = await worktreeStatus(worktree.folder, { branch: worktree.base, commit: worktree.baseCommit });
+      return status.files.map((f) => f.path);
+    } catch {
+      return worktree.files.map((f) => f.path);
+    }
+  }
+
+  /** The person whose PC runs the agent, who owns its copies. */
+  private owner(): ChatWorktree['owner'] {
+    return { id: this.options.startedById ?? '', name: this.options.startedBy };
+  }
+
+  /**
+   * Where the chat works. With git, its own copy of the project on an
+   * agent/... branch: the one it had, or a new one started from the task's
+   * branch (else the branch checked out in the project folder). Without git
+   * (or with no commit yet) it works in the project folder.
+   */
+  private async workspaceFor(chat: ChatInfo, run: ChatRun): Promise<ProjectFiles> {
+    const setting = this.options.worktrees;
+    if (setting === false) return (run.files ??= this.files);
+    const known = run.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
+    if (known && run.files && (await worktreeReady(known.folder, known.branch))) return run.files;
+    if (!(await canMakeWorktrees(this.options.root))) {
+      // The chat header shows no copy, and the agent is told it works in the project folder.
+      if (!run.files) this.log(`${this.options.root} has no git history yet: chat ${chat.id} works in the project folder`);
+      return (run.files = this.files);
+    }
+    const root = this.options.root;
+    const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
+    const branch = known?.branch ?? agentBranchName(task?.title ?? chat.title, chat.id);
+    const folder = known?.folder ?? (setting?.folder ?? defaultWorktreeFolder)(root, branch);
+    const reused = known !== null && (await worktreeReady(folder, branch));
+    const base = known ? { base: known.base, ref: known.baseCommit } : await pickBase(root, [task?.branch]);
+    const { baseCommit } = await createWorktree({ root, folder, branch, from: base.ref });
+    run.files = new ProjectFiles(resolvePath(folder));
+    run.worktree = {
+      branch,
+      base: base.base,
+      baseCommit,
+      folder: resolvePath(folder),
+      owner: this.owner(),
+      files: known?.files ?? [],
+      truncated: false,
+      commits: known?.commits ?? 0,
+      uncommitted: known?.uncommitted ?? 0,
+      updatedAt: Date.now(),
+    };
+    if (!known) {
+      const from = base.base ? `${base.base} at ${baseCommit.slice(0, 7)}` : baseCommit.slice(0, 7);
+      this.notice(
+        chat.id,
+        `${this.profile()?.name ?? 'The agent'} works in its own copy of the project on branch ${branch}, started from ${from}. ` +
+          `Its changes stay there until someone merges them, so ${this.options.startedBy}'s project folder is not touched ` +
+          '(and uncommitted changes there are not in the copy).',
+      );
+    } else if (!reused) {
+      this.notice(chat.id, `The agent's copy was missing, so it was made again from branch ${branch}.`);
+    }
+    await this.reportWorktree(chat.id);
+    return run.files;
+  }
+
+  /** Tells everyone what the chat's copy holds now. */
+  private async reportWorktree(chatId: string, note?: string) {
+    const run = this.runs.get(chatId);
+    const worktree = run?.worktree;
+    if (!run || !worktree || !this.chat(chatId)) return;
+    let next = worktree;
+    try {
+      const status = await worktreeStatus(worktree.folder, { branch: worktree.base, commit: worktree.baseCommit });
+      next = { ...worktree, ...status, updatedAt: Date.now() };
+    } catch (error) {
+      this.log(`could not read the copy for chat ${chatId}: ${String(error)}`);
+    }
+    // Removed (task done, chat deleted) while reading: nothing to report.
+    if (run.worktree !== worktree || !this.chat(chatId)) return;
+    run.worktree = next;
+    this.client.setChatWorktree(chatId, next, note);
+  }
+
+  /**
+   * A finished task: copies with nothing left to merge are removed with their
+   * branch; the others stay, and the chat says what is left.
+   */
+  private async taskDone(task: Task) {
+    for (const chat of this.myChats().filter((c) => c.taskId === task.id)) {
+      const run = this.runs.get(chat.id);
+      const worktree = run?.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
+      if (!worktree) continue;
+      if (run?.busy) {
+        run.doneDuringTurn = true;
+        continue;
+      }
+      let status;
+      try {
+        status = await worktreeStatus(worktree.folder, { branch: worktree.base, commit: worktree.baseCommit });
+      } catch {
+        continue;
+      }
+      if (status.commits === 0 && status.uncommitted === 0) {
+        try {
+          await removeWorktree(this.options.root, worktree.folder, worktree.branch, true);
+        } catch (error) {
+          this.log(`could not remove ${worktree.folder}: ${String(error)}`);
+          continue;
+        }
+        if (run) {
+          run.worktree = null;
+          run.files = null;
+        }
+        this.client.setChatWorktree(chat.id, null, `removed the agent's copy ${worktree.branch} because "${task.title}" is done`);
+      } else if (run && !run.doneNoticed) {
+        run.doneNoticed = true;
+        const what = [
+          status.commits > 0 ? `${status.commits} ${status.commits === 1 ? 'commit' : 'commits'}` : '',
+          status.uncommitted > 0 ? `${status.uncommitted} uncommitted ${status.uncommitted === 1 ? 'file' : 'files'}` : '',
+        ]
+          .filter(Boolean)
+          .join(' and ');
+        this.notice(chat.id, `"${task.title}" is done, but the agent's copy (${worktree.branch}) still has ${what} that are not merged. Merge or discard them from this chat.`);
+      }
+    }
+  }
+
+  /**
+   * A deleted chat's copy: its folder goes, but anything in it is committed
+   * to its branch first and the branch is kept, so no work is lost. (Deleting
+   * from the owner's PC asks first and cleans up there.)
+   */
+  private async retireWorktree(worktree: ChatWorktree) {
+    if (!(await worktreeReady(worktree.folder, worktree.branch))) return;
+    try {
+      await commitAll(worktree.folder, `Work in progress, saved when the chat was deleted`);
+      await removeWorktree(this.options.root, worktree.folder, worktree.branch, false);
+      this.log(`chat deleted: kept its work on branch ${worktree.branch}`);
+    } catch (error) {
+      this.log(`could not tidy up ${worktree.folder}: ${String(error)}`);
+    }
+  }
+
+  /** Where the chat works: its own copy once its first turn started, else the project folder. */
+  private filesOf(chatId: string): ProjectFiles {
+    return this.runs.get(chatId)?.files ?? this.files;
   }
 
   private guardContext(chat: ChatInfo, agent: AgentProfile): GuardContext {
@@ -357,9 +564,10 @@ export class AgentRunner {
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId);
     const paths = [...(task?.scope ?? []), ...(task?.readFirst ?? []), ...(chat.handoff?.scope ?? []), ...(chat.handoff?.readFirst ?? [])];
     const notes: FolderNote[] = [];
-    for (const path of notesForPaths(await this.files.notePaths(), paths)) {
+    const files = this.filesOf(chat.id);
+    for (const path of notesForPaths(await files.notePaths(), paths)) {
       try {
-        const { abs } = await this.files.resolve(path);
+        const { abs } = await files.resolve(path);
         const text = await readFile(abs, 'utf8');
         notes.push({ path, text: text.length > NOTE_CHARS ? `${text.slice(0, NOTE_CHARS)}\n…` : text });
       } catch {
@@ -377,6 +585,7 @@ export class AgentRunner {
       startedBy: this.options.startedBy,
       memory: this.client.getState().memory,
       folderNotes: this.runs.get(chat.id)?.folderNotes ?? [],
+      worktree: this.runs.get(chat.id)?.worktree ?? null,
       recordsResults: agent.connection.type === 'api',
     };
   }
@@ -562,7 +771,7 @@ export class AgentRunner {
    * Files locked by someone else are always undone.
    */
   private async reviewChanges(chat: ChatInfo, agent: AgentProfile, before: Set<string>, what: string, signal: AbortSignal) {
-    const after = await this.files.changedFiles();
+    const after = await this.filesOf(chat.id).changedFiles();
     const fresh = [...after].filter((f) => !before.has(f) && !this.run(chat.id).approvedPaths.has(f.toLowerCase()));
     if (fresh.length === 0) return;
     const ctx = this.guardContext(chat, agent);
@@ -594,7 +803,7 @@ export class AgentRunner {
     const undone: string[] = [];
     for (const path of undo) {
       try {
-        await this.files.revert(path);
+        await this.filesOf(chat.id).revert(path);
         undone.push(path);
       } catch (error) {
         this.notice(chat.id, `Could not undo ${path}: ${error instanceof Error ? error.message : String(error)}`);
@@ -652,6 +861,7 @@ export class AgentRunner {
 
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
     const id = randomUUID();
+    const files = this.filesOf(chat.id);
     const label = TOOL_LABEL[call.name] ?? call.name;
     const show = (summary: string, status: ToolStatus, output = '') => {
       if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? label} ${summary}`);
@@ -681,17 +891,17 @@ export class AgentRunner {
         const input = parseInput(ReadFileInput, call.input);
         if (!input.ok) return error(input.error);
         run.filesRead.add(input.value.path);
-        return attempt(input.value.path, () => this.files.read(input.value.path, input.value.offset, input.value.limit));
+        return attempt(input.value.path, () => files.read(input.value.path, input.value.offset, input.value.limit));
       }
       case 'list_files': {
         const input = parseInput(ListFilesInput, call.input);
         if (!input.ok) return error(input.error);
-        return attempt(input.value.path || 'project', () => this.files.list(input.value.path));
+        return attempt(input.value.path || 'project', () => files.list(input.value.path));
       }
       case 'search': {
         const input = parseInput(SearchInput, call.input);
         if (!input.ok) return error(input.error);
-        return attempt(input.value.pattern, () => this.files.search(input.value.pattern, input.value.path));
+        return attempt(input.value.pattern, () => files.search(input.value.pattern, input.value.path));
       }
       case 'write_file':
       case 'edit_file': {
@@ -701,7 +911,7 @@ export class AgentRunner {
         if ('blocked' in gate) return blocked(input.value.path, gate.blocked);
         const value = input.value;
         return attempt(gate.path, () =>
-          'content' in value ? this.files.write(gate.path, value.content) : this.files.edit(gate.path, value.old_text, value.new_text),
+          'content' in value ? files.write(gate.path, value.content) : files.edit(gate.path, value.old_text, value.new_text),
         );
       }
       case 'run_command': {
@@ -710,9 +920,9 @@ export class AgentRunner {
         const command = input.value.command;
         const problem = await this.gateCommand(chat, agent, command, signal);
         if (problem) return blocked(command, problem);
-        const before = await this.files.changedFiles();
+        const before = await files.changedFiles();
         show(command, 'running');
-        const result = await this.files.run(command, signal);
+        const result = await files.run(command, signal);
         const output = `${result.output}\n(exit code ${result.exitCode ?? 'none'})`;
         show(command, result.exitCode === 0 ? 'done' : 'failed', output);
         await this.reviewChanges(chat, agent, before, 'the command', signal);
@@ -745,7 +955,8 @@ export class AgentRunner {
     const signal = run.abort!.signal;
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
     const context = systemPrompt(this.contextInput(agent, chat, task));
-    const before = await this.files.changedFiles();
+    const files = this.filesOf(chat.id);
+    const before = await files.changedFiles();
 
     // Tool lines by the CLI's own tool ids.
     const toolMessages = new Map<string, { id: string; name: string; summary: string }>();
@@ -791,7 +1002,7 @@ export class AgentRunner {
       result = await runCli({
         command,
         args,
-        cwd: this.options.root,
+        cwd: files.root,
         env: { ...process.env, ...settings.hookEnv, ...hook.env(chat.id) },
         prompt: fullPrompt,
         signal,
@@ -807,7 +1018,7 @@ export class AgentRunner {
       result = await runCli({
         command,
         args,
-        cwd: this.options.root,
+        cwd: files.root,
         env: { ...process.env },
         prompt: `${context}\n\n---\n\n${recent ? `Conversation so far:\n${recent}\n\n---\n\n` : ''}${prompt}`,
         signal,
@@ -852,7 +1063,7 @@ export class AgentRunner {
       case 'MultiEdit':
       case 'NotebookEdit': {
         const raw = String(input.file_path ?? input.notebook_path ?? '');
-        const rel = this.files.toRelative(raw);
+        const rel = this.filesOf(chat.id).toRelative(raw);
         if (!rel) return deny(`${raw} is outside the project folder`);
         const gate = await this.gateEdit(chat, agent, rel, signal);
         if ('blocked' in gate) return deny(gate.blocked);
@@ -865,7 +1076,7 @@ export class AgentRunner {
       }
       case 'Read':
       case 'NotebookRead': {
-        const rel = this.files.toRelative(String(input.file_path ?? input.notebook_path ?? ''));
+        const rel = this.filesOf(chat.id).toRelative(String(input.file_path ?? input.notebook_path ?? ''));
         if (rel) run.filesRead.add(rel);
         return { allow: true, reason: 'Reading is allowed' };
       }

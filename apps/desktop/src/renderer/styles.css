@@ -2373,3 +2373,140 @@ input.milestone-date {
 .roadmap-add-milestone button {
   white-space: nowrap;
 }
+
+/* An agent chat's own copy of the project (git worktree), under the chat header. */
+.worktree-bar {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.worktree-line {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.worktree-line .link {
+  margin-left: 8px;
+}
+
+.worktree-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.worktree-actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.worktree-summary code,
+.copy-badge code {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.worktree-bar p {
+  margin: 6px 0 0;
+}
+
+.worktree-files {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.worktree-files .change {
+  display: inline-block;
+  min-width: 70px;
+  color: var(--muted);
+}
+
+.worktree-files .change-added,
+.worktree-files .change-untracked {
+  color: var(--good);
+}
+
+.worktree-files .change-deleted {
+  color: var(--bad);
+}
+
+.copy-badge {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.copy-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copy-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+}
+
+.diff-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.diff-head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.diff-view pre {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  font: 12px/1.5 'Cascadia Mono', Consolas, ui-monospace, monospace;
+}
+
+.diff-view pre > div {
+  white-space: pre;
+  padding: 0 6px;
+}
+
+.diff-file {
+  margin-top: 10px;
+  font-weight: 600;
+  color: var(--text);
+  border-top: 1px solid var(--border);
+  padding-top: 6px !important;
+}
+
+.diff-hunk {
+  color: var(--accent);
+}
+
+.diff-add {
+  background: rgba(63, 185, 122, 0.14);
+  color: #bfe9d1;
+}
+
+.diff-del {
+  background: rgba(229, 96, 79, 0.14);
+  color: #f3c3bc;
+}

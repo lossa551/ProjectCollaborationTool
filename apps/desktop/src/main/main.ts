@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import {
   AgentSaveMessage,
   ChatTitle,
+  type ChatInfo,
+  type ChatWorktree,
   Handoff,
   LockAcquireMessage,
   LockRules,
@@ -66,7 +68,8 @@ import {
   workspaceFolder,
 } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
+import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { scanFolderNotes } from './folder-notes';
 import type { FolderNotesReport } from '../common/folder-notes';
@@ -722,8 +725,163 @@ async function startAgent(agentId: unknown): Promise<Result> {
     url: joined.url,
     secret: joined.secret,
     startedBy: state.you.name,
+    startedById: state.you.id,
     root: workspace.folder,
   });
+  return { ok: true };
+}
+
+// An agent chat's own copy of the project (a git worktree on its own branch)
+// lives on the PC of the person who started the agent; only that PC can
+// review, merge, push or throw it away. Merging and discarding wait until the
+// agent is between turns, and free the locks the chat holds afterwards.
+
+let worktreeBusy = false;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function ownWorktree(chatId: unknown): { chat: ChatInfo; worktree: ChatWorktree } | { error: string } {
+  const state = client.getState();
+  const chat = state.chats.find((c) => c.id === chatId);
+  if (!chat) return { error: 'That chat no longer exists.' };
+  const worktree = chat.worktree;
+  if (!worktree) return { error: 'This chat has no copy of its own yet; it gets one when the agent starts on it.' };
+  if (worktree.owner.id !== state.you?.id) return { error: `The agent's copy is on ${worktree.owner.name}'s PC; only they can open, merge or discard it.` };
+  // Names the runner makes (agent/<slug>-<id>); anything else is not acted on.
+  if (!/^agent\/[a-z0-9][a-z0-9-]*$/.test(worktree.branch)) return { error: 'That is not a branch the agent made.' };
+  if (!existsSync(worktree.folder)) return { error: `The agent's copy is no longer at ${worktree.folder}.` };
+  return { chat, worktree };
+}
+
+/** Frees the locks the chat's agent holds, once its work is merged or thrown away. */
+function releaseChatLocks(chatId: string) {
+  for (const lock of client.getState().locks) {
+    if (lock.chatId === chatId && lock.holder.kind === 'agent') client.releaseLock(lock.id);
+  }
+}
+
+async function refreshWorktree(chat: ChatInfo, worktree: ChatWorktree, note: string) {
+  const status = await worktreeStatus(worktree.folder, { branch: worktree.base, commit: worktree.baseCommit }).catch(() => null);
+  client.setChatWorktree(chat.id, { ...worktree, ...status, updatedAt: Date.now() }, note);
+}
+
+async function worktreeAction(chatId: unknown, action: unknown): Promise<ResultWith<string>> {
+  const own = ownWorktree(chatId);
+  if ('error' in own) return { ok: false, error: own.error };
+  const { chat, worktree } = own;
+  if (action === 'open') {
+    const problem = await shell.openPath(worktree.folder);
+    return problem ? { ok: false, error: problem } : { ok: true, value: 'Opened the folder.' };
+  }
+  if (action !== 'merge' && action !== 'pull-request' && action !== 'discard') return { ok: false, error: 'Unknown action.' };
+  if (chat.state !== 'idle') return { ok: false, error: 'The agent is still working in its copy. Wait for it to finish, or stop it first.' };
+  if (worktreeBusy || gitBusy) return { ok: false, error: 'Git is still busy with the last action.' };
+  const state = client.getState();
+  const agentName = state.agents.find((a) => a.id === chat.agentId)?.name ?? 'Agent';
+  worktreeBusy = true;
+  try {
+    switch (action) {
+      case 'merge': {
+        const folder = workspace?.folder;
+        if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left): the work is merged into it.' };
+        if ((await mainCheckout(worktree.folder)) !== (await mainCheckout(folder))) {
+          return { ok: false, error: 'Your project folder is a different repository from the one the agent copied.' };
+        }
+        await commitAll(worktree.folder, `${agentName}: ${chat.title}`);
+        const message = await mergeBranch(folder, worktree.branch, `Merge ${agentName}'s work: ${chat.title}`);
+        const into = workspace?.workspace?.branch ?? 'your branch';
+        releaseChatLocks(chat.id);
+        await refreshWorktree(chat, worktree, `merged ${agentName}'s work on ${worktree.branch} into ${into}`);
+        return { ok: true, value: message };
+      }
+      case 'pull-request': {
+        await commitAll(worktree.folder, `${agentName}: ${chat.title}`);
+        const message = await pushBranch(worktree.folder, worktree.branch, await gitToken());
+        await refreshWorktree(chat, worktree, `pushed ${agentName}'s work on ${worktree.branch} to GitHub`);
+        const repo = state.github.repo;
+        if (repo) {
+          const base = worktree.base ?? state.github.defaultBranch ?? 'main';
+          void shell.openExternal(
+            `https://github.com/${repo.owner}/${repo.name}/compare/${encodeURIComponent(base)}...${encodeURIComponent(worktree.branch)}?expand=1`,
+          );
+          return { ok: true, value: `${message} The pull request page is open in your browser.` };
+        }
+        return { ok: true, value: message };
+      }
+      case 'discard': {
+        const { response } = await messageBox({
+          type: 'warning',
+          buttons: ['Discard changes', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          message: `Throw away ${agentName}'s copy for "${chat.title}"?`,
+          detail: `Its folder and branch ${worktree.branch} are deleted, with ${plural(worktree.files.length, 'changed file')} that ${worktree.files.length === 1 ? 'is' : 'are'} not merged. Your project folder is not touched. The agent starts a fresh copy the next time it works in this chat.`,
+        });
+        if (response !== 0) return { ok: true, value: '' };
+        const root = await mainCheckout(worktree.folder);
+        if (workspace?.folder && root !== (await mainCheckout(workspace.folder).catch(() => null))) {
+          return { ok: false, error: 'The agent copied a different repository from your project folder; remove it from there.' };
+        }
+        await removeWorktree(root, worktree.folder, worktree.branch, true);
+        releaseChatLocks(chat.id);
+        client.setChatWorktree(chat.id, null, `discarded ${agentName}'s changes on ${worktree.branch}`);
+        return { ok: true, value: `Discarded ${worktree.branch}.` };
+      }
+    }
+    return { ok: false, error: 'Unknown action.' };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    worktreeBusy = false;
+    void watcher?.poll();
+  }
+}
+
+async function showWorktreeDiff(chatId: unknown): Promise<ResultWith<string>> {
+  const own = ownWorktree(chatId);
+  if ('error' in own) return { ok: false, error: own.error };
+  try {
+    return { ok: true, value: await worktreeDiff(own.worktree.folder, { branch: own.worktree.base, commit: own.worktree.baseCommit }) };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/**
+ * Deletes a chat after asking. When this PC holds the chat's copy and it has
+ * work nobody merged, you choose whether its branch is kept.
+ */
+async function deleteChat(chatId: unknown): Promise<Result> {
+  const chat = client.getState().chats.find((c) => c.id === chatId);
+  if (!chat) return { ok: false, error: 'That chat no longer exists.' };
+  const own = ownWorktree(chat.id);
+  const worktree = 'error' in own ? null : own.worktree;
+  const unmerged = worktree ? await worktreeStatus(worktree.folder, { branch: worktree.base, commit: worktree.baseCommit }).catch(() => null) : null;
+  const pending = unmerged && (unmerged.commits > 0 || unmerged.uncommitted > 0);
+  const { response } = await messageBox({
+    type: 'warning',
+    buttons: pending ? ['Delete, keep the branch', 'Delete with its changes', 'Cancel'] : ['Delete chat', 'Cancel'],
+    defaultId: pending ? 2 : 1,
+    cancelId: pending ? 2 : 1,
+    message: `Delete the chat "${chat.title}" for everyone?`,
+    detail: pending
+      ? `The agent's copy has ${plural(unmerged!.files.length, 'changed file')} that ${unmerged!.files.length === 1 ? 'is' : 'are'} not merged. ` +
+        `Keep the branch ${worktree!.branch} to merge them later, or delete them with the chat.`
+      : worktree
+        ? `The agent's copy (${worktree.branch}) has nothing left to merge and is removed too.`
+        : 'Its messages are deleted for everyone in the session.',
+  });
+  if (response === (pending ? 2 : 1)) return { ok: true };
+  if (worktree) {
+    try {
+      const keep = pending && response === 0;
+      if (keep) await commitAll(worktree.folder, 'Work in progress, saved when the chat was deleted');
+      await removeWorktree(await mainCheckout(worktree.folder), worktree.folder, worktree.branch, !keep);
+    } catch (error) {
+      return failure(error);
+    }
+  }
+  releaseChatLocks(chat.id);
+  client.deleteChat(chat.id);
   return { ok: true };
 }
 
@@ -1043,9 +1201,9 @@ ipcMain.on(Channel.updateChat, (_event, chatId: unknown, changes: { title?: unkn
   const taskId = changes.taskId === undefined ? undefined : typeof changes.taskId === 'string' ? changes.taskId : null;
   client.updateChat(chatId, { ...(title && { title: title.data }), ...(taskId !== undefined && { taskId }) });
 });
-ipcMain.on(Channel.deleteChat, (_event, chatId: unknown) => {
-  if (typeof chatId === 'string') client.deleteChat(chatId);
-});
+ipcMain.handle(Channel.deleteChat, (_event, chatId: unknown) => deleteChat(chatId));
+ipcMain.handle(Channel.worktreeAction, (_event, chatId: unknown, action: unknown) => worktreeAction(chatId, action));
+ipcMain.handle(Channel.worktreeDiff, (_event, chatId: unknown) => showWorktreeDiff(chatId));
 ipcMain.on(Channel.openChat, (_event, chatId: unknown) => {
   if (typeof chatId === 'string') client.openChat(chatId);
 });
