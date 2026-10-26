@@ -10,14 +10,24 @@ import {
   type LockKind,
   type ServerMessage,
   type SessionClient,
+  type Task,
   type ToolStatus,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
-import { describeContext, systemPrompt } from './context.js';
+import { describeContext, systemPrompt, type ContextInput } from './context.js';
 import { ProjectFiles } from './files.js';
 import { checkCommand, checkEdit, type GuardContext } from './guard.js';
 import { parseInput, type LoopMessage, type ModelAdapter, type ToolCall, type ToolResult } from './models/types.js';
-import { AGENT_TOOLS, EditFileInput, ListFilesInput, ReadFileInput, RunCommandInput, SearchInput, WriteFileInput } from './tools.js';
+import {
+  AGENT_TOOLS,
+  EditFileInput,
+  ListFilesInput,
+  ReadFileInput,
+  RecordTestResultInput,
+  RunCommandInput,
+  SearchInput,
+  WriteFileInput,
+} from './tools.js';
 
 // Runs one agent on this PC. It is connected to the session as its own
 // participant (kind "agent") and answers in every chat that belongs to its
@@ -81,6 +91,7 @@ const TOOL_LABEL: Record<string, string> = {
   write_file: 'Write',
   edit_file: 'Edit',
   run_command: 'Run',
+  record_test_result: 'Test result',
 };
 
 export class AgentRunner {
@@ -273,10 +284,21 @@ export class AgentRunner {
     const run = this.run(chatId);
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
     const context = describeContext(
-      { agent, chat, task, startedBy: this.options.startedBy },
+      this.contextInput(agent, chat, task),
       { filesRead: [...run.filesRead], conversation: JSON.stringify(run.history ?? []) },
     );
     this.client.setChatAgentState(chatId, state, context);
+  }
+
+  private contextInput(agent: AgentProfile, chat: ChatInfo, task: Task | null): ContextInput {
+    return {
+      agent,
+      chat,
+      task,
+      startedBy: this.options.startedBy,
+      memory: this.client.getState().memory,
+      recordsResults: agent.connection.type === 'api',
+    };
   }
 
   private notice(chatId: string, text: string) {
@@ -457,7 +479,7 @@ export class AgentRunner {
       const task = this.client.getState().tasks.find((t) => t.id === current.taskId) ?? null;
       const writer = this.textWriter(chat.id);
       const turn = await model.complete({
-        system: systemPrompt({ agent, chat: current, task, startedBy: this.options.startedBy }),
+        system: systemPrompt(this.contextInput(agent, current, task)),
         messages: history,
         tools: AGENT_TOOLS,
         signal,
@@ -554,6 +576,17 @@ export class AgentRunner {
         await this.reviewChanges(chat, agent, before, 'the command', signal);
         return result.exitCode === 0 ? ok(output) : error(output);
       }
+      case 'record_test_result': {
+        const input = parseInput(RecordTestResultInput, call.input);
+        if (!input.ok) return error(input.error);
+        const task = this.client.getState().tasks.find((t) => t.id === chat.taskId);
+        const criterion = task?.criteria.find((c) => c.id === input.value.criterion_id);
+        if (!task || !criterion) return error('This chat’s task has no acceptance criterion with that id.');
+        const result = input.value.result === 'verified' ? 'Verified' : 'Failing';
+        show(`${result}: ${criterion.text}`, 'done', input.value.evidence);
+        this.client.verifyCriterion(task.id, criterion.id, input.value.result, input.value.evidence);
+        return ok(`Recorded "${criterion.text}" as ${input.value.result}.`);
+      }
       default:
         return error(`There is no tool called ${call.name}.`);
     }
@@ -569,7 +602,7 @@ export class AgentRunner {
     const command = settings.commands?.[tool] ?? CLI_TOOLS[tool].command;
     const signal = run.abort!.signal;
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
-    const context = systemPrompt({ agent, chat, task, startedBy: this.options.startedBy });
+    const context = systemPrompt(this.contextInput(agent, chat, task));
     const before = await this.files.changedFiles();
 
     // Tool lines by the CLI's own tool ids.
