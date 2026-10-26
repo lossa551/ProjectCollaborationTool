@@ -20,11 +20,15 @@ import {
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { LiveText } from './LiveText';
+import { RoadmapView } from './Roadmap';
 
 // Screen 4: the planning space. Features, ideas and notes that everyone edits
 // live. A feature is written up together, then approved: that creates its
 // tasks on the board, and from then on the feature follows its tasks through
-// implementation, review and testing to done.
+// implementation, review and testing to done. It opens on the Roadmap
+// (Roadmap.tsx); the list and editor are its second view.
+
+type PlanningView = 'roadmap' | 'list';
 
 const SECTIONS: { kind: PlanKind; title: string; empty: string }[] = [
   { kind: 'feature', title: 'Features', empty: 'No features yet.' },
@@ -52,8 +56,13 @@ export function PlanningScreen({
   const { session } = state;
   const items = session.planning;
   const [selectedId, setSelectedId] = useState<string | null>(focusId);
+  // A plan picked on Home opens in the editor; everything else on the roadmap.
+  const [view, setView] = useState<PlanningView>(focusId ? 'list' : 'roadmap');
   useEffect(() => {
-    if (focusId) setSelectedId(focusId);
+    if (focusId) {
+      setSelectedId(focusId);
+      setView('list');
+    }
   }, [focusId]);
   const selected = items.find((i) => i.id === selectedId) ?? null;
   const editable = state.canEditTasks;
@@ -67,51 +76,85 @@ export function PlanningScreen({
     }
   }, [selected, items, filter]);
 
-  return (
-    <div className="planning-screen">
-      <aside className="plan-list">
-        <NewItem editable={editable} onCreated={setSelectedId} />
-        {filter && (
-          <p className="plan-filter small">
-            Only {FEATURE_STATE_LABELS[filter].toLowerCase()} features.{' '}
-            <button className="link" onClick={onClearFilter}>
-              Show all
-            </button>
-          </p>
-        )}
-        {SECTIONS.filter((section) => !filter || section.kind === 'feature').map((section) => {
-          const own = items.filter((i) => i.kind === section.kind && shown(i));
-          return (
-            <section key={section.kind}>
-              <h3 className="section-title">{section.title}</h3>
-              {own.length === 0 && <p className="muted small">{section.empty}</p>}
-              <ul>
-                {own.map((item) => (
-                  <li key={item.id}>
-                    <button className={item.id === selectedId ? 'plan-item active' : 'plan-item'} onClick={() => setSelectedId(item.id)}>
-                      <span className="plan-item-title">{item.title}</span>
-                      {item.kind === 'feature' && <FeatureBadge status={featureStatus(item, items, session.tasks)} />}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          );
-        })}
-      </aside>
-      {selected ? (
-        <PlanEditor key={selected.id} item={selected} state={state} onOpenTask={onOpenTask} onOpenChat={onOpenChat} onDeleted={() => setSelectedId(null)} />
-      ) : (
-        <section className="plan-editor card">
-          <h1>Planning space</h1>
-          <p className="muted">
-            Write up features together before anyone builds them: what and why, requirements, what it depends on, how you will know it
-            works, and the tasks it takes. Both of you can type in the same feature at once. Approving a feature puts its tasks on the
-            board.
-          </p>
-        </section>
-      )}
+  const filterNote = filter && (
+    <p className="plan-filter small">
+      Only {FEATURE_STATE_LABELS[filter].toLowerCase()} features.{' '}
+      <button className="link" onClick={onClearFilter}>
+        Show all
+      </button>
+    </p>
+  );
+  const tabs = (
+    <div className="tabs planning-tabs">
+      <button className={view === 'roadmap' ? 'nav active' : 'nav'} onClick={() => setView('roadmap')}>
+        Roadmap
+      </button>
+      <button className={view === 'list' ? 'nav active' : 'nav'} onClick={() => setView('list')}>
+        Features, ideas and notes
+      </button>
+      {view === 'roadmap' && filterNote}
     </div>
+  );
+
+  if (view === 'roadmap') {
+    return (
+      <>
+        {tabs}
+        <RoadmapView
+          state={state}
+          filter={filter}
+          onOpenFeature={(id) => {
+            setSelectedId(id);
+            setView('list');
+          }}
+          onOpenTask={onOpenTask}
+          onOpenChat={onOpenChat}
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      {tabs}
+      <div className="planning-screen">
+        <aside className="plan-list">
+          <NewItem editable={editable} onCreated={setSelectedId} />
+          {filterNote}
+          {SECTIONS.filter((section) => !filter || section.kind === 'feature').map((section) => {
+            const own = items.filter((i) => i.kind === section.kind && shown(i));
+            return (
+              <section key={section.kind}>
+                <h3 className="section-title">{section.title}</h3>
+                {own.length === 0 && <p className="muted small">{section.empty}</p>}
+                <ul>
+                  {own.map((item) => (
+                    <li key={item.id}>
+                      <button className={item.id === selectedId ? 'plan-item active' : 'plan-item'} onClick={() => setSelectedId(item.id)}>
+                        <span className="plan-item-title">{item.title}</span>
+                        {item.kind === 'feature' && <FeatureBadge status={featureStatus(item, items, session.tasks)} />}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })}
+        </aside>
+        {selected ? (
+          <PlanEditor key={selected.id} item={selected} state={state} onOpenTask={onOpenTask} onOpenChat={onOpenChat} onDeleted={() => setSelectedId(null)} />
+        ) : (
+          <section className="plan-editor card">
+            <h1>Planning space</h1>
+            <p className="muted">
+              Write up features together before anyone builds them: what and why, requirements, what it depends on, how you will know it
+              works, and the tasks it takes. Both of you can type in the same feature at once. Approving a feature puts its tasks on the
+              board.
+            </p>
+          </section>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -351,7 +394,7 @@ export function CriteriaSummary({ task }: { task: Task }) {
 }
 
 /** Picks which tasks to create and which task each acceptance criterion goes to. */
-function ApproveForm({ item, existing, onDone }: { item: PlanItem; existing: Task[]; onDone: () => void }) {
+export function ApproveForm({ item, existing, onDone }: { item: PlanItem; existing: Task[]; onDone: () => void }) {
   const taken = new Set(existing.map((t) => t.title.trim().toLowerCase()));
   const planned = useMemo(() => plannedTasks(item.tasks).filter((t) => !taken.has(t.title.toLowerCase())), [item.tasks]);
   const criteria = useMemo(() => planLines(item.criteria), [item.criteria]);

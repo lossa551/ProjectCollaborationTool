@@ -37,6 +37,15 @@ people do: they have a presence, hold locks, own tasks and go through review.
 4. **Planning space.** Features, ideas and notes; a feature doc edited live by
    both people, with requirements, dependencies and implementation tasks;
    discussion with people and agents; approve plan and create tasks.
+   Opens on the **Roadmap** (issue #42): one lane per milestone (title, goal,
+   target date; Now, Next and Later to start), features in priority order,
+   dragged to reorder or move between milestones. Each row shows the stage
+   pipeline, tasks done, criteria verified, the PR and its checks, who and
+   which agent is on it, "waits for" dependencies and a blocked / not verified
+   badge. From a row you approve the plan, pick the person or agent per stage
+   and start an agent on the next open task. Milestone headers show progress
+   and "at risk" when blocked features remain within a week of the date. Home
+   shows the current milestone's progress and links here.
 5. **Agents.** Each agent's connection (model API, CLI tool, plugin, local
    runtime), responsibilities, allowed paths and what it needs approval for.
 6. **Project memory.** Architecture decisions, conventions, known issues and
