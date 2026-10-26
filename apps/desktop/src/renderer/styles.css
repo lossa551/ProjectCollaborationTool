@@ -1138,3 +1138,160 @@ a {
 .git-changes summary {
   cursor: pointer;
 }
+
+/* Project memory: Folder notes */
+.folder-notes {
+  display: grid;
+  gap: 16px;
+}
+
+.fn-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.fn-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.fn-body {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.fn-tree .tabs {
+  margin-bottom: 8px;
+}
+
+.fn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.fn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.fn-row:hover,
+.fn-row.active {
+  background: var(--panel-2);
+}
+
+.fn-twisty {
+  width: 12px;
+  flex: none;
+  color: var(--muted);
+}
+
+.fn-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fn-weight {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 110px;
+  flex: none;
+}
+
+.fn-bar {
+  height: 6px;
+  max-width: 60px;
+  border-radius: 3px;
+  background: var(--accent);
+  opacity: 0.6;
+}
+
+.fn-state {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fn-fresh {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.fn-drifting {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.fn-stale {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.fn-missing {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.fn-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 8px 0;
+}
+
+.fn-facts dt {
+  color: var(--muted);
+}
+
+.fn-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.fn-section {
+  margin-top: 12px;
+}
+
+.fn-paths {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+
+.fn-prompt {
+  font: 12px/1.45 Consolas, 'Cascadia Mono', monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre.fn-prompt {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-height: 240px;
+  overflow-y: auto;
+}
