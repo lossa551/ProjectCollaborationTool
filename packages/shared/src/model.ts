@@ -57,6 +57,31 @@ export const TaskScope = z.array(z.string().trim().min(1).max(260)).max(100);
 /** A git branch name, as GitHub shows it. */
 export const BranchName = z.string().trim().min(1).max(255);
 
+/** Whether an acceptance criterion has been checked, and how it went. */
+export const CriterionState = z.enum(['untested', 'verified', 'failing']);
+export type CriterionState = z.infer<typeof CriterionState>;
+
+export const CRITERION_STATE_LABELS: Record<CriterionState, string> = {
+  untested: 'Not tested',
+  verified: 'Verified',
+  failing: 'Failing',
+};
+
+export const CriterionText = z.string().trim().min(1).max(1000);
+export const CRITERIA_LIMIT = 50;
+
+export const Criterion = z.object({
+  id: z.string().min(1).max(64),
+  text: CriterionText,
+  state: CriterionState,
+  /** The recorded test result: what was checked and what happened. */
+  evidence: z.string().max(4000),
+  /** Who recorded the result, and when. */
+  by: z.string().max(64).nullable(),
+  at: z.number().nullable(),
+});
+export type Criterion = z.infer<typeof Criterion>;
+
 export const Task = z.object({
   id: z.string(),
   title: TaskTitle,
@@ -66,6 +91,10 @@ export const Task = z.object({
   scope: TaskScope,
   /** The git branch the work happens on; its pull request shows on the card. */
   branch: BranchName.nullable().default(null),
+  /** The planning-space feature this task was created from. */
+  featureId: z.string().nullable().default(null),
+  /** What must be true before the task is done, each with its test result. */
+  criteria: z.array(Criterion).max(CRITERIA_LIMIT).default([]),
   createdAt: z.number(),
   updatedAt: z.number(),
   /** Bumped on every change; lets offline edits detect conflicts later. */

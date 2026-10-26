@@ -4,3 +4,7 @@ export * from './invite.js';
 export * from './client.js';
 export * from './paths.js';
 export * from './overlap.js';
+export * from './docs.js';
+export * from './planning.js';
+export * from './memory.js';
+export * from './bloat.js';

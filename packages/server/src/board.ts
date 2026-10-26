@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { STAGE_LABELS, type Participant, type Task, type TaskChanges, type TaskStage } from '@pct/shared';
+import {
+  CRITERION_STATE_LABELS,
+  STAGE_LABELS,
+  mergeCriteria,
+  type CriterionState,
+  type Participant,
+  type Task,
+  type TaskChanges,
+  type TaskStage,
+} from '@pct/shared';
 
 // The shared task board: validates changes and describes them for the
 // activity feed. Pure in-memory logic; the server persists and broadcasts.
@@ -23,7 +32,17 @@ export class TaskBoard {
     return this.tasks.get(taskId);
   }
 
-  create(input: { id?: string; title: string; stage?: TaskStage; scope?: string[] }, now = Date.now()): BoardResult {
+  create(
+    input: {
+      id?: string;
+      title: string;
+      stage?: TaskStage;
+      scope?: string[];
+      featureId?: string | null;
+      criteria?: { id: string; text: string }[];
+    },
+    now = Date.now(),
+  ): BoardResult {
     // A replayed create (the client did not see our answer before it dropped) changes nothing.
     const existing = input.id ? this.tasks.get(input.id) : undefined;
     if (existing) return { ok: true, task: existing, descriptions: [], conflicts: [] };
@@ -34,6 +53,8 @@ export class TaskBoard {
       owner: null,
       scope: input.scope ?? [],
       branch: null,
+      featureId: input.featureId ?? null,
+      criteria: mergeCriteria([], uniqueIds(input.criteria ?? [])),
       createdAt: now,
       updatedAt: now,
       version: 1,
@@ -70,6 +91,11 @@ export class TaskBoard {
     clash('ownerId', (expected.ownerId ?? null) === (current.owner?.id ?? null), `"${current.title}" was reassigned by someone else`);
     clash('scope', (expected.scope ?? []).join('\n') === current.scope.join('\n'), `the paths of "${current.title}" were changed by someone else`);
     clash('branch', (expected.branch ?? null) === current.branch, `the branch of "${current.title}" was changed by someone else`);
+    clash(
+      'criteria',
+      criteriaKey(expected.criteria ?? []) === criteriaKey(current.criteria),
+      `the acceptance criteria of "${current.title}" were changed by someone else`,
+    );
 
     const next: Task = { ...current };
     const descriptions: string[] = [];
@@ -104,11 +130,43 @@ export class TaskBoard {
       );
     }
 
+    if (changes.criteria !== undefined && criteriaKey(changes.criteria) !== criteriaKey(current.criteria)) {
+      next.criteria = mergeCriteria(current.criteria, uniqueIds(changes.criteria));
+      descriptions.push(`changed the acceptance criteria of "${next.title}"`);
+    }
+
     if (descriptions.length === 0) return { ok: true, task: current, descriptions, conflicts };
     next.updatedAt = now;
     next.version = current.version + 1;
     this.tasks.set(taskId, next);
     return { ok: true, task: next, descriptions, conflicts };
+  }
+
+  /** Records a test result for one criterion. The latest result wins. */
+  verify(
+    taskId: string,
+    criterionId: string,
+    result: { state: CriterionState; evidence: string },
+    by: string,
+    now = Date.now(),
+  ): BoardResult {
+    const current = this.tasks.get(taskId);
+    if (!current) return { ok: false, message: 'That task no longer exists' };
+    const criterion = current.criteria.find((c) => c.id === criterionId);
+    if (!criterion) return { ok: false, message: 'That acceptance criterion no longer exists' };
+    const evidence = result.evidence.trim();
+    if (criterion.state === result.state && criterion.evidence === evidence) {
+      return { ok: true, task: current, descriptions: [], conflicts: [] };
+    }
+    const next: Task = {
+      ...current,
+      criteria: current.criteria.map((c) => (c.id === criterionId ? { ...c, state: result.state, evidence, by, at: now } : c)),
+      updatedAt: now,
+      version: current.version + 1,
+    };
+    this.tasks.set(taskId, next);
+    const what = result.state === 'untested' ? 'marked as not tested' : `recorded ${CRITERION_STATE_LABELS[result.state].toLowerCase()}`;
+    return { ok: true, task: next, descriptions: [`${what}: "${criterion.text}" on "${next.title}"`], conflicts: [] };
   }
 
   delete(taskId: string): BoardResult {
@@ -117,4 +175,12 @@ export class TaskBoard {
     this.tasks.delete(taskId);
     return { ok: true, task, descriptions: [`deleted "${task.title}"`], conflicts: [] };
   }
+}
+
+const criteriaKey = (criteria: { id: string; text: string }[]) => JSON.stringify(criteria.map(({ id, text }) => [id, text]));
+
+/** A repeated id would make two criteria share one result; the first one wins. */
+function uniqueIds<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  return items.filter((item) => !seen.has(item.id) && seen.add(item.id));
 }

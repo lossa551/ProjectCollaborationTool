@@ -15,6 +15,9 @@ import {
   ChatTitle,
   ChatTool,
   CHAT_TEXT_LIMIT,
+  CRITERIA_LIMIT,
+  CriterionState,
+  CriterionText,
   Handoff,
   EMPTY_GITHUB_STATUS,
   GitHubStatus,
@@ -31,9 +34,11 @@ import {
   TaskTitle,
   Workspace,
 } from './model.js';
+import { BloatReport } from './bloat.js';
+import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -67,6 +72,9 @@ export const PingMessage = z.object({
   t: z.number(),
 });
 
+/** Acceptance criteria as written; results stay with the criterion of the same id. */
+export const CriteriaTexts = z.array(z.object({ id: z.string().min(1).max(64), text: CriterionText })).max(CRITERIA_LIMIT);
+
 export const TaskCreateMessage = z.object({
   type: z.literal('task.create'),
   /**
@@ -78,6 +86,9 @@ export const TaskCreateMessage = z.object({
   title: TaskTitle,
   stage: TaskStage.optional(),
   scope: TaskScope.optional(),
+  /** The planning-space feature the task comes from. */
+  featureId: z.string().max(64).nullable().optional(),
+  criteria: CriteriaTexts.optional(),
 });
 
 const TaskFields = z.object({
@@ -88,6 +99,7 @@ const TaskFields = z.object({
   scope: TaskScope.optional(),
   /** A branch name, or null to unlink. */
   branch: BranchName.nullable().optional(),
+  criteria: CriteriaTexts.optional(),
 });
 
 export const TaskUpdateMessage = z.object({
@@ -105,6 +117,35 @@ export const TaskUpdateMessage = z.object({
 export const TaskDeleteMessage = z.object({
   type: z.literal('task.delete'),
   taskId: z.string(),
+});
+
+/** Records a test result for one acceptance criterion. People and agents both can. */
+export const TaskVerifyMessage = z.object({
+  type: z.literal('task.verify'),
+  taskId: z.string(),
+  criterionId: z.string(),
+  state: CriterionState,
+  evidence: z.string().max(4000),
+});
+
+/** Starts syncing a shared document: what this client has, as a Yjs state vector. */
+export const DocSyncMessage = z.object({
+  type: z.literal('doc.sync'),
+  docId: DocId,
+  stateVector: EncodedUpdate,
+});
+
+/** A change to a shared document (a Yjs update); the server merges and relays it. */
+export const DocUpdateMessage = z.object({
+  type: z.literal('doc.update'),
+  docId: DocId,
+  update: EncodedUpdate,
+});
+
+/** Shares the result of a bloat check run on your project folder. */
+export const BloatReportMessage = z.object({
+  type: z.literal('bloat.report'),
+  report: BloatReport,
 });
 
 export const LockAcquireMessage = z.object({
@@ -236,6 +277,10 @@ export const ClientMessage = z.discriminatedUnion('type', [
   TaskCreateMessage,
   TaskUpdateMessage,
   TaskDeleteMessage,
+  TaskVerifyMessage,
+  DocSyncMessage,
+  DocUpdateMessage,
+  BloatReportMessage,
   LockAcquireMessage,
   LockReleaseMessage,
   LockRecoverMessage,
@@ -272,6 +317,7 @@ export const WelcomeMessage = z.object({
   workspaces: z.array(z.object({ participantId: z.string(), workspace: Workspace })),
   agents: z.array(AgentProfile),
   chats: z.array(ChatInfo),
+  bloat: BloatReport.nullable(),
 });
 
 export const ParticipantJoinedMessage = z.object({
@@ -372,6 +418,29 @@ export const ChatStoppedMessage = z.object({
   by: z.string(),
 });
 
+/**
+ * The answer to doc.sync: what the client is missing, and the server's state
+ * vector so the client can send back what the server is missing.
+ */
+export const DocStateMessage = z.object({
+  type: z.literal('doc.state'),
+  docId: DocId,
+  update: EncodedUpdate,
+  stateVector: EncodedUpdate,
+});
+
+/** Someone else changed a shared document. */
+export const DocChangedMessage = z.object({
+  type: z.literal('doc.changed'),
+  docId: DocId,
+  update: EncodedUpdate,
+});
+
+export const BloatChangedMessage = z.object({
+  type: z.literal('bloat.changed'),
+  report: BloatReport,
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -418,6 +487,9 @@ export const ServerMessage = z.discriminatedUnion('type', [
   ChatMessageMessage,
   ChatHistoryMessage,
   ChatStoppedMessage,
+  DocStateMessage,
+  DocChangedMessage,
+  BloatChangedMessage,
   PongMessage,
   ErrorMessage,
 ]);
@@ -459,7 +531,10 @@ export const SessionSnapshot = z.object({
   github: GitHubStatus.default(EMPTY_GITHUB_STATUS),
   agents: z.array(AgentProfile).default([]),
   chats: z.array(ChatInfo).default([]),
-  queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage])),
+  bloat: BloatReport.nullable().default(null),
+  /** Each shared document's full Yjs state, including edits not synced yet. */
+  docs: z.partialRecord(DocId, z.string()).default({}),
+  queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage, TaskVerifyMessage])),
 });
 export type SessionSnapshot = z.infer<typeof SessionSnapshot>;
 

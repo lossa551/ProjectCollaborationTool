@@ -1,6 +1,7 @@
 import type {
   Activity,
   AgentProfile,
+  BloatReport,
   ChatInfo,
   ChatMessage,
   Lock,
@@ -9,6 +10,7 @@ import type {
   RepoRef,
   SessionInfo,
   Task,
+  DocId,
 } from '@pct/shared';
 
 // Where the server keeps durable state. The in-memory store is the first
@@ -58,6 +60,12 @@ export interface Storage {
   listChatMessages(chatId: string, limit?: number): Promise<ChatMessage[]>;
   /** Adds a message, or replaces the one with the same id. */
   saveChatMessage(message: ChatMessage): Promise<void>;
+  /** The shared documents (planning space, project memory) as encoded Yjs state. */
+  loadDocs(): Promise<Partial<Record<DocId, Uint8Array>>>;
+  saveDoc(docId: DocId, state: Uint8Array): Promise<void>;
+  /** The last bloat check anyone shared. */
+  loadBloat(): Promise<BloatReport | null>;
+  saveBloat(report: BloatReport): Promise<void>;
   /** Append-only log of what happened, for the activity feed and later undo. */
   appendActivity(entry: Activity): Promise<void>;
   /** The most recent entries, oldest first. */
@@ -77,6 +85,8 @@ export class MemoryStorage implements Storage {
   private readonly agents = new Map<string, AgentProfile>();
   private readonly chats = new Map<string, ChatInfo>();
   private readonly chatMessages = new Map<string, ChatMessage[]>();
+  private readonly docs: Partial<Record<DocId, Uint8Array>> = {};
+  private bloat: BloatReport | null = null;
 
   async loadSession() {
     return this.session;
@@ -177,6 +187,22 @@ export class MemoryStorage implements Storage {
     if (index >= 0) list[index] = message;
     else list.push(message);
     this.chatMessages.set(message.chatId, list);
+  }
+
+  async loadDocs() {
+    return { ...this.docs };
+  }
+
+  async saveDoc(docId: DocId, state: Uint8Array) {
+    this.docs[docId] = state;
+  }
+
+  async loadBloat() {
+    return this.bloat;
+  }
+
+  async saveBloat(report: BloatReport) {
+    this.bloat = report;
   }
 
   async appendActivity(entry: Activity) {
