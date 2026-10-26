@@ -523,6 +523,13 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           chatChanged(result.value);
           break;
         }
+        case 'chat.worktree': {
+          const result = chats.setWorktree(message.chatId, message.worktree, participant);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          chatChanged(result.value);
+          if (message.note) record(participant, message.note, result.value.taskId);
+          break;
+        }
         case 'chat.stop': {
           if (!chats.getChat(message.chatId)) return fail(conn, 'not_found', 'That chat no longer exists');
           broadcast({ type: 'chat.stopped', chatId: message.chatId, by: participant.name });

@@ -66,11 +66,18 @@ export type GitAction =
   | { type: 'create-branch'; branch: string; from: string | null }
   | { type: 'abort-merge' };
 
+/**
+ * What can be done with an agent chat's own copy, on the PC that holds it:
+ * open its folder, merge its branch into the branch checked out in your
+ * project folder, push it and open a pull request, or throw it away.
+ */
+export type WorktreeAction = 'open' | 'merge' | 'pull-request' | 'discard';
+
 /** An agent started on this PC. */
 export interface LocalAgent {
   status: 'starting' | 'running' | 'error';
   error: string | null;
-  /** The project folder it works in. */
+  /** The project folder its chats copy from. */
   folder: string;
 }
 
@@ -251,7 +258,12 @@ export interface PctApi {
   /** Starts a new chat with the messages up to and including one message; returns the new chat's id. */
   branchChat(request: { fromChatId: string; fromMessageId: string; title: string; agentId: string }): Promise<ResultWith<string>>;
   updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void;
-  deleteChat(chatId: string): void;
+  /** Asks first (and about the agent's copy, if this PC holds one with unmerged work), then deletes the chat for everyone. */
+  deleteChat(chatId: string): Promise<Result>;
+  /** Acts on a chat's own copy of the project, which is on this PC; the value says what happened. */
+  worktreeAction(chatId: string, action: WorktreeAction): Promise<ResultWith<string>>;
+  /** The changes in a chat's copy since it started, as a unified diff. */
+  worktreeDiff(chatId: string): Promise<ResultWith<string>>;
   openChat(chatId: string): void;
   postChat(chatId: string, text: string): void;
   decideApproval(chatId: string, messageId: string, approve: boolean): void;
@@ -327,6 +339,8 @@ export const Channel = {
   branchChat: 'pct:branch-chat',
   updateChat: 'pct:update-chat',
   deleteChat: 'pct:delete-chat',
+  worktreeAction: 'pct:worktree-action',
+  worktreeDiff: 'pct:worktree-diff',
   openChat: 'pct:open-chat',
   postChat: 'pct:post-chat',
   decideApproval: 'pct:decide-approval',

@@ -8,3 +8,4 @@ export { AnthropicAdapter } from './models/anthropic.js';
 export { OpenAICompatibleAdapter } from './models/openai.js';
 export type { LoopMessage, ModelAdapter, ModelRequest, ModelTurn, ToolCall, ToolResult, ToolSpec } from './models/types.js';
 export { createModel, type ApiKeys } from './providers.js';
+export * from './worktree.js';

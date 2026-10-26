@@ -425,6 +425,35 @@ export const ChatBranch = z.object({
 });
 export type ChatBranch = z.infer<typeof ChatBranch>;
 
+/**
+ * The agent's own copy of the project for one chat: a git worktree on its own
+ * branch, on the PC of the person who started the agent. Its edits stay there
+ * until someone merges them, so they never mix with a person's own changes.
+ */
+export const ChatWorktree = z.object({
+  /** The agent's branch, e.g. agent/double-jump-3f2a1c. */
+  branch: BranchName,
+  /** The branch it started from, e.g. main; null when that was a detached commit. */
+  base: BranchName.nullable(),
+  /** The commit it started from. */
+  baseCommit: z.string().min(4).max(64),
+  /** Where the copy is, on its owner's PC. */
+  folder: z.string().min(1).max(1024),
+  /** The person whose PC holds the copy; only they can open, merge or discard it. */
+  owner: z.object({ id: z.string(), name: z.string() }),
+  /** Files changed on the branch since it started, committed or not. */
+  files: z
+    .array(z.object({ path: z.string().min(1).max(1024), change: FileChange }))
+    .max(WORKSPACE_FILE_LIMIT),
+  truncated: z.boolean(),
+  /** Commits on the branch that are not in the base yet. */
+  commits: z.number().int().min(0),
+  /** Files changed but not committed in the copy. */
+  uncommitted: z.number().int().min(0),
+  updatedAt: z.number(),
+});
+export type ChatWorktree = z.infer<typeof ChatWorktree>;
+
 export const ChatInfo = z.object({
   id: z.string(),
   title: ChatTitle,
@@ -433,6 +462,8 @@ export const ChatInfo = z.object({
   createdBy: TaskOwner,
   handoff: Handoff.nullable(),
   branchedFrom: ChatBranch.nullable().default(null),
+  /** The agent's own copy of the project; null until it starts, or without git. */
+  worktree: ChatWorktree.nullable().default(null),
   state: ChatAgentState,
   /** What the agent is doing right now, in one line, e.g. "Editing src/player.ts". Null when idle. */
   activity: ChatActivity.nullable().default(null),

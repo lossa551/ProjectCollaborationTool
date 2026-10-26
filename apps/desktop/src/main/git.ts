@@ -266,3 +266,39 @@ async function perform(cwd: string, action: GitAction, token: string | null): Pr
     }
   }
 }
+
+/**
+ * Merges another branch (an agent's) into the branch checked out here. A
+ * conflict is left for the person to fix, the same as after a pull.
+ */
+export async function mergeBranch(cwd: string, branch: string, message: string): Promise<string> {
+  try {
+    const head = (await run(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd })).trim();
+    if (head === 'HEAD') throw new Error('No branch is checked out in your project folder (detached HEAD). Switch to a branch first.');
+    if ((await info(cwd)).merging) throw new Error('Your project folder is in the middle of a merge. Finish or abort it first.');
+    try {
+      const out = await run(['merge', '--no-ff', '--no-edit', '-m', message, branch], { cwd, timeout: 5 * 60_000 });
+      return /Already up to date/i.test(out) ? `${head} already has everything from ${branch}.` : `Merged ${branch} into ${head}.`;
+    } catch (error) {
+      const { conflicted } = await info(cwd);
+      if (conflicted.length > 0) {
+        return `Merged ${branch} into ${head}, but ${plural(conflicted.length, 'file')} ${conflicted.length === 1 ? 'has' : 'have'} conflicts. Fix them in your editor and commit, or abort the merge on the GitHub page.`;
+      }
+      throw error;
+    }
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
+/** Pushes a branch (an agent's) from its folder to GitHub. */
+export async function pushBranch(cwd: string, branch: string, token: string | null): Promise<string> {
+  try {
+    await remote(['push', '-u', 'origin', branch], { cwd, token });
+    return `Pushed ${branch} to GitHub.`;
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
+const info = (cwd: string) => readGitInfo(cwd);

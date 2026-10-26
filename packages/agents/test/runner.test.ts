@@ -58,7 +58,8 @@ class ScriptedModel implements ModelAdapter {
 async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: Partial<AgentRunnerOptions> = {}) {
   server = await startServer({ port: 0, host: '127.0.0.1' });
   const root = mkdtempSync(joinPath(tmpdir(), 'pct-agent-'));
-  dirs.push(root);
+  // Agents' own copies go next to the project folder.
+  dirs.push(root, `${root}-agents`);
   const martin = await join('Martin');
   await waitFor(martin, (s) => s.status === 'connected');
   martin.saveAgent({
@@ -367,5 +368,125 @@ describe('agent runner', () => {
     const state = await waitFor(second, (s) => s.status === 'closed');
     expect(state.error?.code).toBe('agent_running');
     expect(state.error?.message).toContain("Martin's PC");
+  });
+});
+
+describe('agent copies (worktrees)', () => {
+  const gitIn = (cwd: string) => (...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
+
+  /** A project folder with one commit on main. */
+  function commitProject(root: string) {
+    const git = gitIn(root);
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    mkdirSync(joinPath(root, 'src'), { recursive: true });
+    writeFileSync(joinPath(root, 'src/player.gd'), 'extends Node\n');
+    git('add', '.');
+    git('commit', '-qm', 'start');
+    return git;
+  }
+
+  const write = (id: string, path: string, content: string): ModelTurn => ({
+    text: '',
+    toolCalls: [{ id, name: 'write_file', input: { path, content } }],
+    stop: 'tool_use',
+  });
+
+  it('edits only its own copy, on its own branch, and keeps the lock until the work is merged', async () => {
+    const { martin, profile, model, root } = await setup([
+      write('t1', 'src/player.gd', 'extends Node2D\n'),
+      { text: 'Done.', toolCalls: [], stop: 'end' },
+    ]);
+    const git = commitProject(root);
+    const taskId = martin.createTask('Double jump');
+    await waitFor(martin, (s) => s.tasks.length === 1);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump', taskId });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Make the player a Node2D' });
+
+    const state = await waitFor(
+      martin,
+      (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle' && (s.chats.find((c) => c.id === chatId)?.worktree?.files.length ?? 0) > 0,
+    );
+    const copy = state.chats.find((c) => c.id === chatId)!.worktree!;
+    expect(copy.branch).toMatch(/^agent\/double-jump-[a-z0-9]{1,6}$/);
+    expect(copy.base).toBe('main');
+    expect(copy.folder.startsWith(`${root}-agents`)).toBe(true);
+    expect(copy.files).toEqual([{ path: 'src/player.gd', change: 'modified' }]);
+    expect(copy.uncommitted).toBe(1);
+    // The person's own folder and branch are untouched.
+    expect(readFileSync(joinPath(root, 'src/player.gd'), 'utf8')).toBe('extends Node\n');
+    expect(git('status', '--porcelain')).toBe('');
+    expect(readFileSync(joinPath(copy.folder, 'src/player.gd'), 'utf8')).toBe('extends Node2D\n');
+    // The agent is told where it works, and everyone sees a notice.
+    expect(model.requests[0]!.system).toContain(`own copy of the project (a git worktree on branch ${copy.branch}, started from main)`);
+    expect(state.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.includes(`on branch ${copy.branch}, started from main`))).toBe(true);
+    // Changed in the copy and not merged: the lock stays.
+    expect(state.locks.map((l) => l.path)).toEqual(['src/player.gd']);
+  });
+
+  it('gives two chats two copies that do not see each other’s edits', async () => {
+    const { martin, profile, root } = await setup([
+      write('a1', 'src/enemy.gd', 'enemy\n'),
+      { text: 'Enemy done.', toolCalls: [], stop: 'end' },
+      write('b1', 'src/menu.gd', 'menu\n'),
+      { text: 'Menu done.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const enemy = martin.createChat({ agentId: profile.id, title: 'Enemy AI' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === enemy));
+    martin.openChat(enemy);
+    martin.postChat(enemy, { kind: 'text', text: 'Write the enemy' });
+    await waitFor(martin, (s) => (s.chats.find((c) => c.id === enemy)?.worktree?.files.length ?? 0) > 0 && s.chats.find((c) => c.id === enemy)?.state === 'idle');
+    const menu = martin.createChat({ agentId: profile.id, title: 'Main menu' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === menu));
+    martin.openChat(menu);
+    martin.postChat(menu, { kind: 'text', text: 'Write the menu' });
+    const state = await waitFor(martin, (s) => (s.chats.find((c) => c.id === menu)?.worktree?.files.length ?? 0) > 0 && s.chats.find((c) => c.id === menu)?.state === 'idle');
+
+    const a = state.chats.find((c) => c.id === enemy)!.worktree!;
+    const b = state.chats.find((c) => c.id === menu)!.worktree!;
+    expect(a.folder).not.toBe(b.folder);
+    expect(a.branch).not.toBe(b.branch);
+    expect(existsSync(joinPath(a.folder, 'src/enemy.gd'))).toBe(true);
+    expect(existsSync(joinPath(a.folder, 'src/menu.gd'))).toBe(false);
+    expect(existsSync(joinPath(b.folder, 'src/menu.gd'))).toBe(true);
+    expect(existsSync(joinPath(b.folder, 'src/enemy.gd'))).toBe(false);
+    expect(b.files.map((f) => f.path)).toEqual(['src/menu.gd']);
+  });
+
+  it('removes a copy with nothing to merge when its task is done, and keeps the work of a deleted chat on its branch', async () => {
+    const { martin, profile, root } = await setup([
+      { text: 'Nothing to change.', toolCalls: [], stop: 'end' },
+      write('t1', 'src/boss.gd', 'boss\n'),
+      { text: 'Boss done.', toolCalls: [], stop: 'end' },
+    ]);
+    const git = commitProject(root);
+    const taskId = martin.createTask('Look around');
+    await waitFor(martin, (s) => s.tasks.length === 1);
+    const look = martin.createChat({ agentId: profile.id, title: 'Look', taskId });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === look));
+    martin.openChat(look);
+    martin.postChat(look, { kind: 'text', text: 'Have a look' });
+    const before = await waitFor(martin, (s) => !!s.chats.find((c) => c.id === look)?.worktree);
+    const lookCopy = before.chats.find((c) => c.id === look)!.worktree!;
+    expect(existsSync(lookCopy.folder)).toBe(true);
+    martin.updateTask(taskId, { stage: 'done' });
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === look)?.worktree === null);
+    expect(existsSync(lookCopy.folder)).toBe(false);
+    expect(git('branch', '--list', lookCopy.branch)).toBe('');
+
+    const boss = martin.createChat({ agentId: profile.id, title: 'Boss' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === boss));
+    martin.openChat(boss);
+    martin.postChat(boss, { kind: 'text', text: 'Write the boss' });
+    const working = await waitFor(martin, (s) => (s.chats.find((c) => c.id === boss)?.worktree?.files.length ?? 0) > 0 && s.chats.find((c) => c.id === boss)?.state === 'idle');
+    const bossCopy = working.chats.find((c) => c.id === boss)!.worktree!;
+    martin.deleteChat(boss);
+    await waitFor(martin, (s) => !s.chats.some((c) => c.id === boss));
+    await expect.poll(() => existsSync(bossCopy.folder)).toBe(false);
+    expect(git('show', `${bossCopy.branch}:src/boss.gd`)).toBe('boss');
   });
 });

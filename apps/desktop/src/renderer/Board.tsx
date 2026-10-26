@@ -80,6 +80,7 @@ export function Board({
                   pull={pullForBranch(github, task.branch)}
                   overlaps={overlapsForTask(overlaps, task)}
                   working={chats.filter((c) => c.taskId === task.id && c.state !== 'idle')}
+                  copies={chats.filter((c) => c.taskId === task.id && c.worktree && c.worktree.files.length > 0)}
                   agentName={(chat) => participants.find((p) => p.agent?.profileId === chat.agentId)?.name ?? 'Agent'}
                   draggable={editable}
                   selected={task.id === selectedId}
@@ -102,6 +103,7 @@ function TaskCard({
   pull,
   overlaps,
   working,
+  copies,
   agentName,
   draggable,
   selected,
@@ -114,6 +116,8 @@ function TaskCard({
   overlaps: Overlap[];
   /** Agent chats on this task that are busy right now. */
   working: ChatInfo[];
+  /** Agent chats on this task whose own copy has changes. */
+  copies: ChatInfo[];
   agentName: (chat: ChatInfo) => string;
   draggable: boolean;
   selected: boolean;
@@ -151,6 +155,11 @@ function TaskCard({
           </span>
         )}
         {pull ? <PullBadge pull={pull} link={false} /> : task.branch && <code className="muted small">{task.branch}</code>}
+        {copies.map((chat) => (
+          <span key={chat.id} className="copy-badge" title={`${chat.worktree!.branch}, not merged yet:\n${chat.worktree!.files.map((f) => f.path).join('\n')}`}>
+            {agentName(chat)}: {chat.worktree!.files.length} {chat.worktree!.files.length === 1 ? 'file' : 'files'} to merge
+          </span>
+        ))}
         <CriteriaSummary task={task} />
         {overlaps.length > 0 && (
           <span className="warning" title={overlaps.map((o) => o.path).join('\n')}>

@@ -15,6 +15,7 @@ import {
   ChatMessageKind,
   ChatTitle,
   ChatTool,
+  ChatWorktree,
   CHAT_TEXT_LIMIT,
   CRITERIA_LIMIT,
   CriterionState,
@@ -41,7 +42,7 @@ import { BloatReport } from './bloat.js';
 import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -287,6 +288,19 @@ export const ChatAgentMessage = z.object({
   activity: ChatActivity.nullable().optional(),
 });
 
+/**
+ * Reports the agent's own copy of the project for a chat (null once it is
+ * gone). Sent by the agent and by its owner's app after merging or
+ * discarding; a note is recorded in the activity feed.
+ */
+export const ChatWorktreeMessage = z.object({
+  type: z.literal('chat.worktree'),
+  chatId: z.string(),
+  worktree: ChatWorktree.nullable(),
+  /** What happened, e.g. "merged agent/jump into main". */
+  note: z.string().trim().min(1).max(300).optional(),
+});
+
 /** Asks the chat's agent to stop what it is doing. */
 export const ChatStopMessage = z.object({
   type: z.literal('chat.stop'),
@@ -320,6 +334,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   ChatPostMessage,
   ChatDecideMessage,
   ChatAgentMessage,
+  ChatWorktreeMessage,
   ChatStopMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;

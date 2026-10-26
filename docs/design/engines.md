@@ -47,6 +47,14 @@ first (Summer is Godot-based, so they share most of the work), Unreal after.
 
 ## Open
 
+- Agent copies (#32): each agent chat works in a git worktree in
+  `<project>-agents/<branch>`, a second checkout next to the project folder.
+  Engines that import assets into a cache (Godot's `.godot/`, Unreal's
+  `DerivedDataCache`/`Intermediate`) will build that cache again in each copy,
+  which is slow for big projects. The Godot (#10) and Unreal (#11) adapters
+  should decide whether to share or seed the cache, and whether an agent copy
+  needs the engine open at all.
+
 
 Sources: https://docs.summerengine.com/index.md,
 https://www.summerengine.com/blog/summer-vs-orca-engine,

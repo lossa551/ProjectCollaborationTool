@@ -14,8 +14,9 @@ import type { LocalAgent } from '../common/api';
 import { agentIdentity, loadApiKey, savedApiKeyNames } from './settings';
 
 // Agents started on this PC. Each one joins the session as its own
-// participant and runs in your project folder; its API key is read here and
-// never sent anywhere but to its model's API.
+// participant; each of its chats works in its own copy of your project folder
+// (a git worktree next to it, see @pct/agents worktree.ts). Its API key is
+// read here and never sent anywhere but to its model's API.
 
 export const createSocket = (url: string) =>
   globalThis.WebSocket ? new WebSocket(url) : (new WS(url) as unknown as WebSocket);
@@ -32,6 +33,8 @@ export interface StartRequest {
   url: string;
   secret: string;
   startedBy: string;
+  /** Participant id of the person starting it, who owns its chats' copies. */
+  startedById: string;
   root: string;
 }
 
@@ -91,6 +94,7 @@ export class LocalAgents {
       client,
       profileId: request.profileId,
       startedBy: request.startedBy,
+      startedById: request.startedById,
       root: request.root,
       createModel: (agent) => createModel(agent, apiKey),
       cli: {

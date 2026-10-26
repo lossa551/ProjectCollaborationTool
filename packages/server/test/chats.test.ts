@@ -164,4 +164,37 @@ describe('agent chats', () => {
     const ghost = await join('Ghost', { profileId: 'nope', startedBy: 'Martin' });
     expect(ghost.getState().status).toBe('closed');
   });
+
+  it('shares an agent copy, which only the agent or the person whose PC holds it can change', async () => {
+    server = await startServer({ port: 0, host: '127.0.0.1' });
+    const martin = await join('Martin');
+    const friend = await join('Friend');
+    martin.saveAgent(builder);
+    const { agents } = await waitFor(martin, (s) => s.agents.length === 1);
+    const agent = await join('Builder', { profileId: agents[0]!.id, startedBy: 'Martin' });
+    const chatId = martin.createChat({ agentId: agents[0]!.id, title: 'Jump' });
+    await waitFor(agent, (s) => s.chats.some((c) => c.id === chatId));
+    const copy = {
+      branch: 'agent/jump-abc123',
+      base: 'main',
+      baseCommit: 'a'.repeat(40),
+      folder: 'C:\\Users\\martin\\game-agents\\jump-abc123',
+      owner: { id: martin.getState().you!.id, name: 'Martin' },
+      files: [{ path: 'src/jump.gd', change: 'added' as const }],
+      truncated: false,
+      commits: 0,
+      uncommitted: 1,
+      updatedAt: 1,
+    };
+    agent.setChatWorktree(chatId, copy);
+    const seen = await waitFor(friend, (s) => s.chats.find((c) => c.id === chatId)?.worktree?.branch === 'agent/jump-abc123');
+    expect(seen.chats.find((c) => c.id === chatId)!.worktree).toEqual(copy);
+
+    friend.setChatWorktree(chatId, null, 'discarded it');
+    await waitFor(friend, (s) => s.error?.code === 'not_allowed');
+    martin.setChatWorktree(chatId, null, 'merged agent/jump-abc123 into main');
+    const after = await waitFor(friend, (s) => s.chats.find((c) => c.id === chatId)?.worktree === null && s.activity.some((a) => a.text.startsWith('merged')));
+    expect(after.activity.find((a) => a.text.startsWith('merged'))).toMatchObject({ actorName: 'Martin', text: 'merged agent/jump-abc123 into main' });
+    expect(after.activity.some((a) => a.text === 'discarded it')).toBe(false);
+  });
 });

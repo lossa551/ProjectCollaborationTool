@@ -8,6 +8,8 @@ import {
   overlapsForTask,
   pullForBranch,
   taskChangedFiles,
+  type AgentProfile,
+  type ChatInfo,
   type PlanItem,
   type GitHubStatus,
   type Lock,
@@ -18,6 +20,7 @@ import {
   type TaskChanges,
   type Workspace,
 } from '@pct/shared';
+import { WorktreeSummary } from './AgentChat';
 import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
 import { LockForm, LockList } from './Locks';
@@ -56,6 +59,9 @@ export function TaskDetail({
   github,
   overlaps,
   workspaces,
+  chats,
+  agents,
+  onOpenChat,
   planning,
   youId,
   editable,
@@ -71,6 +77,9 @@ export function TaskDetail({
   github: GitHubStatus;
   overlaps: Overlap[];
   workspaces: Record<string, Workspace>;
+  chats: ChatInfo[];
+  agents: AgentProfile[];
+  onOpenChat: (chatId: string) => void;
   youId: string | null;
   editable: boolean;
   /** Owners and locks need the server; the rest can change offline. */
@@ -112,7 +121,8 @@ export function TaskDetail({
   const ownerOffline = task.owner && !participants.some((p) => p.id === task.owner!.id);
   const pull = pullForBranch(github, task.branch);
   const taskOverlaps = overlapsForTask(overlaps, task);
-  const changedFiles = taskChangedFiles(task, workspaces, github);
+  const changedFiles = taskChangedFiles(task, workspaces, github, chats);
+  const copies = chats.filter((c) => c.taskId === task.id && c.worktree);
   const outside = filesOutsideScope(changedFiles, task.scope);
   const notePaths = useNotePaths(workspaces);
   const staleNotes = notesToUpdate(changedFiles, notePaths);
@@ -275,6 +285,21 @@ export function TaskDetail({
               ))}
             </ul>
           )}
+        </section>
+      )}
+      {copies.length > 0 && (
+        <section>
+          <h3 className="section-title">Agents’ copies</h3>
+          <ul className="copy-list small">
+            {copies.map((chat) => (
+              <li key={chat.id}>
+                <WorktreeSummary chat={chat} agentName={agents.find((a) => a.id === chat.agentId)?.name ?? 'Agent'} youId={youId} />
+                <button className="link" onClick={() => onOpenChat(chat.id)}>
+                  Open chat
+                </button>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       <section>
