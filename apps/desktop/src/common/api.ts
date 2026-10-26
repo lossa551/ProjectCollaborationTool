@@ -1,4 +1,4 @@
-import type { LockRules, SessionState, TaskChanges, TaskStage } from '@pct/shared';
+import type { LockRules, RepoRef, SessionState, TaskChanges, TaskStage, Workspace } from '@pct/shared';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -11,11 +11,24 @@ export interface HostingInfo {
   port: number;
 }
 
+/** Your local checkout, as git sees it. */
+export interface LocalWorkspace {
+  folder: string;
+  /** The GitHub repository of the origin remote, if it is on GitHub. */
+  remote: RepoRef | null;
+  workspace: Workspace | null;
+  error: string | null;
+}
+
 export interface AppState {
   session: SessionState;
   hosting: HostingInfo | null;
   /** Tasks can be changed: connected, or offline in a session we know (changes sync later). */
   canEditTasks: boolean;
+  /** Your project folder in this session, once you picked one. */
+  workspace: LocalWorkspace | null;
+  /** Where the hosted server's GitHub token comes from; null when not hosting. */
+  githubToken: 'saved' | 'cli' | 'none' | null;
 }
 
 export interface HostRequest {
@@ -59,6 +72,13 @@ export interface PctApi {
   releaseLock(lockId: string): void;
   recoverLock(lockId: string): void;
   setLockRules(rules: LockRules): void;
+  /** Asks for your project folder and starts sharing its branch and changed files. */
+  chooseWorkspace(): Promise<Result>;
+  stopWorkspace(): void;
+  /** "owner/name" or a GitHub URL; null unlinks. */
+  linkRepo(repo: string | null): Promise<Result>;
+  /** Host only: saves (or with null removes) the token the session server uses for GitHub. */
+  setGitHubToken(token: string | null): Promise<Result>;
   copyText(text: string): void;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
@@ -80,6 +100,10 @@ export const Channel = {
   releaseLock: 'pct:release-lock',
   recoverLock: 'pct:recover-lock',
   setLockRules: 'pct:set-lock-rules',
+  chooseWorkspace: 'pct:choose-workspace',
+  stopWorkspace: 'pct:stop-workspace',
+  linkRepo: 'pct:link-repo',
+  setGitHubToken: 'pct:set-github-token',
   copyText: 'pct:copy-text',
   state: 'pct:state',
   getUpdate: 'pct:get-update',

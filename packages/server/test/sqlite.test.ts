@@ -21,6 +21,7 @@ const task: Task = {
   stage: 'implementing',
   owner: { id: 'm', name: 'Martin', kind: 'human' },
   scope: ['scripts/player/**'],
+  branch: null,
   createdAt: 1,
   updatedAt: 2,
   version: 3,

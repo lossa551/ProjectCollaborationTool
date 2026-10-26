@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { Activity, Lock, LockRules, ParticipantKind, SessionInfo, Task } from '@pct/shared';
+import { Activity, Lock, LockRules, ParticipantKind, RepoRef, SessionInfo, Task } from '@pct/shared';
 import type { Identity, Storage } from './storage.js';
 
 // Storage in one SQLite file, using the SQLite built into Node (and Electron),
@@ -130,6 +130,14 @@ export class SqliteStorage implements Storage {
 
   async saveLockRules(rules: LockRules) {
     this.setMeta('lockRules', rules);
+  }
+
+  async loadGitHubRepo() {
+    return this.getMeta('githubRepo', RepoRef.nullable());
+  }
+
+  async saveGitHubRepo(repo: RepoRef | null) {
+    this.setMeta('githubRepo', repo);
   }
 
   async appendActivity(entry: Activity) {

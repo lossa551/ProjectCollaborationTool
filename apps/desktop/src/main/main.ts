@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron';
 import { join } from 'node:path';
 import WS from 'ws';
 import {
@@ -11,12 +11,23 @@ import {
   TaskUpdateMessage,
   decodeInvite,
   encodeInvite,
+  parseRepoRef,
 } from '@pct/shared';
-import { SqliteStorage, findShareableAddress, startServer, type RunningServer } from '@pct/server';
-import { Channel, type AppState, type HostRequest, type HostingInfo, type JoinRequest, type Result } from '../common/api';
+import { SqliteStorage, findShareableAddress, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
+import {
+  Channel,
+  type AppState,
+  type HostRequest,
+  type HostingInfo,
+  type JoinRequest,
+  type LocalWorkspace,
+  type Result,
+} from '../common/api';
 import { loadSnapshot, saveSnapshot } from './cache';
 import { hostedSessionPath, loadIdentity } from './identity';
+import { loadGitHubToken, saveGitHubToken, saveWorkspaceFolder, workspaceFolder } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
+import { WorkspaceWatcher, repositoryRoot } from './workspace';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. Later it will also run
@@ -31,11 +42,78 @@ const client = new SessionClient({
 });
 let hosted: RunningServer | null = null;
 let hosting: HostingInfo | null = null;
+let githubToken: AppState['githubToken'] = null;
 let window: BrowserWindow | null = null;
+let workspace: LocalWorkspace | null = null;
 
-const appState = (): AppState => ({ session: client.getState(), hosting, canEditTasks: client.canEditTasks() });
+const appState = (): AppState => ({
+  session: client.getState(),
+  hosting,
+  canEditTasks: client.canEditTasks(),
+  workspace,
+  githubToken,
+});
 const pushState = () => window?.webContents.send(Channel.state, appState());
 client.subscribe(pushState);
+
+// Your workspace: the project folder you picked for this session. Its branch
+// and changed files go to the session whenever they change.
+let watcher: WorkspaceWatcher | null = null;
+let watchedSession: string | null = null;
+let knownDefaultBranch: string | null = null;
+
+function watchFolder(folder: string | null) {
+  watcher?.stop();
+  watcher = null;
+  workspace = null;
+  client.setWorkspace(null);
+  if (folder) {
+    watcher = new WorkspaceWatcher(folder, () => client.getState().github.defaultBranch, (next) => {
+      workspace = next;
+      client.setWorkspace(next.workspace);
+      pushState();
+    });
+    workspace = watcher.getState();
+    watcher.start();
+  }
+  pushState();
+}
+
+client.subscribe((state) => {
+  const sessionId = state.status === 'closed' || state.status === 'idle' ? null : (state.session?.id ?? null);
+  if (sessionId !== watchedSession) {
+    watchedSession = sessionId;
+    watchFolder(sessionId ? workspaceFolder(sessionId) : null);
+  }
+  // Changes are measured against the default branch, which GitHub tells us.
+  if (state.github.defaultBranch !== knownDefaultBranch) {
+    knownDefaultBranch = state.github.defaultBranch;
+    void watcher?.poll();
+  }
+});
+
+async function chooseWorkspace(): Promise<Result> {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId) return { ok: false, error: 'Join a session first.' };
+  const options = { title: 'Choose your project folder', properties: ['openDirectory' as const] };
+  const picked = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+  const folder = picked.filePaths[0];
+  if (picked.canceled || !folder) return { ok: true };
+  try {
+    const root = await repositoryRoot(folder);
+    saveWorkspaceFolder(sessionId, root);
+    watchFolder(root);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+function stopWorkspace() {
+  const sessionId = client.getState().session?.id;
+  if (sessionId) saveWorkspaceFolder(sessionId, null);
+  watchFolder(null);
+}
 
 // Keep the cache of a joined session up to date (hosted sessions are saved by
 // the server itself). Writes are batched, and flushed when the app quits.
@@ -67,6 +145,7 @@ async function stopHosting() {
   const server = hosted;
   hosted = null;
   hosting = null;
+  githubToken = null;
   await server?.close();
 }
 
@@ -79,7 +158,10 @@ async function host({ name, sessionName }: HostRequest): Promise<Result> {
     // The hosted session is saved on this PC: the board, locks and invite code
     // are still there the next time you host.
     const storage = new SqliteStorage(hostedSessionPath());
-    const options = { sessionName: sessionName || undefined, storage, log: console.log };
+    // A token saved in the app, else the GitHub CLI's if you are signed in to it.
+    const saved = loadGitHubToken();
+    const token = saved ?? (await tokenFromGitHubCli());
+    const options = { sessionName: sessionName || undefined, storage, github: { token }, log: console.log };
     try {
       try {
         hosted = await startServer({ ...options, port: DEFAULT_PORT });
@@ -91,6 +173,7 @@ async function host({ name, sessionName }: HostRequest): Promise<Result> {
       await storage.close();
       throw error;
     }
+    githubToken = saved ? 'saved' : token ? 'cli' : 'none';
     const shareable = findShareableAddress();
     const url = `ws://${shareable.address}:${hosted.port}${SOCKET_PATH}`;
     hosting = {
@@ -193,6 +276,33 @@ ipcMain.on(Channel.recoverLock, (_event, lockId: unknown) => {
 ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
   const parsed = LockRules.safeParse(rules);
   if (parsed.success) client.setLockRules(parsed.data);
+});
+ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
+ipcMain.on(Channel.stopWorkspace, () => stopWorkspace());
+ipcMain.handle(Channel.linkRepo, (_event, input: unknown): Result => {
+  if (input === null) {
+    client.linkRepo(null);
+    return { ok: true };
+  }
+  const repo = typeof input === 'string' ? parseRepoRef(input) : null;
+  if (!repo) return { ok: false, error: 'Enter the repository as owner/name, or paste its GitHub address.' };
+  client.linkRepo(repo);
+  return { ok: true };
+});
+ipcMain.handle(Channel.setGitHubToken, async (_event, input: unknown): Promise<Result> => {
+  if (!hosted) return { ok: false, error: 'Only the host sets the GitHub token.' };
+  const token = typeof input === 'string' ? input.trim() : null;
+  if (token !== null && !/^[\w-]{20,255}$/.test(token)) return { ok: false, error: 'That does not look like a GitHub token.' };
+  try {
+    saveGitHubToken(token);
+    const fallback = token ?? (await tokenFromGitHubCli());
+    hosted.setGitHubToken(fallback);
+    githubToken = token ? 'saved' : fallback ? 'cli' : 'none';
+    pushState();
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
 });
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);

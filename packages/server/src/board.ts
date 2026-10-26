@@ -33,6 +33,7 @@ export class TaskBoard {
       stage: input.stage ?? 'planning',
       owner: null,
       scope: input.scope ?? [],
+      branch: null,
       createdAt: now,
       updatedAt: now,
       version: 1,
@@ -68,6 +69,7 @@ export class TaskBoard {
     clash('stage', expected.stage === current.stage, `"${current.title}" was moved to ${STAGE_LABELS[current.stage]} by someone else`);
     clash('ownerId', (expected.ownerId ?? null) === (current.owner?.id ?? null), `"${current.title}" was reassigned by someone else`);
     clash('scope', (expected.scope ?? []).join('\n') === current.scope.join('\n'), `the paths of "${current.title}" were changed by someone else`);
+    clash('branch', (expected.branch ?? null) === current.branch, `the branch of "${current.title}" was changed by someone else`);
 
     const next: Task = { ...current };
     const descriptions: string[] = [];
@@ -94,6 +96,12 @@ export class TaskBoard {
     if (changes.scope !== undefined && changes.scope.join('\n') !== current.scope.join('\n')) {
       next.scope = changes.scope;
       descriptions.push(`changed the scope of "${next.title}"`);
+    }
+    if (changes.branch !== undefined && changes.branch !== current.branch) {
+      next.branch = changes.branch;
+      descriptions.push(
+        changes.branch === null ? `unlinked the branch of "${next.title}"` : `linked "${next.title}" to branch ${changes.branch}`,
+      );
     }
 
     if (descriptions.length === 0) return { ok: true, task: current, descriptions, conflicts };

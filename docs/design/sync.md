@@ -75,3 +75,31 @@ instead of invite secrets, and running agents server-side if wanted.
   server keeps their value and tells you which change was not applied.
   Creates carry a client-made id, so a replayed create never doubles a task.
 - Soft locks recorded offline are not built yet; locking needs the server.
+
+## GitHub status, as built (2026-10-26)
+
+- The session links to one GitHub repository (anyone can link or unlink it;
+  the link is saved with the session).
+- The server polls the GitHub REST API: every 60 s with a token, every 10
+  minutes without one (public repositories only, since GitHub allows 60
+  anonymous requests an hour). Answers are cached by ETag, and a pull
+  request's reviews and files are only fetched again when it changes. GitHub
+  GraphQL was not used because it always needs a token.
+- Only the host needs a token: saved in the app (encrypted with the OS key
+  store), else `PCT_GITHUB_TOKEN`, else the GitHub CLI's token. Everyone gets
+  the same status from the server, including in the offline cache.
+- Tasks have a branch; the card shows that branch's pull request (open one
+  first, else the latest closed one). Ahead/behind and changed files are only
+  worked out for branches linked to a task.
+- Each person's app watches the project folder they picked with git (every
+  4 s): current branch, and files changed since the branch left the default
+  branch, committed or not, plus untracked files. It is shared with the
+  session while they are connected and dropped when they leave.
+- Overlaps: the same file in two pieces of work, where a piece of work is a
+  workspace, a pull request, a pushed branch, or a lock. Sources on the same
+  branch (other than the default branch) or from the same person count as one.
+  Overlaps between different files that depend on each other need to know the
+  engine's file formats, so they come with the engine integrations.
+- PR events (opened, checks failed or passed, conflicts, approved, changes
+  requested, merged, closed) go into the activity feed, linked to the task
+  whose branch it is.

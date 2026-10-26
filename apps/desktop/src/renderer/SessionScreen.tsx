@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import type { Activity, Participant } from '@pct/shared';
+import { useEffect, useMemo, useState } from 'react';
+import { findOverlaps, type Activity, type Participant } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
+import { GitHubScreen, WorkspaceCard } from './GitHub';
 import { LocksScreen } from './Locks';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
@@ -39,8 +40,22 @@ export function SessionScreen({ state }: { state: AppState }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [view, setView] = useState<View>('board');
+  const [locksTab, setLocksTab] = useState<'github' | 'locks'>('github');
   const abandoned = session.locks.filter((l) => l.abandoned).length;
   const selected = session.tasks.find((t) => t.id === selectedId) ?? null;
+  const overlaps = useMemo(
+    () =>
+      findOverlaps({
+        workspaces: Object.entries(session.workspaces).map(([participantId, workspace]) => ({
+          participantId,
+          name: session.participants.find((p) => p.id === participantId)?.name ?? 'Someone',
+          workspace,
+        })),
+        github: session.github,
+        locks: session.locks,
+      }),
+    [session.workspaces, session.participants, session.github, session.locks],
+  );
 
   return (
     <div className="shell">
@@ -77,6 +92,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             {item.view === 'locks' && abandoned > 0 && <span className="nav-count">{abandoned}</span>}
           </button>
         ))}
+        <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} />
       </nav>
 
       <main className="content">
@@ -86,11 +102,25 @@ export function SessionScreen({ state }: { state: AppState }) {
             tasks={session.tasks}
             locks={session.locks}
             participants={participants}
+            github={session.github}
+            overlaps={overlaps}
             editable={editable}
             selectedId={selectedId}
             onSelect={setSelectedId}
           />
         ) : (
+          <>
+            <div className="tabs">
+              <button className={locksTab === 'github' ? 'nav active' : 'nav'} onClick={() => setLocksTab('github')}>
+                GitHub{overlaps.length > 0 && <span className="nav-count">{overlaps.length}</span>}
+              </button>
+              <button className={locksTab === 'locks' ? 'nav active' : 'nav'} onClick={() => setLocksTab('locks')}>
+                Locks{abandoned > 0 && <span className="nav-count">{abandoned}</span>}
+              </button>
+            </div>
+            {locksTab === 'github' ? (
+              <GitHubScreen state={state} participants={participants} overlaps={overlaps} onOpenTask={setSelectedId} />
+            ) : (
           <LocksScreen
             locks={session.locks}
             rules={session.lockRules}
@@ -100,6 +130,8 @@ export function SessionScreen({ state }: { state: AppState }) {
             editable={online}
             onOpenTask={setSelectedId}
           />
+            )}
+          </>
         )}
       </main>
 
@@ -110,6 +142,9 @@ export function SessionScreen({ state }: { state: AppState }) {
           participants={participants}
           locks={session.locks}
           lockRules={session.lockRules}
+          github={session.github}
+          overlaps={overlaps}
+          workspaces={session.workspaces}
           youId={session.you?.id ?? null}
           editable={editable}
           online={online}
