@@ -314,6 +314,19 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           void persist('task', storage.saveTask(result.task));
           broadcast({ type: 'task.changed', task: result.task });
           for (const text of result.descriptions) record(participant, text, result.task.id);
+          // A finished task frees the locks its agents took for it.
+          if (message.changes.stage === 'done') {
+            const freed = locks.agentLocksOnTask(result.task.id);
+            for (const lock of freed) {
+              locks.drop(lock.id);
+              void persist('lock', storage.deleteLock(lock.id));
+              broadcast({ type: 'lock.removed', lockId: lock.id });
+            }
+            if (freed.length > 0) {
+              const what = freed.length === 1 ? freed[0]!.path : `${freed.length} files`;
+              record(null, `Agent locks on ${what} were released because "${result.task.title}" is done`, result.task.id);
+            }
+          }
           // A newly linked branch gets its ahead/behind and changed files.
           if (message.changes.branch) void github.refresh();
           break;
@@ -388,7 +401,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         case 'lock.recover': {
           const result =
             message.type === 'lock.release'
-              ? locks.release(message.lockId, participant.id)
+              ? locks.release(message.lockId, participant)
               : locks.recover(message.lockId, participant.id);
           if (!result.ok) return fail(conn, result.code, result.message);
           void persist('lock', storage.deleteLock(result.lock.id));
@@ -489,7 +502,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
         case 'chat.agent': {
-          const result = chats.setAgentState(message.chatId, message.state, message.context, participant);
+          const result = chats.setAgentState(message.chatId, message.state, message.context, participant, message.activity);
           if (!result.ok) return fail(conn, result.code, result.message);
           chatChanged(result.value);
           break;

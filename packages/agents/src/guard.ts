@@ -64,6 +64,20 @@ export function scopesFor(ctx: Pick<GuardContext, 'agent' | 'task' | 'handoffSco
   return scopes;
 }
 
+/**
+ * Locks others hold on the path: blocking when either side is exclusive,
+ * overlapping when both are soft.
+ */
+export function othersLocks(
+  ctx: Pick<GuardContext, 'selfId' | 'locks'>,
+  path: string,
+  kind: LockKind,
+): { blocking: Lock[]; overlapping: Lock[] } {
+  const others = ctx.locks.filter((l) => l.holder.id !== ctx.selfId && samePath(l.path, path));
+  const conflicts = (l: Lock) => l.kind === 'exclusive' || kind === 'exclusive';
+  return { blocking: others.filter(conflicts), overlapping: others.filter((l) => !conflicts(l)) };
+}
+
 export function checkEdit(ctx: GuardContext, rawPath: string): EditDecision {
   const path = normalizePath(rawPath);
   if (!path) return { verdict: 'deny', reasons: ['the path is outside the project'], path: null, lockKind: 'soft' };
@@ -71,15 +85,12 @@ export function checkEdit(ctx: GuardContext, rawPath: string): EditDecision {
   if (/^\.git(\/|$)/i.test(path)) return { verdict: 'deny', reasons: ['agents do not edit .git'], path, lockKind };
 
   const parts: { verdict: Verdict; reason: string | null }[] = [];
-  for (const lock of ctx.locks) {
-    if (lock.holder.id === ctx.selfId || !samePath(lock.path, path)) continue;
-    if (lock.kind === 'exclusive' || lockKind === 'exclusive') {
-      const why = lock.abandoned ? ' (abandoned; recover it on Locks and GitHub first)' : '';
-      parts.push({ verdict: 'deny', reason: `${path} is locked by ${lock.holder.name}${why}` });
-    } else {
-      parts.push({ verdict: 'ask', reason: `${lock.holder.name} is also editing ${path}` });
-    }
+  const { blocking, overlapping } = othersLocks(ctx, path, lockKind);
+  for (const lock of blocking) {
+    const why = lock.abandoned ? ' (abandoned; recover it on Locks and GitHub first)' : '';
+    parts.push({ verdict: 'deny', reason: `${path} is locked by ${lock.holder.name}${why}` });
   }
+  for (const lock of overlapping) parts.push({ verdict: 'ask', reason: `${lock.holder.name} is also editing ${path}` });
 
   const outside = scopesFor(ctx).filter((scope) => !matchesAny(path, scope.patterns));
   if (outside.length > 0) {

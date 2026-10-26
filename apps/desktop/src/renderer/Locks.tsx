@@ -21,6 +21,7 @@ export function LocksScreen({
   youId,
   editable,
   onOpenTask,
+  onOpenChat,
 }: {
   locks: Lock[];
   rules: LockRules;
@@ -29,6 +30,7 @@ export function LocksScreen({
   youId: string | null;
   editable: boolean;
   onOpenTask: (taskId: string) => void;
+  onOpenChat: (chatId: string) => void;
 }) {
   const sorted = [...locks].sort((a, b) => Number(b.abandoned) - Number(a.abandoned) || a.path.localeCompare(b.path));
   return (
@@ -43,7 +45,16 @@ export function LocksScreen({
         {sorted.length === 0 ? (
           <p className="muted">Nobody holds a lock right now.</p>
         ) : (
-          <LockList locks={sorted} allLocks={locks} tasks={tasks} participants={participants} youId={youId} editable={editable} onOpenTask={onOpenTask} />
+          <LockList
+            locks={sorted}
+            allLocks={locks}
+            tasks={tasks}
+            participants={participants}
+            youId={youId}
+            editable={editable}
+            onOpenTask={onOpenTask}
+            onOpenChat={onOpenChat}
+          />
         )}
       </section>
 
@@ -60,6 +71,7 @@ export function LockList({
   youId,
   editable,
   onOpenTask,
+  onOpenChat,
   compact,
 }: {
   locks: Lock[];
@@ -69,6 +81,7 @@ export function LockList({
   youId: string | null;
   editable: boolean;
   onOpenTask?: (taskId: string) => void;
+  onOpenChat?: (chatId: string) => void;
   compact?: boolean;
 }) {
   return (
@@ -77,6 +90,8 @@ export function LockList({
         const task = tasks.find((t) => t.id === lock.taskId);
         const online = participants.some((p) => p.id === lock.holder.id);
         const mine = lock.holder.id === youId;
+        // People can free a lock an agent holds; the agent takes it again if it edits the file.
+        const agents = lock.holder.kind === 'agent' && !lock.abandoned;
         const overlaps = overlapsFor(lock, allLocks);
         return (
           <li key={lock.id} className={lock.abandoned ? 'abandoned' : undefined}>
@@ -96,6 +111,12 @@ export function LockList({
                   {task.title}
                 </button>
               )}
+              {lock.reason && lock.reason !== task?.title && <span title="Why it is locked">“{lock.reason}”</span>}
+              {lock.chatId && onOpenChat && (
+                <button className="link" onClick={() => onOpenChat(lock.chatId!)}>
+                  Open chat
+                </button>
+              )}
               <span>since {new Date(lock.acquiredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               {overlaps.length > 0 && (
                 <span className="warning">also {overlaps.map((o) => (o.holder.id === youId ? 'you' : o.holder.name)).join(', ')}</span>
@@ -103,6 +124,18 @@ export function LockList({
             </div>
             {editable && mine && (
               <button className="secondary" onClick={() => window.pct.releaseLock(lock.id)}>
+                Release
+              </button>
+            )}
+            {editable && !mine && agents && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  if (confirm(`Release ${lock.holder.name}'s lock on ${lock.path}? It locks the file again if it edits it.`)) {
+                    window.pct.releaseLock(lock.id);
+                  }
+                }}
+              >
                 Release
               </button>
             )}
@@ -139,13 +172,15 @@ export function LockForm({
   const [path, setPath] = useState('');
   const [taskId, setTaskId] = useState(fixedTaskId ?? '');
   const [exclusive, setExclusive] = useState(false);
+  const [reason, setReason] = useState('');
   const byRule = path.trim() !== '' && matchesAny(path.trim().replace(/\\/g, '/'), rules.exclusivePatterns);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!path.trim()) return;
-    window.pct.acquireLock(path.trim(), { taskId: (fixedTaskId ?? taskId) || null, exclusive: exclusive || byRule });
+    window.pct.acquireLock(path.trim(), { taskId: (fixedTaskId ?? taskId) || null, exclusive: exclusive || byRule, reason: reason.trim() || null });
     setPath('');
+    setReason('');
     setExclusive(false);
   };
 
@@ -157,6 +192,13 @@ export function LockForm({
         placeholder="Path in the project, e.g. art/hero.png"
         disabled={!editable}
         maxLength={260}
+      />
+      <input
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Why (optional)"
+        disabled={!editable}
+        maxLength={200}
       />
       {fixedTaskId === undefined && (
         <select value={taskId} onChange={(e) => setTaskId(e.target.value)} disabled={!editable}>

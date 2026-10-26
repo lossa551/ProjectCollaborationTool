@@ -23,7 +23,12 @@ OpenAI-compatible API) or a command-line agent (Claude Code, Codex CLI), start
 them on your PC, and chat with them together in shared agent chats. Every edit
 and command an agent makes is checked against locks, its allowed paths, the
 task's paths and its approval rules; anything that needs a person shows an
-approval card in the chat. Chats can become tasks and hand work to another
+approval card in the chat. Agents lock each file themselves before their first
+edit (tagged with the chat and task), wait when someone else holds a file they
+need, free locks on files they did not change when a turn ends, and free a
+task's locks when it is done; people can release an agent's lock any time.
+What each agent is doing right now shows under Who is here, on its task card
+and at the top of its chat. Chats can become tasks and hand work to another
 agent with the plan, decisions, paths and acceptance criteria. Engine
 integrations come next; see the GitHub issues.
 

@@ -352,7 +352,10 @@ export class SessionClient {
     this.setState({ ...this.state, tasks: applyLocally(this.state.tasks, message), pending: this.queue.length });
   }
 
-  acquireLock(path: string, options: { taskId?: string | null; exclusive?: boolean } = {}): void {
+  acquireLock(
+    path: string,
+    options: { taskId?: string | null; exclusive?: boolean; chatId?: string | null; reason?: string | null } = {},
+  ): void {
     this.send({ type: 'lock.acquire', path, ...options });
   }
 
@@ -421,8 +424,14 @@ export class SessionClient {
   }
 
   /** For the chat's agent: whether it is working, and what it has in context. */
-  setChatAgentState(chatId: string, state: ChatAgentState, context?: ChatContext | null): void {
-    this.send({ type: 'chat.agent', chatId, state, ...(context !== undefined && { context }) });
+  setChatAgentState(chatId: string, state: ChatAgentState, context?: ChatContext | null, activity?: string | null): void {
+    this.send({
+      type: 'chat.agent',
+      chatId,
+      state,
+      ...(context !== undefined && { context }),
+      ...(activity !== undefined && { activity }),
+    });
   }
 
   stopChat(chatId: string): void {

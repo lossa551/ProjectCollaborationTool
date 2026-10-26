@@ -31,6 +31,8 @@ const lock = (path: string, kind: Lock['kind'], holder = 'friend'): Lock => ({
   kind,
   holder: { id: holder, name: holder === 'friend' ? 'Friend' : 'Builder', kind: 'human' },
   taskId: null,
+  chatId: null,
+  reason: null,
   acquiredAt: 0,
   heartbeatAt: 0,
   abandoned: false,

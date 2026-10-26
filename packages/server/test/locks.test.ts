@@ -42,13 +42,27 @@ describe('LockTable', () => {
     const table = new LockTable();
     const result = table.acquire('art/menu.psd', martin, {}, 0);
     const id = result.ok ? result.lock.id : '';
-    expect(table.release(id, 'f')).toMatchObject({ ok: false, code: 'not_allowed' });
+    expect(table.release(id, { id: 'f', kind: 'human' })).toMatchObject({ ok: false, code: 'not_allowed' });
     expect(table.recover(id, 'f')).toMatchObject({ ok: false, code: 'not_allowed' });
 
     expect(table.sweep(60_000, 30_000)).toHaveLength(0);
     expect(table.sweep(60_000, 61_000).map((l) => l.id)).toEqual([id]);
     expect(table.recover(id, 'f')).toMatchObject({ ok: true, description: 'recovered art/menu.psd from Martin' });
     expect(table.list()).toHaveLength(0);
+  });
+
+  it('lets a person release a lock an agent holds, but not the other way round', () => {
+    const table = new LockTable();
+    const agent = { id: 'a', name: 'Builder', kind: 'agent' as const };
+    const theirs = table.acquire('scripts/enemy.gd', agent, { taskId: 't1', chatId: 'c1', reason: 'Enemy AI' });
+    expect(theirs.ok && theirs.lock).toMatchObject({ chatId: 'c1', reason: 'Enemy AI' });
+    const mine = table.acquire('scripts/player.gd', martin);
+    expect(table.release(mine.ok ? mine.lock.id : '', { id: 'a', kind: 'agent' })).toMatchObject({ ok: false, code: 'not_allowed' });
+    expect(table.agentLocksOnTask('t1')).toHaveLength(1);
+    expect(table.release(theirs.ok ? theirs.lock.id : '', { id: 'm', kind: 'human' })).toMatchObject({
+      ok: true,
+      description: 'released scripts/enemy.gd from Builder',
+    });
   });
 
   it('revives abandoned locks when the holder is seen again', () => {

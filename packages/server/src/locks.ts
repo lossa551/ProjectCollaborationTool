@@ -49,7 +49,7 @@ export class LockTable {
   acquire(
     rawPath: string,
     holder: TaskOwner,
-    options: { taskId?: string | null; exclusive?: boolean } = {},
+    options: { taskId?: string | null; exclusive?: boolean; chatId?: string | null; reason?: string | null } = {},
     now = Date.now(),
   ): LockResult {
     const path = normalizePath(rawPath);
@@ -76,6 +76,8 @@ export class LockTable {
         ...own,
         kind: own.kind === 'exclusive' ? 'exclusive' : kind,
         taskId: options.taskId !== undefined ? options.taskId : own.taskId,
+        chatId: options.chatId !== undefined ? options.chatId : own.chatId,
+        reason: options.reason !== undefined ? options.reason || null : own.reason,
         heartbeatAt: now,
         abandoned: false,
       };
@@ -90,6 +92,8 @@ export class LockTable {
       kind,
       holder,
       taskId: options.taskId ?? null,
+      chatId: options.chatId ?? null,
+      reason: options.reason || null,
       acquiredAt: now,
       heartbeatAt: now,
       abandoned: false,
@@ -99,20 +103,37 @@ export class LockTable {
     return { ok: true, lock, description: `locked ${path}${kind === 'exclusive' ? ' (exclusive)' : ''}${shared}` };
   }
 
-  release(lockId: string, holderId: string): LockResult {
+  /**
+   * Frees a lock. Its holder can always; a person can also free a lock an
+   * agent holds, since agents work for the people in the session.
+   */
+  release(lockId: string, by: { id: string; kind: TaskOwner['kind'] }): LockResult {
     const lock = this.locks.get(lockId);
     if (!lock) return { ok: false, code: 'not_found', message: 'That lock is already gone' };
-    if (lock.holder.id !== holderId) {
+    const own = lock.holder.id === by.id;
+    if (!own && !(by.kind === 'human' && lock.holder.kind === 'agent')) {
       return { ok: false, code: 'not_allowed', message: `Only ${lock.holder.name} can release that lock` };
     }
     this.locks.delete(lockId);
-    return { ok: true, lock, description: `released ${lock.path}` };
+    return { ok: true, lock, description: own ? `released ${lock.path}` : `released ${lock.path} from ${lock.holder.name}` };
+  }
+
+  /** Agent locks on a task that is finished: the work they protected is done. */
+  agentLocksOnTask(taskId: string): Lock[] {
+    return this.list().filter((l) => l.taskId === taskId && l.holder.kind === 'agent');
+  }
+
+  /** Removes a lock without checks; for the server's own clean-up. */
+  drop(lockId: string): Lock | undefined {
+    const lock = this.locks.get(lockId);
+    this.locks.delete(lockId);
+    return lock;
   }
 
   recover(lockId: string, byId: string): LockResult {
     const lock = this.locks.get(lockId);
     if (!lock) return { ok: false, code: 'not_found', message: 'That lock is already gone' };
-    if (lock.holder.id === byId) return this.release(lockId, byId);
+    if (lock.holder.id === byId) return this.release(lockId, lock.holder);
     if (!lock.abandoned) {
       return { ok: false, code: 'not_allowed', message: `${lock.holder.name} is still active; ask them to release it` };
     }

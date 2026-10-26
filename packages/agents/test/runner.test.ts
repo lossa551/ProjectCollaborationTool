@@ -5,7 +5,7 @@ import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DEFAULT_APPROVALS, SessionClient, newIdentity, type AgentProfile, type SessionState } from '@pct/shared';
 import { startServer, type RunningServer } from '@pct/server';
-import { AgentRunner, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
+import { AgentRunner, type AgentRunnerOptions, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
 
 let server: RunningServer | null = null;
 const clients: SessionClient[] = [];
@@ -55,7 +55,7 @@ class ScriptedModel implements ModelAdapter {
   }
 }
 
-async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS) {
+async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: Partial<AgentRunnerOptions> = {}) {
   server = await startServer({ port: 0, host: '127.0.0.1' });
   const root = mkdtempSync(joinPath(tmpdir(), 'pct-agent-'));
   dirs.push(root);
@@ -80,6 +80,7 @@ async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS) {
     root,
     createModel: () => model,
     lockTimeoutMs: 2000,
+    ...extra,
   });
   runners.push(runner);
   runner.start();
@@ -157,11 +158,39 @@ describe('agent runner', () => {
     expect(model.requests[2]!.messages.filter((m) => m.role === 'tool')).toHaveLength(2);
   });
 
-  it('refuses edits to a file someone else locked exclusively', async () => {
-    const { martin, profile, model, root } = await setup([
+  it('waits for a file someone else locked exclusively, then edits it once released', async () => {
+    const { martin, profile, root } = await setup([
       { text: '', toolCalls: [{ id: 't1', name: 'write_file', input: { path: 'src/hero.png', content: 'x' } }], stop: 'tool_use' },
-      { text: 'I could not change the sprite.', toolCalls: [], stop: 'end' },
+      { text: 'Recolored.', toolCalls: [], stop: 'end' },
     ]);
+    martin.acquireLock('src/hero.png', { reason: 'Painting the hero' });
+    const locked = await waitFor(martin, (s) => s.locks.some((l) => l.path === 'src/hero.png'));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Sprite' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Recolor the hero' });
+    martin.openChat(chatId);
+
+    const waiting = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'waiting');
+    expect(waiting.chats.find((c) => c.id === chatId)!.activity).toBe('Waiting for Martin to release src/hero.png');
+    expect(waiting.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.includes('locked for "Painting the hero"'))).toBe(true);
+    expect(existsSync(joinPath(root, 'src/hero.png'))).toBe(false);
+
+    martin.releaseLock(locked.locks[0]!.id);
+    const agentLock = await waitFor(martin, (s) => s.locks.some((l) => l.holder.name === 'Builder'));
+    expect(agentLock.locks.find((l) => l.holder.name === 'Builder')).toMatchObject({ kind: 'exclusive', chatId, reason: 'Sprite' });
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Recolored.'));
+    expect(readFileSync(joinPath(root, 'src/hero.png'), 'utf8')).toBe('x');
+  });
+
+  it('gives up waiting for a lock after a while and tells the model to ask', async () => {
+    const { martin, profile, model, root } = await setup(
+      [
+        { text: '', toolCalls: [{ id: 't1', name: 'write_file', input: { path: 'src/hero.png', content: 'x' } }], stop: 'tool_use' },
+        { text: 'I could not change the sprite.', toolCalls: [], stop: 'end' },
+      ],
+      DEFAULT_APPROVALS,
+      { lockWaitMs: 200 },
+    );
     martin.acquireLock('src/hero.png');
     await waitFor(martin, (s) => s.locks.some((l) => l.path === 'src/hero.png'));
     const chatId = martin.createChat({ agentId: profile.id, title: 'Sprite' });
@@ -169,11 +198,61 @@ describe('agent runner', () => {
     martin.postChat(chatId, { kind: 'text', text: 'Recolor the hero' });
     martin.openChat(chatId);
     const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.tool?.status === 'blocked'));
-    expect(state.messages[chatId]!.find((m) => m.tool?.status === 'blocked')?.tool?.output).toContain('locked by Martin');
+    expect(state.messages[chatId]!.find((m) => m.tool?.status === 'blocked')?.tool?.output).toContain('still locked by Martin');
     await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'I could not change the sprite.'));
     expect(existsSync(joinPath(root, 'src/hero.png'))).toBe(false);
-    const result = model.requests[1]!.messages.at(-1);
-    expect(result).toMatchObject({ role: 'tool', results: [{ isError: true }] });
+    expect(model.requests[1]!.messages.at(-1)).toMatchObject({ role: 'tool', results: [{ isError: true }] });
+  });
+
+  it('shows what it is doing, keeps locks on files it changed and frees the rest when the turn ends', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { martin, profile, model, root } = await setup([
+      { text: '', toolCalls: [{ id: 't1', name: 'write_file', input: { path: 'src/same.gd', content: 'same\n' } }], stop: 'tool_use' },
+      { text: '', toolCalls: [{ id: 't2', name: 'write_file', input: { path: 'src/new.gd', content: 'new\n' } }], stop: 'tool_use' },
+      { text: 'Done.', toolCalls: [], stop: 'end' },
+    ]);
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    git('init', '-q');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    execFileSync('node', ['-e', "require('fs').mkdirSync('src');require('fs').writeFileSync('src/same.gd','same\\n')"], { cwd: root });
+    git('add', '.');
+    git('commit', '-qm', 'start');
+    // Hold the model before its second step so the activity line can be read.
+    const complete = model.complete.bind(model);
+    model.complete = async (request) => {
+      if (model.requests.length === 1) await gate;
+      return complete(request);
+    };
+
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Scripts' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Write the scripts' });
+    await waitFor(martin, (s) => s.locks.some((l) => l.path === 'src/same.gd'));
+    const working = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.activity === 'Thinking');
+    expect(working.chats.find((c) => c.id === chatId)!.state).toBe('working');
+    release();
+
+    const done = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle' && s.locks.length === 1);
+    expect(done.chats.find((c) => c.id === chatId)!.activity).toBeNull();
+    expect(done.locks.map((l) => l.path)).toEqual(['src/new.gd']);
+  });
+
+  it('frees an agent’s locks on a task when the task is done, and lets a person free one sooner', async () => {
+    const { martin, agentClient } = await setup([]);
+    const taskId = martin.createTask('Enemy AI');
+    await waitFor(agentClient, (s) => s.tasks.length === 1);
+    agentClient.acquireLock('src/enemy.gd', { taskId });
+    agentClient.acquireLock('src/boss.gd', { taskId });
+    agentClient.acquireLock('src/other.gd');
+    const held = await waitFor(martin, (s) => s.locks.length === 3);
+    martin.releaseLock(held.locks.find((l) => l.path === 'src/boss.gd')!.id);
+    await waitFor(martin, (s) => s.locks.length === 2);
+    martin.updateTask(taskId, { stage: 'done' });
+    const state = await waitFor(martin, (s) => s.activity.some((a) => a.text.includes('released because "Enemy AI" is done')));
+    expect(state.locks.map((l) => l.path)).toEqual(['src/other.gd']);
   });
 
   it('stops when a person asks it to, and answers a handoff', async () => {

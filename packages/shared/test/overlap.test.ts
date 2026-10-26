@@ -51,6 +51,8 @@ const lock = (path: string, holderId: string, taskId: string | null = null): Loc
   kind: 'exclusive',
   holder: { id: holderId, name: holderId, kind: 'human' },
   taskId,
+  chatId: null,
+  reason: null,
   acquiredAt: 0,
   heartbeatAt: 0,
   abandoned: false,

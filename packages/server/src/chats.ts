@@ -41,7 +41,7 @@ export class AgentChats {
   ) {
     for (const agent of agents) this.agents.set(agent.id, agent);
     // Nobody is working in a chat right after a restart.
-    for (const chat of chats) this.chats.set(chat.id, { ...chat, state: 'idle' });
+    for (const chat of chats) this.chats.set(chat.id, { ...chat, state: 'idle', activity: null });
   }
 
   listAgents(): AgentProfile[] {
@@ -102,6 +102,7 @@ export class AgentChats {
       createdBy: owner(by),
       handoff: input.handoff ?? null,
       state: 'idle',
+      activity: null,
       context: null,
       createdAt: now,
       updatedAt: now,
@@ -251,11 +252,17 @@ export class AgentChats {
     state: ChatAgentState,
     context: ChatContext | null | undefined,
     by: Participant,
+    activity?: string | null,
   ): ChatResult<ChatInfo> {
     const chat = this.chats.get(chatId);
     if (!chat) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
     if (by.agent?.profileId !== chat.agentId) return { ok: false, code: 'not_allowed', message: 'Only the chat’s own agent reports its state' };
-    const next: ChatInfo = { ...chat, state, context: context !== undefined ? context : chat.context };
+    const next: ChatInfo = {
+      ...chat,
+      state,
+      activity: state === 'idle' ? null : activity !== undefined ? activity : chat.activity,
+      context: context !== undefined ? context : chat.context,
+    };
     this.chats.set(chatId, next);
     return { ok: true, value: next, description: null };
   }
@@ -272,7 +279,7 @@ export class AgentChats {
     for (const chat of this.chats.values()) {
       if (chat.agentId !== profileId) continue;
       if (chat.state !== 'idle') {
-        const next = { ...chat, state: 'idle' as const };
+        const next = { ...chat, state: 'idle' as const, activity: null };
         this.chats.set(chat.id, next);
         chats.push(next);
       }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { findOverlaps, type Activity, type Participant } from '@pct/shared';
+import { findOverlaps, type Activity, type ChatInfo, type Lock, type Participant } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
@@ -139,6 +139,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             participants={participants}
             github={session.github}
             overlaps={overlaps}
+            chats={session.chats}
             editable={editable}
             selectedId={selectedId}
             onSelect={setSelectedId}
@@ -164,6 +165,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             youId={session.you?.id ?? null}
             editable={online}
             onOpenTask={setSelectedId}
+            onOpenChat={showChat}
           />
             )}
           </>
@@ -190,7 +192,7 @@ export function SessionScreen({ state }: { state: AppState }) {
         />
       ) : (
         <aside className="side-panel">
-          <People participants={participants} youId={session.you?.id ?? null} />
+          <People participants={participants} youId={session.you?.id ?? null} chats={session.chats} locks={session.locks} onOpenChat={showChat} />
           <ActivityFeed activity={session.activity} onSelect={setSelectedId} taskIds={new Set(session.tasks.map((t) => t.id))} />
         </aside>
       )}
@@ -226,7 +228,19 @@ function Banner({ state }: { state: AppState }) {
   return null;
 }
 
-function People({ participants, youId }: { participants: Participant[]; youId: string | null }) {
+function People({
+  participants,
+  youId,
+  chats,
+  locks,
+  onOpenChat,
+}: {
+  participants: Participant[];
+  youId: string | null;
+  chats: ChatInfo[];
+  locks: Lock[];
+  onOpenChat: (chatId: string) => void;
+}) {
   return (
     <section>
       <h2>Who is here</h2>
@@ -240,11 +254,45 @@ function People({ participants, youId }: { participants: Participant[]; youId: s
               {p.kind === 'agent' && <span className="muted"> · agent</span>}
             </span>
             <span className={`presence presence-${p.status}`}>{p.status}</span>
+            {p.agent && <AgentNow agent={p} chats={chats} locks={locks} onOpenChat={onOpenChat} />}
           </li>
         ))}
       </ul>
       {participants.length === 0 && <p className="muted">Waiting for the server…</p>}
     </section>
+  );
+}
+
+/** What a running agent is doing right now, and the files it holds. */
+function AgentNow({
+  agent,
+  chats,
+  locks,
+  onOpenChat,
+}: {
+  agent: Participant;
+  chats: ChatInfo[];
+  locks: Lock[];
+  onOpenChat: (chatId: string) => void;
+}) {
+  const busy = chats.filter((c) => c.agentId === agent.agent?.profileId && c.state !== 'idle');
+  const held = locks.filter((l) => l.holder.id === agent.id);
+  if (busy.length === 0 && held.length === 0) return <span className="agent-now muted small">Idle</span>;
+  return (
+    <span className="agent-now wrap small">
+      {busy.map((c) => (
+        <button key={c.id} className="link" onClick={() => onOpenChat(c.id)} title={`In "${c.title}"`}>
+          <span className={`dot dot-${c.state}`} />
+          {c.activity ?? (c.state === 'waiting' ? 'Waiting' : 'Working')}
+        </button>
+      ))}
+      {busy.length === 0 && <span className="muted">Idle</span>}
+      {held.length > 0 && (
+        <span className="muted" title={held.map((l) => l.path).join('\n')}>
+          holding {held.length === 1 ? held[0]!.path : `${held.length} locks`}
+        </span>
+      )}
+    </span>
   );
 }
 
