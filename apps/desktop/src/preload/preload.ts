@@ -38,6 +38,8 @@ const api: PctApi = {
   stopChat: (chatId) => ipcRenderer.send(Channel.stopChat, chatId),
   chatToTask: (chatId) => ipcRenderer.invoke(Channel.chatToTask, chatId),
   handOff: (request) => ipcRenderer.invoke(Channel.handOff, request),
+  scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
+  folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);

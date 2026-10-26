@@ -5,20 +5,21 @@ import { ChatScreen, ChatSidePanel } from './AgentChat';
 import { AgentsScreen } from './Agents';
 import { Avatar } from './Avatar';
 import { Board } from './Board';
+import { FolderNotesScreen } from './FolderNotes';
 import { GitHubScreen, WorkspaceCard } from './GitHub';
 import { LocksScreen } from './Locks';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
 // Nav items from docs/design/interface.md; the ones without a view are still to come.
-type View = 'board' | 'locks' | 'agents' | 'chat';
+type View = 'board' | 'locks' | 'agents' | 'chat' | 'memory';
 const NAV: { label: string; view?: View }[] = [
   { label: 'Session board', view: 'board' },
   { label: 'Planning space' },
   { label: 'Locks and GitHub', view: 'locks' },
   { label: 'Agents', view: 'agents' },
   { label: 'Agent chat', view: 'chat' },
-  { label: 'Project memory' },
+  { label: 'Project memory', view: 'memory' },
 ];
 
 const STATUS_LABEL = {
@@ -126,6 +127,21 @@ export function SessionScreen({ state }: { state: AppState }) {
               setChatId(id);
             }}
           />
+        ) : view === 'memory' ? (
+          <>
+            <div className="tabs">
+              <button className="nav active">Folder notes</button>
+            </div>
+            <FolderNotesScreen
+              state={state}
+              onOpenTask={setSelectedId}
+              onOpenChat={(id) => {
+                setNewChatAgentId(null);
+                setChatId(id);
+                setView('chat');
+              }}
+            />
+          </>
         ) : view === 'board' ? (
           <Board
             tasks={session.tasks}

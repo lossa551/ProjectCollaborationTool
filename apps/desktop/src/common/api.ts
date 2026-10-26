@@ -10,6 +10,7 @@ import type {
   TaskStage,
   Workspace,
 } from '@pct/shared';
+import type { FolderNotesReport } from './folder-notes';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -193,6 +194,10 @@ export interface PctApi {
   chatToTask(chatId: string): Promise<Result>;
   /** Starts a chat with another agent carrying the handoff package; returns the new chat's id. */
   handOff(request: HandoffRequest): Promise<ResultWith<string>>;
+  /** Scans your project folder for the Folder notes tab (cached until something in it changes, unless fresh). */
+  scanFolderNotes(fresh: boolean): Promise<ResultWith<FolderNotesReport>>;
+  /** Makes a task scoped to one folder's AGENTS.md: update it, or write the first one. */
+  folderNoteTask(folder: string): Promise<ResultWith<string>>;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -237,6 +242,8 @@ export const Channel = {
   stopChat: 'pct:stop-chat',
   chatToTask: 'pct:chat-to-task',
   handOff: 'pct:hand-off',
+  scanFolderNotes: 'pct:scan-folder-notes',
+  folderNoteTask: 'pct:folder-note-task',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

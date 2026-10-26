@@ -41,6 +41,8 @@ import { loadGitHubToken, saveApiKey, saveGitHubToken, saveWorkspaceFolder, work
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, repositoryRoot, runGitAction, trustFolder } from './git';
 import { WorkspaceWatcher } from './workspace';
+import { scanFolderNotes } from './folder-notes';
+import type { FolderNotesReport } from '../common/folder-notes';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. It also runs the
@@ -510,6 +512,44 @@ function handOff(request: HandoffRequest): ResultWith<string> {
   return { ok: true, value: chatId };
 }
 
+// Folder notes: scanned on request, kept until your project folder changes
+// (another branch, a commit, an edit), so opening the tab again is instant.
+let folderNotes: { key: string; report: FolderNotesReport } | null = null;
+let folderNotesScan: { key: string; done: Promise<FolderNotesReport> } | null = null;
+
+async function scanNotes(fresh: unknown): Promise<ResultWith<FolderNotesReport>> {
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left): the notes are read from it.' };
+  const key = JSON.stringify([folder, workspace?.workspace?.branch, workspace?.workspace?.files, workspace?.git?.uncommitted, workspace?.git?.ahead]);
+  if (fresh !== true && folderNotes?.key === key) return { ok: true, value: folderNotes.report };
+  let done = folderNotesScan?.key === key ? folderNotesScan.done : null;
+  if (!done) {
+    const scan = scanFolderNotes(folder);
+    folderNotesScan = { key, done: scan };
+    void scan
+      .then((report) => (folderNotes = { key, report }))
+      .catch(() => undefined)
+      .finally(() => {
+        if (folderNotesScan?.done === scan) folderNotesScan = null;
+      });
+    done = scan;
+  }
+  try {
+    return { ok: true, value: await done };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+function folderNoteTask(folder: unknown): ResultWith<string> {
+  const info = folderNotes?.report.folders.find((f) => f.path === folder);
+  if (!info) return { ok: false, error: 'Scan the folder notes again first.' };
+  const label = info.path === '' ? 'top folder' : `${info.path}/`;
+  const notePath = info.notePath ?? (info.path ? `${info.path}/AGENTS.md` : 'AGENTS.md');
+  const title = info.notePath ? `Update folder note for ${label}` : `Write folder note for ${label}`;
+  return { ok: true, value: client.createTask(title.slice(0, 200), { stage: 'planning', scope: [notePath] }) };
+}
+
 function createWindow() {
   window = new BrowserWindow({
     width: 1280,
@@ -675,6 +715,8 @@ ipcMain.handle(Channel.handOff, (_event, request: HandoffRequest) => {
   if (!request || typeof request.agentId !== 'string') return { ok: false, error: 'Pick an agent to hand off to.' };
   return handOff(request);
 });
+ipcMain.handle(Channel.scanFolderNotes, (_event, fresh: unknown) => scanNotes(fresh));
+ipcMain.handle(Channel.folderNoteTask, (_event, folder: unknown) => folderNoteTask(folder));
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
