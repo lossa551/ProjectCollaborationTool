@@ -43,6 +43,10 @@ may say it protected your PC: click **More info**, then **Run anyway**.
 
 Everything happens in the app: **Host session** starts the session server on
 your PC and shows the invite code to send; **Join session** takes a code.
+Sessions you hosted or joined are listed under **Resume a session** on the
+start screen: **Resume** hosts one again with its board, invite code, GitHub
+link and project folder as you left them, and **Rejoin** uses the saved
+invite code.
 
 Updates download in the background from GitHub Releases. When one is ready,
 Windows shows a notification and the button at the top of the window says
@@ -79,9 +83,11 @@ nothing), `PCT_SECRET` (generated once and saved if unset),
 signed in to `gh`); without a token it still works for public repositories but
 only checks every 10 minutes.
 
-When you host from the app instead, the session is saved in the app's data
-folder (`%APPDATA%\Project Collaboration Tool\hosted-session.sqlite` on Windows), so hosting
-again brings back the same board and invite code. The host's GitHub token is
+When you host from the app instead, each session is saved in its own file in
+the app's data folder (`%APPDATA%\Project Collaboration Tool\hosted\` on
+Windows; a session hosted before the list existed stays in
+`hosted-session.sqlite`), so resuming it brings back the same board and invite
+code. The list itself is `sessions.json` in the same folder. The host's GitHub token is
 set under **Locks and GitHub** and stored encrypted on that PC; the friend
 needs no token, since the server sends everyone the same GitHub status.
 
@@ -89,7 +95,7 @@ needs no token, since the server sends everyone the same GitHub status.
 
 1. Both install [Tailscale](https://tailscale.com) and join the same tailnet
    (the host shares their machine with the friend).
-2. Host clicks **Host on this PC**. The invite uses the host's Tailscale
+2. Host clicks **Host session**. The invite uses the host's Tailscale
    address automatically. Windows may ask to allow the app through the
    firewall; allow it on private networks.
 3. Host sends the invite code privately; the friend pastes it under **Join a
