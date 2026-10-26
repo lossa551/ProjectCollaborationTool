@@ -6,11 +6,14 @@ export function Avatar({
   kind,
   status,
   small,
+  title,
 }: {
   name: string;
   kind: ParticipantKind;
   status: PresenceStatus | 'offline';
   small?: boolean;
+  /** Hover text; defaults to the name and presence. */
+  title?: string;
 }) {
   const initials = name
     .split(/\s+/)
@@ -21,7 +24,7 @@ export function Avatar({
   return (
     <span
       className={`avatar avatar-${kind} presence-${status}${small ? ' avatar-small' : ''}`}
-      title={`${name} (${status})`}
+      title={title ?? `${name} (${status})`}
     >
       {initials}
     </span>

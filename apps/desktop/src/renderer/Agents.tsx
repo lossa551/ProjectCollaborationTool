@@ -43,10 +43,10 @@ export function AgentsScreen({ state, onOpenChat }: { state: AppState; onOpenCha
     <div className="agents-screen">
       <header className="screen-header">
         <div>
-          <h1>Agents</h1>
+          <h1>Agent setup</h1>
           <p className="muted">
             Agents join the session like people do. Each runs on the PC of whoever starts it, in that person’s project
-            folder; API keys stay on that PC.
+            folder; API keys stay on that PC. Chat with them under Agents in the menu.
           </p>
         </div>
         <button disabled={!online} onClick={() => setEditing('new')}>

@@ -12,6 +12,7 @@ import {
   planLines,
   plannedTasks,
   renderPlan,
+  type FeatureState,
   type FeatureStatus,
   type PlanItem,
   type PlanTextField,
@@ -35,28 +36,51 @@ export function PlanningScreen({
   state,
   onOpenTask,
   onOpenChat,
+  focusId = null,
+  filter = null,
+  onClearFilter,
 }: {
   state: AppState;
   onOpenTask: (taskId: string) => void;
   onOpenChat: (chatId: string) => void;
+  /** Open this item, e.g. a plan waiting for approval picked on Home. */
+  focusId?: string | null;
+  /** Only list features in this state (from the counts on Home). */
+  filter?: FeatureState | null;
+  onClearFilter?: () => void;
 }) {
   const { session } = state;
   const items = session.planning;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(focusId);
+  useEffect(() => {
+    if (focusId) setSelectedId(focusId);
+  }, [focusId]);
   const selected = items.find((i) => i.id === selectedId) ?? null;
   const editable = state.canEditTasks;
+  const shown = (item: PlanItem) => !filter || (item.kind === 'feature' && featureStatus(item, items, session.tasks).state === filter);
 
   // Something to look at straight away: the most recently changed item.
   useEffect(() => {
-    if (!selected && items.length > 0) setSelectedId([...items].sort((a, b) => b.updatedAt - a.updatedAt)[0]!.id);
-  }, [selected, items]);
+    const candidates = items.filter(shown);
+    if ((!selected || (filter && !shown(selected))) && candidates.length > 0) {
+      setSelectedId([...candidates].sort((a, b) => b.updatedAt - a.updatedAt)[0]!.id);
+    }
+  }, [selected, items, filter]);
 
   return (
     <div className="planning-screen">
       <aside className="plan-list">
         <NewItem editable={editable} onCreated={setSelectedId} />
-        {SECTIONS.map((section) => {
-          const own = items.filter((i) => i.kind === section.kind);
+        {filter && (
+          <p className="plan-filter small">
+            Only {FEATURE_STATE_LABELS[filter].toLowerCase()} features.{' '}
+            <button className="link" onClick={onClearFilter}>
+              Show all
+            </button>
+          </p>
+        )}
+        {SECTIONS.filter((section) => !filter || section.kind === 'feature').map((section) => {
+          const own = items.filter((i) => i.kind === section.kind && shown(i));
           return (
             <section key={section.kind}>
               <h3 className="section-title">{section.title}</h3>
