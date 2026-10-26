@@ -271,6 +271,9 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
             <Message
               key={m.id}
               message={m}
+              chat={chat}
+              agentName={agent?.name ?? 'The agent'}
+              running={!!runner}
               youId={session.you?.id ?? null}
               online={online}
               branches={session.chats.filter((c) => c.branchedFrom?.chatId === chat.id && c.branchedFrom.messageId === m.id)}
@@ -319,6 +322,9 @@ const TOOL_ICON = { running: '…', done: '✓', failed: '✗', blocked: '⛔' }
 
 function Message({
   message: m,
+  chat,
+  agentName,
+  running,
   youId,
   online,
   branches,
@@ -326,6 +332,10 @@ function Message({
   onSelect,
 }: {
   message: ChatMessage;
+  chat: ChatInfo;
+  agentName: string;
+  /** The chat's agent is running on someone's PC. */
+  running: boolean;
   youId: string | null;
   online: boolean;
   /** Chats branched from this message. */
@@ -334,6 +344,9 @@ function Message({
   onSelect: (chatId: string) => void;
 }) {
   if (m.kind === 'notice') return <p className="msg-notice">{m.text}</p>;
+  if (m.kind === 'checkpoint' && m.checkpoint) {
+    return <Checkpoint message={m} chat={chat} agentName={agentName} running={running} online={online} />;
+  }
   if (m.kind === 'tool' && m.tool) {
     return (
       <details className={`msg-tool tool-${m.tool.status}`}>
@@ -401,6 +414,94 @@ function Message({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The end of an agent turn that changed files, saved as a commit in the
+ * agent's copy. Anyone can undo the turn or take the copy back to it; the
+ * agent does it on the PC that holds the copy.
+ */
+function Checkpoint({
+  message: m,
+  chat,
+  agentName,
+  running,
+  online,
+}: {
+  message: ChatMessage;
+  chat: ChatInfo;
+  agentName: string;
+  running: boolean;
+  online: boolean;
+}) {
+  const checkpoint = m.checkpoint!;
+  const [showFiles, setShowFiles] = useState(false);
+  const copy = chat.worktree;
+  const here = copy?.head === checkpoint.commit;
+  const files = `${checkpoint.files.length}${checkpoint.truncated ? '+' : ''} ${checkpoint.files.length === 1 ? 'file' : 'files'}`;
+  const blocked = !online
+    ? 'You are offline'
+    : copy?.branch !== checkpoint.branch
+      ? `This turn was made in another copy (${checkpoint.branch})`
+      : !running
+        ? `${agentName} is not running; start it on ${copy.owner.name}’s PC`
+        : chat.state !== 'idle'
+          ? `Wait until ${agentName} finishes its turn, or stop it`
+          : null;
+  const undo = () => window.pct.undoTurn(chat.id, m.id, 'undo');
+  const goBack = () => {
+    const later = 'Anything changed after it, undos included, is taken out of the copy; it can be brought back from its own checkpoint.';
+    if (confirm(`Take ${agentName}’s copy back to exactly how it was at the end of turn ${checkpoint.turn}? ${later}`)) {
+      window.pct.undoTurn(chat.id, m.id, 'go-back');
+    }
+  };
+
+  return (
+    <div className={`msg-checkpoint small${checkpoint.undone ? ' checkpoint-undone' : ''}`}>
+      <div className="checkpoint-line">
+        <span className="grow">
+          <strong>Turn {checkpoint.turn}</strong> · {files} changed · <code title={`${checkpoint.commit} on ${checkpoint.branch}`}>{checkpoint.commit.slice(0, 7)}</code>{' '}
+          <span className="muted">{time(m.at)}</span>
+          {here && <span className="badge">The copy is here</span>}
+          {checkpoint.undone && (
+            <span className="badge">
+              {checkpoint.undone.how === 'undo' ? 'Undone' : 'Gone back past'} by {checkpoint.undone.by} at {time(checkpoint.undone.at)}
+            </span>
+          )}{' '}
+          <button className="link" onClick={() => setShowFiles((v) => !v)}>
+            {showFiles ? 'Hide files' : 'Show files'}
+          </button>
+        </span>
+        <span className="checkpoint-actions">
+          {!checkpoint.undone && (
+            <button className="secondary" disabled={!!blocked} title={blocked ?? 'Put back every file this turn changed; later turns stay'} onClick={undo}>
+              Undo this turn
+            </button>
+          )}
+          {!here && (
+            <button
+              className="secondary"
+              disabled={!!blocked}
+              title={blocked ?? `Take the copy back to how it was at the end of turn ${checkpoint.turn}`}
+              onClick={goBack}
+            >
+              Go back to here
+            </button>
+          )}
+        </span>
+      </div>
+      {showFiles && (
+        <ul className="worktree-files">
+          {checkpoint.files.map((f) => (
+            <li key={f.path}>
+              <span className={`change change-${f.change}`}>{f.change}</span> <code>{f.path}</code>
+            </li>
+          ))}
+          {checkpoint.truncated && <li className="muted">and more…</li>}
+        </ul>
+      )}
     </div>
   );
 }

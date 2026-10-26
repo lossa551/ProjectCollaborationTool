@@ -1241,6 +1241,44 @@ a {
   background: var(--panel);
 }
 
+.msg-checkpoint {
+  margin-left: 30px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--good);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.checkpoint-undone {
+  border-left-color: var(--border);
+  color: var(--muted);
+}
+
+.checkpoint-undone .checkpoint-line strong {
+  text-decoration: line-through;
+}
+
+.checkpoint-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.checkpoint-line .badge {
+  margin-left: 6px;
+}
+
+.checkpoint-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.msg-checkpoint .worktree-files {
+  margin: 6px 0 0;
+}
+
 .composer {
   display: flex;
   gap: 8px;

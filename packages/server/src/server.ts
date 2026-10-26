@@ -148,7 +148,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     write.catch((err: unknown) => log(`failed to save ${what}: ${String(err)}`));
 
   /** Adds a line to the activity feed and sends it to everyone. */
-  const record = (actor: Participant | null, text: string, taskId: string | null = null) => {
+  const record = (actor: { name: string } | null, text: string, taskId: string | null = null) => {
     const entry: Activity = { id: randomUUID(), at: Date.now(), actorName: actor?.name ?? null, text, taskId };
     recentActivity.push(entry);
     if (recentActivity.length > ACTIVITY_ON_JOIN) recentActivity.shift();
@@ -527,12 +527,22 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           const result = chats.setWorktree(message.chatId, message.worktree, participant);
           if (!result.ok) return fail(conn, result.code, result.message);
           chatChanged(result.value);
-          if (message.note) record(participant, message.note, result.value.taskId);
+          // An agent acting for a person (an undo) records it as theirs.
+          const actor = message.noteBy && participant.kind === 'agent' ? { name: message.noteBy } : participant;
+          if (message.note) record(actor, message.note, result.value.taskId);
           break;
         }
         case 'chat.stop': {
           if (!chats.getChat(message.chatId)) return fail(conn, 'not_found', 'That chat no longer exists');
           broadcast({ type: 'chat.stopped', chatId: message.chatId, by: participant.name });
+          break;
+        }
+        case 'chat.undo': {
+          const chat = chats.getChat(message.chatId);
+          const running = !!chat && joined().some((p) => p.agent?.profileId === chat.agentId);
+          const result = await chats.checkUndo(message.chatId, message.messageId, participant, running);
+          if (!result.ok) return fail(conn, result.code, result.message);
+          broadcast({ type: 'chat.undo', chatId: message.chatId, messageId: message.messageId, mode: message.mode, by: participant.name });
           break;
         }
       }

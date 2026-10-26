@@ -167,6 +167,7 @@ describe('needsYou', () => {
       streaming: false,
       tool: null,
       approval: { action: 'Edit menu.gd', reason: '', state, decidedBy: null },
+      checkpoint: null,
       at: 0,
       updatedAt: 0,
     });

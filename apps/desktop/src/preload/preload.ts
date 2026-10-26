@@ -47,6 +47,7 @@ const api: PctApi = {
   postChat: (chatId, text) => ipcRenderer.send(Channel.postChat, chatId, text),
   decideApproval: (chatId, messageId, approve) => ipcRenderer.send(Channel.decideApproval, chatId, messageId, approve),
   stopChat: (chatId) => ipcRenderer.send(Channel.stopChat, chatId),
+  undoTurn: (chatId, messageId, mode) => ipcRenderer.send(Channel.undoTurn, chatId, messageId, mode),
   chatToTask: (chatId) => ipcRenderer.invoke(Channel.chatToTask, chatId),
   handOff: (request) => ipcRenderer.invoke(Channel.handOff, request),
   editPlanning: (op) => ipcRenderer.send(Channel.editPlanning, op),
