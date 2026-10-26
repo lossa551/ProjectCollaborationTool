@@ -111,3 +111,53 @@ export function agentIdentity(profileId: string, make: () => string): string {
   writeAtomic(agentIdentitiesPath(), JSON.stringify(identities, null, 2));
   return identities[profileId]!;
 }
+
+// Where backups of hosted sessions go, and which sessions keep project memory
+// written to the project folder.
+
+interface Preferences {
+  backupFolder?: string;
+  /** Session ids whose memory file is rewritten when an entry changes. */
+  memoryExport?: string[];
+}
+
+const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
+
+function readPreferences(): Preferences {
+  try {
+    const data: unknown = JSON.parse(readFileSync(preferencesPath(), 'utf8'));
+    if (!data || typeof data !== 'object') return {};
+    const prefs = data as Record<string, unknown>;
+    return {
+      ...(typeof prefs.backupFolder === 'string' && { backupFolder: prefs.backupFolder }),
+      ...(Array.isArray(prefs.memoryExport) && { memoryExport: prefs.memoryExport.filter((id): id is string => typeof id === 'string') }),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function savePreferences(changes: Partial<Preferences>) {
+  const next = { ...readPreferences(), ...changes };
+  writeAtomic(preferencesPath(), JSON.stringify(next, null, 2));
+}
+
+export const defaultBackupFolder = () => join(app.getPath('userData'), 'backups');
+
+/** The folder you chose for backups; null for the default. */
+export function customBackupFolder(): string | null {
+  return readPreferences().backupFolder ?? null;
+}
+
+export function saveBackupFolder(folder: string | null) {
+  savePreferences({ backupFolder: folder ?? undefined });
+}
+
+export function memoryAutoExport(sessionId: string): boolean {
+  return readPreferences().memoryExport?.includes(sessionId) ?? false;
+}
+
+export function saveMemoryAutoExport(sessionId: string, on: boolean) {
+  const ids = (readPreferences().memoryExport ?? []).filter((id) => id !== sessionId);
+  savePreferences({ memoryExport: on ? [...ids, sessionId] : ids });
+}

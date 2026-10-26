@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { findOverlaps, type Activity, type ChatInfo, type Lock, type Participant } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
@@ -43,6 +43,7 @@ export function SessionScreen({ state }: { state: AppState }) {
   const editable = state.canEditTasks;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [view, setView] = useState<View>('board');
   const [locksTab, setLocksTab] = useState<'github' | 'locks'>('github');
   const [chatId, setChatId] = useState<string | null>(null);
@@ -85,6 +86,11 @@ export function SessionScreen({ state }: { state: AppState }) {
           ))}
         </div>
         {hosting && (
+          <button className="secondary" onClick={() => setSnapshotOpen((open) => !open)} title="Save the board, planning and memory as they are now, say before a big change">
+            Snapshot
+          </button>
+        )}
+        {hosting && (
           <button className="secondary" onClick={() => setInviteOpen((open) => !open)}>
             Invite
           </button>
@@ -93,6 +99,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           {hosting ? 'Stop hosting' : 'Leave'}
         </button>
         {hosting && inviteOpen && <InvitePopover hosting={hosting} onClose={() => setInviteOpen(false)} />}
+        {hosting && snapshotOpen && <SnapshotPopover canTag={!!state.workspace?.folder && !state.workspace.error} onClose={() => setSnapshotOpen(false)} />}
       </header>
 
       <nav className="sidebar">
@@ -324,6 +331,44 @@ function ActivityFeed({
       </ol>
       {activity.length === 0 && <p className="muted">Nothing yet.</p>}
     </section>
+  );
+}
+
+function SnapshotPopover({ canTag, onClose }: { canTag: boolean; onClose: () => void }) {
+  const [label, setLabel] = useState('');
+  const [tag, setTag] = useState(canTag);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const create = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    const done = await window.pct.createSnapshot({ label, tag: tag && canTag });
+    setBusy(false);
+    setResult(done.ok ? { ok: true, text: done.value } : { ok: false, text: done.error });
+    if (done.ok) setLabel('');
+  };
+  return (
+    <form className="popover card snapshot-popover" onSubmit={create}>
+      <h2>Snapshot</h2>
+      <p className="muted">
+        Saves the board, planning space, project memory, agents and chats as they are now. It is kept until you delete it, and you
+        can go back to it with Restore… on the start screen.
+      </p>
+      <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Before the inventory rewrite" maxLength={200} autoFocus />
+      <label className="check" title={canTag ? undefined : 'Choose your project folder first'}>
+        <input type="checkbox" checked={tag && canTag} disabled={!canTag} onChange={(e) => setTag(e.target.checked)} />
+        Also tag the current commit in my project folder (changes not committed yet are not in it)
+      </label>
+      {result && <p className={result.ok ? 'muted' : 'error'}>{result.text}</p>}
+      <div className="row">
+        <button type="submit" disabled={busy || !label.trim()}>
+          Save snapshot
+        </button>
+        <button type="button" className="secondary" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </form>
   );
 }
 

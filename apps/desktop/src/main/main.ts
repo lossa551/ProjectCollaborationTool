@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readdirSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   AgentSaveMessage,
@@ -8,6 +8,7 @@ import {
   Handoff,
   LockAcquireMessage,
   LockRules,
+  MEMORY_EXPORT_PATH,
   MemoryOp,
   PlanApproval,
   PlanOp,
@@ -26,29 +27,46 @@ import {
   renderHandoff,
   type CliTool,
 } from '@pct/shared';
-import { SqliteStorage, findShareableAddress, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
+import { SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
 import {
   Channel,
   type AppState,
+  type BackupFolder,
+  type BackupInfo,
   type GitAction,
   type HandoffRequest,
   type HostRequest,
   type HostingInfo,
   type JoinRequest,
   type LocalWorkspace,
+  type MemoryExportState,
   type ResumeRequest,
   type Result,
+  type SnapshotRequest,
   type ResultWith,
   type SavedSessionInfo,
 } from '../common/api';
 import { LocalAgents, apiKeyStatus, createSocket, findCliTools } from './agents';
+import { SessionBackups } from './backups';
 import { runBloatCheck } from './bloat';
 import { loadSnapshot, saveSnapshot } from './cache';
 import { loadIdentity } from './identity';
+import { writeMemoryFile } from './memory-export';
 import { SessionHistory } from './sessions';
-import { loadGitHubToken, saveApiKey, saveGitHubToken, saveWorkspaceFolder, workspaceFolder } from './settings';
+import {
+  customBackupFolder,
+  defaultBackupFolder,
+  loadGitHubToken,
+  memoryAutoExport,
+  saveApiKey,
+  saveBackupFolder,
+  saveGitHubToken,
+  saveMemoryAutoExport,
+  saveWorkspaceFolder,
+  workspaceFolder,
+} from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
 import { WorkspaceWatcher } from './workspace';
 import { scanFolderNotes } from './folder-notes';
 import type { FolderNotesReport } from '../common/folder-notes';
@@ -86,6 +104,7 @@ const appState = (): AppState => ({
   apiKeys: apiKeyStatus(),
   cliTools,
   textEdits,
+  memoryExport: memoryExportState(),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
@@ -323,6 +342,235 @@ async function gitAction(input: unknown): Promise<ResultWith<string>> {
   }
 }
 
+// Backups of the hosted session: on host start, then checked every hour so
+// one is made each day while hosting. A failed backup never stops hosting.
+const backups = new SessionBackups(() => {
+  const custom = customBackupFolder();
+  return custom ? [custom, defaultBackupFolder()] : [defaultBackupFolder()];
+});
+let backupTimer: ReturnType<typeof setInterval> | null = null;
+/** The database of the session hosted now, for snapshots. */
+let hostedStorage: SqliteStorage | null = null;
+const BACKUP_CHECK_MS = 60 * 60 * 1000;
+
+function startBackups(key: string, storage: SqliteStorage) {
+  const run = () =>
+    void backups.daily(key, storage).then(
+      (file) => file && console.log(`Backed up the session to ${file}`),
+      (error) => console.error('Could not back up the session', error),
+    );
+  hostedStorage = storage;
+  run();
+  backupTimer = setInterval(run, BACKUP_CHECK_MS);
+}
+
+function stopBackups() {
+  if (backupTimer) clearInterval(backupTimer);
+  backupTimer = null;
+  hostedStorage = null;
+}
+
+const SNAPSHOT_LABEL_LIMIT = 200;
+
+/**
+ * Saves the hosted session as it is now, say before a big change. With tag,
+ * the commit checked out in your project folder is tagged too, so the code
+ * can be found again with the board.
+ */
+async function createSnapshot(input: unknown): Promise<ResultWith<string>> {
+  const request = input as SnapshotRequest | null;
+  const label = typeof request?.label === 'string' ? request.label.trim().slice(0, SNAPSHOT_LABEL_LIMIT) : '';
+  if (!label) return { ok: false, error: 'Give the snapshot a name.' };
+  if (!hostedStorage || !currentKey) return { ok: false, error: 'Only the host can make a snapshot: the session is saved on their PC.' };
+  const now = new Date();
+  try {
+    let tag: string | null = null;
+    if (request?.tag === true) {
+      const folder = workspace?.folder;
+      if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left) to tag its commit.' };
+      const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+      const stamp = now.toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      tag = await tagCommit(folder, `snapshot/${stamp}${slug ? `-${slug}` : ''}`, label);
+    }
+    await backups.snapshot(currentKey, hostedStorage, label, tag, now);
+    return { ok: true, value: tag ? `Snapshot saved, and the current commit tagged ${tag}.` : 'Snapshot saved.' };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+async function deleteSnapshot(key: unknown, path: unknown): Promise<Result> {
+  const entry = typeof key === 'string' ? sessions().get(key) : null;
+  const snapshot = entry ? backups.list(entry.key).find((b) => b.path === path && b.kind === 'snapshot') : null;
+  if (!entry || !snapshot) return { ok: false, error: 'That snapshot is no longer there.' };
+  const answer = await messageBox({
+    type: 'warning',
+    title: 'Delete snapshot',
+    message: `Delete the snapshot "${snapshot.label ?? snapshot.name}"?`,
+    detail: snapshot.tag ? `Its git tag ${snapshot.tag} stays in your project folder.` : undefined,
+    buttons: ['Delete', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  if (answer.response !== 0) return { ok: true };
+  try {
+    backups.deleteSnapshot(entry.key, snapshot.path);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+function listBackups(key: unknown): BackupInfo[] {
+  const entry = typeof key === 'string' ? sessions().get(key) : null;
+  return entry?.role === 'host' ? backups.list(entry.key) : [];
+}
+
+async function restoreBackup(key: unknown, path: unknown): Promise<Result> {
+  const entry = typeof key === 'string' ? sessions().get(key) : null;
+  if (!entry || entry.role !== 'host') return { ok: false, error: 'Only sessions you host have backups.' };
+  if (entry.key === currentKey) return { ok: false, error: 'Leave the session first.' };
+  const backup = backups.list(entry.key).find((b) => b.path === path);
+  if (!backup) return { ok: false, error: 'That backup is no longer there.' };
+  try {
+    const session = inspectBackup(backup.path);
+    if (entry.sessionId && session.id !== entry.sessionId) return { ok: false, error: 'That backup belongs to another session.' };
+    const answer = await messageBox({
+      type: 'warning',
+      title: 'Restore from backup',
+      message: `Restore "${entry.name}" to how it was on ${new Date(backup.madeAt).toLocaleString()}?`,
+      detail:
+        'The board, planning space, project memory, agents, chats and activity go back to that time. What the session holds now is saved as a backup first, so you can go back. Your project folder and GitHub are not touched.',
+      buttons: ['Restore', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (answer.response !== 0) return { ok: true };
+    const database = sessions().hostFile(entry.key);
+    await backups.restore(entry.key, backup.path, database, async (file) => {
+      try {
+        const current = new SqliteStorage(database);
+        try {
+          await current.backup(file);
+        } finally {
+          await current.close();
+        }
+      } catch {
+        // A damaged database cannot be copied safely; keep the file as it is.
+        copyFileSync(database, file);
+      }
+    });
+    sessions().update(entry.key, { name: session.name });
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+function backupFolder(): BackupFolder {
+  const custom = customBackupFolder();
+  return { folder: custom ?? defaultBackupFolder(), custom: custom !== null };
+}
+
+async function setBackupFolder(choose: unknown): Promise<Result> {
+  try {
+    if (choose !== true) {
+      saveBackupFolder(null);
+      return { ok: true };
+    }
+    const picked = await openDialog({ title: 'Choose a folder for session backups (say, in OneDrive or on another drive)', properties: ['openDirectory', 'createDirectory'] });
+    const folder = picked.filePaths[0];
+    if (picked.canceled || !folder) return { ok: true };
+    saveBackupFolder(folder);
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+// Project memory in the repository: written to your project folder on
+// request, then again whenever an entry changes (once the shared copy has
+// arrived, so a half-synced memory is never written).
+let memoryAuto: { sessionId: string; on: boolean } | null = null;
+let memoryWrite: { at: number | null; error: string | null } = { at: null, error: null };
+let memoryTimer: ReturnType<typeof setTimeout> | null = null;
+let lastMemory: unknown = null;
+const MEMORY_WRITE_DELAY_MS = 2000;
+
+function autoExportOn(sessionId: string): boolean {
+  if (memoryAuto?.sessionId !== sessionId) {
+    memoryAuto = { sessionId, on: memoryAutoExport(sessionId) };
+    memoryWrite = { at: null, error: null };
+  }
+  return memoryAuto.on;
+}
+
+function memoryExportState(): MemoryExportState | null {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId || !workspace?.folder || workspace.error) return null;
+  return { path: MEMORY_EXPORT_PATH, auto: autoExportOn(sessionId), lastWrittenAt: memoryWrite.at, error: memoryWrite.error };
+}
+
+function writeMemory(): boolean {
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) throw new Error('Choose your project folder first (bottom left): the file is written there.');
+  try {
+    const written = writeMemoryFile(folder, client.getState().memory);
+    memoryWrite = { at: written ? Date.now() : (memoryWrite.at ?? Date.now()), error: null };
+    return written;
+  } catch (error) {
+    memoryWrite = { ...memoryWrite, error: failure(error).error };
+    throw error;
+  }
+}
+
+function exportMemory(): ResultWith<string> {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId) return { ok: false, error: 'Join a session first.' };
+  try {
+    writeMemory();
+    saveMemoryAutoExport(sessionId, true);
+    memoryAuto = { sessionId, on: true };
+    pushState();
+    return { ok: true, value: MEMORY_EXPORT_PATH };
+  } catch (error) {
+    pushState();
+    return failure(error);
+  }
+}
+
+function setMemoryAutoExport(on: unknown) {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId || typeof on !== 'boolean') return;
+  saveMemoryAutoExport(sessionId, on);
+  memoryAuto = { sessionId, on };
+  if (on && client.hasSynced('memory')) {
+    try {
+      writeMemory();
+    } catch {
+      // Shown with the export state.
+    }
+  }
+  pushState();
+}
+
+client.subscribe((state) => {
+  if (state.memory === lastMemory) return;
+  lastMemory = state.memory;
+  const sessionId = state.session?.id;
+  if (!sessionId || !autoExportOn(sessionId) || !workspace?.folder || memoryTimer) return;
+  memoryTimer = setTimeout(() => {
+    memoryTimer = null;
+    const now = client.getState();
+    if (now.session?.id !== sessionId || !client.hasSynced('memory') || !autoExportOn(sessionId)) return;
+    try {
+      if (writeMemory()) pushState();
+    } catch {
+      pushState();
+    }
+  }, MEMORY_WRITE_DELAY_MS);
+});
+
 function stopWorkspace() {
   const sessionId = client.getState().session?.id;
   if (sessionId) saveWorkspaceFolder(sessionId, null);
@@ -358,6 +606,7 @@ const failure = (error: unknown): { ok: false; error: string } => ({
 async function stopHosting() {
   // Agents started here belong to the session being left.
   await localAgents.stopAll();
+  stopBackups();
   joined = null;
   const server = hosted;
   hosted = null;
@@ -415,6 +664,7 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
       repo: previous?.repo ?? null,
     });
     currentKey = key;
+    startBackups(key, storage);
     client.connect({ url: hosted.localUrl, secret: hosted.secret, name, identity: loadIdentity() });
     return { ok: true };
   } catch (error) {
@@ -671,6 +921,12 @@ ipcMain.handle(Channel.resume, (_event, request: ResumeRequest) => {
   return resume(request);
 });
 ipcMain.handle(Channel.forgetSession, (_event, key: unknown) => forgetSession(key));
+ipcMain.handle(Channel.listBackups, (_event, key: unknown) => listBackups(key));
+ipcMain.handle(Channel.restoreBackup, (_event, key: unknown, path: unknown) => restoreBackup(key, path));
+ipcMain.handle(Channel.getBackupFolder, () => backupFolder());
+ipcMain.handle(Channel.createSnapshot, (_event, request: unknown) => createSnapshot(request));
+ipcMain.handle(Channel.deleteSnapshot, (_event, key: unknown, path: unknown) => deleteSnapshot(key, path));
+ipcMain.handle(Channel.setBackupFolder, (_event, choose: unknown) => setBackupFolder(choose));
 ipcMain.on(Channel.setPresence, (_event, status: unknown, focus: unknown) => {
   const parsed = PresenceStatus.safeParse(status);
   if (parsed.success) client.setPresence(parsed.data, typeof focus === 'string' ? focus : null);
@@ -808,6 +1064,8 @@ ipcMain.on(Channel.editMemory, (_event, op: unknown) => {
   if (parsed.success) client.editMemory(parsed.data);
   pushState();
 });
+ipcMain.handle(Channel.exportMemory, () => exportMemory());
+ipcMain.on(Channel.setMemoryAutoExport, (_event, on: unknown) => setMemoryAutoExport(on));
 ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unknown, state: unknown, evidence: unknown) => {
   const parsed = TaskVerifyMessage.safeParse({ type: 'task.verify', taskId, criterionId, state, evidence });
   if (parsed.success) client.verifyCriterion(parsed.data.taskId, parsed.data.criterionId, parsed.data.state, parsed.data.evidence);

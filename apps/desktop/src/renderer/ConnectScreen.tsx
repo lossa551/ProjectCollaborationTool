@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import type { Result, SavedSessionInfo } from '../common/api';
+import type { BackupFolder, BackupInfo, Result, SavedSessionInfo } from '../common/api';
 import { recall, remember } from './storage';
 import { UpdateButton } from './UpdateButton';
 
@@ -10,8 +10,12 @@ export function ConnectScreen({ error }: { error: string | null }) {
   const [busy, setBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saved, setSaved] = useState<SavedSessionInfo[]>([]);
+  const [backupFolder, setBackupFolder] = useState<BackupFolder | null>(null);
 
-  const refresh = useCallback(() => void window.pct.listSessions().then(setSaved), []);
+  const refresh = useCallback(() => {
+    void window.pct.listSessions().then(setSaved);
+    void window.pct.getBackupFolder().then(setBackupFolder);
+  }, []);
   useEffect(refresh, [refresh]);
 
   const run = async (event: FormEvent | null, action: () => Promise<Result>) => {
@@ -34,6 +38,15 @@ export function ConnectScreen({ error }: { error: string | null }) {
   const forget = async (key: string) => {
     const result = await window.pct.forgetSession(key);
     if (!result.ok) setLocalError(result.error);
+    refresh();
+  };
+  const changeBackupFolder = async (choose: boolean) => {
+    const result = await window.pct.setBackupFolder(choose);
+    if (!result.ok) setLocalError(result.error);
+    refresh();
+  };
+  const restored = (result: Result) => {
+    setLocalError(result.ok ? null : result.error);
     refresh();
   };
 
@@ -59,9 +72,25 @@ export function ConnectScreen({ error }: { error: string | null }) {
           <h2>Resume a session</h2>
           <ul className="resume-list">
             {saved.map((session) => (
-              <SavedSessionRow key={session.key} session={session} busy={busy} onResume={resume} onForget={forget} />
+              <SavedSessionRow key={session.key} session={session} busy={busy} onResume={resume} onForget={forget} onRestored={restored} />
             ))}
           </ul>
+          {backupFolder && saved.some((s) => s.role === 'host') && (
+            <p className="muted small backup-folder">
+              Sessions you host are backed up every day (the last 7 are kept) in {backupFolder.folder}.{' '}
+              <button type="button" className="link" onClick={() => void changeBackupFolder(true)}>
+                Change folder
+              </button>
+              {backupFolder.custom && (
+                <>
+                  {' · '}
+                  <button type="button" className="link" onClick={() => void changeBackupFolder(false)}>
+                    Use the default
+                  </button>
+                </>
+              )}
+            </p>
+          )}
         </section>
       )}
 
@@ -99,13 +128,17 @@ function SavedSessionRow({
   busy,
   onResume,
   onForget,
+  onRestored,
 }: {
   session: SavedSessionInfo;
   busy: boolean;
   onResume: (key: string) => void;
   onForget: (key: string) => void;
+  onRestored: (result: Result) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [backups, setBackups] = useState<BackupInfo[] | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const hosted = session.role === 'host';
   const copy = () => {
     if (!session.invite) return;
@@ -114,6 +147,22 @@ function SavedSessionRow({
     setTimeout(() => setCopied(false), 1500);
   };
   const details = [session.repo, session.folder, lastUsed(session.lastUsedAt)].filter(Boolean);
+  const toggleBackups = () => {
+    if (backups) return setBackups(null);
+    void window.pct.listBackups(session.key).then(setBackups);
+  };
+  const remove = async (path: string) => {
+    const result = await window.pct.deleteSnapshot(session.key, path);
+    if (result.ok) void window.pct.listBackups(session.key).then(setBackups);
+    else onRestored(result);
+  };
+  const restore = async (path: string) => {
+    setRestoring(true);
+    const result = await window.pct.restoreBackup(session.key, path);
+    setRestoring(false);
+    if (result.ok) void window.pct.listBackups(session.key).then(setBackups);
+    onRestored(result);
+  };
 
   return (
     <li className="resume-row">
@@ -133,10 +182,46 @@ function SavedSessionRow({
         <button type="button" disabled={busy} onClick={() => onResume(session.key)}>
           {hosted ? 'Resume' : 'Rejoin'}
         </button>
+        {hosted && (
+          <button type="button" className="link" onClick={toggleBackups} title="Put this session back to how it was on an earlier day">
+            {backups ? 'Hide backups' : 'Restore…'}
+          </button>
+        )}
         <button type="button" className="link" onClick={() => onForget(session.key)} title={hosted ? 'Delete this session from this PC' : 'Remove from this list'}>
           {hosted ? 'Delete' : 'Forget'}
         </button>
       </div>
+      {backups && (
+        <div className="backup-list">
+          {backups.length === 0 ? (
+            <p className="muted small">No backups yet. One is made each day you host this session.</p>
+          ) : (
+            <ul>
+              {backups.map((backup) => (
+                <li key={backup.path} className="backup-row">
+                  <span>
+                    {backup.kind === 'snapshot' && <strong>{backup.label ?? 'Snapshot'} · </strong>}
+                    {new Date(backup.madeAt).toLocaleString()}
+                    {backup.kind === 'before-restore' && <span className="muted"> · saved before a restore</span>}
+                    {backup.tag && <span className="muted"> · git tag {backup.tag}</span>}
+                    <span className="muted"> · {formatSize(backup.bytes)}</span>
+                  </span>
+                  <span className="resume-actions">
+                    {backup.kind === 'snapshot' && (
+                      <button type="button" className="link" disabled={restoring} onClick={() => void remove(backup.path)}>
+                        Delete
+                      </button>
+                    )}
+                    <button type="button" className="secondary" disabled={busy || restoring} onClick={() => void restore(backup.path)}>
+                      Restore
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </li>
   );
 }
@@ -148,4 +233,9 @@ function lastUsed(at: number): string | null {
   if (days === 1) return 'used yesterday';
   if (days < 30) return `used ${days} days ago`;
   return `used ${new Date(at).toLocaleDateString()}`;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

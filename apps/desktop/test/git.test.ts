@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clone, parseStatus, readGitInfo, repositoryRoot, runGitAction } from '../src/main/git';
+import { clone, parseStatus, readGitInfo, repositoryRoot, runGitAction, tagCommit } from '../src/main/git';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -142,5 +142,15 @@ describe('git actions', { timeout: 30_000 }, () => {
   it('rejects bad branch names', async () => {
     const { mine } = await setup();
     await expect(runGitAction(mine, { type: 'create-branch', branch: 'bad..name', from: null }, null)).rejects.toThrow('That is not a valid branch name.');
+  });
+});
+
+describe('tagCommit', () => {
+  it('tags the checked-out commit with the snapshot label', async () => {
+    const { mine } = await setup();
+    expect(await tagCommit(mine, 'snapshot/20261026-1540-before-rewrite', 'Before the rewrite')).toBe('snapshot/20261026-1540-before-rewrite');
+    expect(sh(mine, 'rev-parse', 'snapshot/20261026-1540-before-rewrite^{commit}')).toBe(sh(mine, 'rev-parse', 'HEAD'));
+    expect(sh(mine, 'tag', '-l', '--format=%(contents:subject)', 'snapshot/*')).toBe('Before the rewrite');
+    await expect(tagCommit(mine, 'bad..name', 'x')).rejects.toThrow(/not a valid tag/);
   });
 });

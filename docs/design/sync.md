@@ -28,7 +28,12 @@ server on his own PC; it must also run unchanged on a hosted machine later.
 | Code and assets | Git and GitHub, not the sync server | Each person and agent works in its own branch or worktree |
 
 The server stores its state in SQLite to start with, behind a small storage
-interface so it can move to Postgres on a hosted server.
+interface so it can move to Postgres on a hosted server. The host app backs
+the file up with `VACUUM INTO` (a consistent copy while the server runs, after
+an integrity check) on host start and once a day, keeping the last 7, and can
+restore one from the start screen. Project memory is also written to
+`docs/project-memory.md` in each person's project folder, rendered only from
+the entries (dates in UTC) so both copies are identical and never conflict.
 
 ## Connecting
 
@@ -43,7 +48,7 @@ interface so it can move to Postgres on a hosted server.
 ## Moving to a real server later
 
 Run the same server package on a VPS or container, point both apps at its
-address. Nothing in the app changes. Things to add then: backups, real accounts
+address. Nothing in the app changes. Things to add then: server-side backups, real accounts
 instead of invite secrets, and running agents server-side if wanted.
 
 ## Decided 2026-10-25

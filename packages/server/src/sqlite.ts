@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
@@ -254,10 +254,54 @@ export class SqliteStorage implements Storage {
     return this.all('SELECT data FROM (SELECT seq, data FROM activity ORDER BY seq DESC LIMIT ?) ORDER BY seq', Activity, limit);
   }
 
+  /**
+   * Writes a copy of the database to `file`, safely while the server runs
+   * (VACUUM INTO reads one consistent snapshot). Refuses when the database
+   * is damaged, so a bad file never replaces a good backup.
+   */
+  async backup(file: string) {
+    checkIntegrity(this.db);
+    mkdirSync(dirname(file), { recursive: true });
+    const partial = `${file}.partial`;
+    rmSync(partial, { force: true });
+    try {
+      this.db.prepare('VACUUM INTO ?').run(partial);
+      renameSync(partial, file);
+    } catch (error) {
+      rmSync(partial, { force: true });
+      throw error;
+    }
+  }
+
   async close() {
     if (!this.open) return;
     this.open = false;
     this.db.close();
+  }
+}
+
+function checkIntegrity(db: DatabaseSync) {
+  const rows = db.prepare('PRAGMA quick_check').all() as Record<string, unknown>[];
+  const result = rows.map((row) => String(Object.values(row)[0])).join('; ');
+  if (result !== 'ok') throw new Error(`The session database is damaged (${result.slice(0, 200)}).`);
+}
+
+/**
+ * Opens a backup read-only and checks it: intact, made by a version this app
+ * can read, and holding a session. Returns that session.
+ */
+export function inspectBackup(file: string): SessionInfo {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    checkIntegrity(db);
+    const { user_version: version } = db.prepare('PRAGMA user_version').get() as { user_version: number };
+    if (version > SCHEMA_VERSION) throw new Error('That backup was made by a newer version of the app. Update the app first.');
+    const row = db.prepare("SELECT value FROM meta WHERE key = 'session'").get() as { value: string } | undefined;
+    const session = row ? parseJson(row.value, SessionInfo) : null;
+    if (!session) throw new Error('That backup holds no session.');
+    return session;
+  } finally {
+    db.close();
   }
 }
 

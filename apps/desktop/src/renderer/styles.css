@@ -125,6 +125,7 @@ textarea {
 
 .resume-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px 0;
@@ -152,6 +153,36 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.backup-list {
+  flex-basis: 100%;
+}
+
+.backup-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0 4px 12px;
+}
+
+.backup-folder {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-export {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .resume-actions {
@@ -434,6 +465,17 @@ textarea:disabled {
   width: 460px;
   z-index: 10;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+
+.snapshot-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.snapshot-popover p,
+.snapshot-popover h2 {
+  margin: 0;
 }
 
 /* People and presence. People are circles, agents dashed squares (as in the mockup). */

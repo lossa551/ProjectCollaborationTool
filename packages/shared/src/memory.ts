@@ -128,3 +128,36 @@ export function renderMemory(entries: MemoryEntry[]): string {
   }
   return sections.join('\n\n');
 }
+
+/** Where project memory is written in the repository, for people and CLI agents that read repo files. */
+export const MEMORY_EXPORT_PATH = 'docs/project-memory.md';
+
+/**
+ * Project memory as a Markdown file for the repository. It depends only on
+ * the entries (dates in UTC), so both people's copies come out the same and
+ * committing it from either PC never conflicts.
+ */
+export function memoryMarkdown(entries: MemoryEntry[]): string {
+  const out = [
+    '# Project memory',
+    '',
+    '<!-- Written by Project Collaboration Tool from the session\'s project memory. Edit entries in the app: changes made here are overwritten. -->',
+    '',
+    'What everyone working on this project, people and agents, should know about it.',
+  ];
+  const sorted = [...entries].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  for (const kind of MemoryKind.options) {
+    out.push('', `## ${MEMORY_KIND_LABELS[kind]}`, '');
+    const own = sorted.filter((e) => e.kind === kind);
+    if (own.length === 0) out.push('_None yet._');
+    own.forEach((entry, i) => {
+      if (i > 0) out.push('');
+      out.push(`### ${entry.title.replace(/\s+/g, ' ').trim()}`, '');
+      const body = entry.body.trim();
+      if (body) out.push(body, '');
+      const from = entry.source ? ` · from ${entry.source.kind === 'chat' ? 'agent chat' : 'the bloat check'} "${entry.source.title}"` : '';
+      out.push(`_${entry.createdBy}, ${new Date(entry.createdAt).toISOString().slice(0, 10)}${from}_`);
+    });
+  }
+  return `${out.join('\n')}\n`;
+}
