@@ -60,3 +60,33 @@ export function UpdateButton({ hosting }: { hosting: boolean }) {
       );
   }
 }
+
+// Settings: the numbers to give when something does not work. Both PCs need
+// the same protocol to join a session; see docs/releasing.md.
+export function VersionSettings() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+
+  useEffect(() => {
+    void window.pct.getUpdate().then(setInfo);
+    return window.pct.onUpdate(setInfo);
+  }, []);
+
+  if (!info) return null;
+  return (
+    <section className="card version-settings">
+      <h2>Versions</h2>
+      <dl>
+        <dt>App</dt>
+        <dd>v{info.version}</dd>
+        <dt>Protocol</dt>
+        <dd>
+          {info.protocol} <span className="muted small">Both PCs need the same one to join a session.</span>
+        </dd>
+        <dt>Database</dt>
+        <dd>
+          {info.database} <span className="muted small">Older session files are upgraded when the host opens them.</span>
+        </dd>
+      </dl>
+    </section>
+  );
+}

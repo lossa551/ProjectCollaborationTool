@@ -7,3 +7,22 @@
 .update-ready {
   background: var(--good);
 }
+
+.version-settings h2 {
+  margin: 0 0 8px;
+}
+
+.version-settings dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.version-settings dt {
+  font-weight: 600;
+}
+
+.version-settings dd {
+  margin: 0;
+}
