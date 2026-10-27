@@ -11,6 +11,7 @@ import {
   type PlanItem,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
+import { useKept } from './kept';
 
 // GitHub issues in the app (issue #43): the Issues tab of the Code screen, and
 // the pieces the roadmap, the feature editor and Home use. Links, triage and
@@ -32,9 +33,9 @@ export function IssuesScreen({
   const { session } = state;
   const { github } = session;
   const links = useMemo(() => issueLinks(session), [session.planning, session.tasks, session.issueMarks]);
-  const [label, setLabel] = useState('');
-  const [assignee, setAssignee] = useState('');
-  const [onlyOpenWork, setOnlyOpenWork] = useState(false);
+  const [label, setLabel] = useKept('issues.label', '');
+  const [assignee, setAssignee] = useKept('issues.assignee', '');
+  const [onlyOpenWork, setOnlyOpenWork] = useKept('issues.onlyOpenWork', false);
   const labels = [...new Set(github.issues.flatMap((i) => i.labels.map((l) => l.name)))].sort((a, b) => a.localeCompare(b));
   const assignees = [...new Set(github.issues.flatMap((i) => i.assignees))].sort((a, b) => a.localeCompare(b));
   const untriaged = (issue: Issue) => !session.issueMarks[issue.number]?.triaged && !links.get(issue.number)?.length;

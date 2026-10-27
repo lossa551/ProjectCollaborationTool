@@ -20,6 +20,7 @@ import {
   type Task,
 } from '@pct/shared';
 import { Avatar } from './Avatar';
+import { useKept } from './kept';
 import { PullBadge } from './GitHub';
 import { CriteriaSummary } from './Planning';
 
@@ -54,8 +55,8 @@ export function Board({
   onSelect: (taskId: string) => void;
 }) {
   const [dropTarget, setDropTarget] = useState<TaskStage | null>(null);
-  const [query, setQuery] = useState('');
-  const [filters, setFilters] = useState<BoardFilter[]>([]);
+  const [query, setQuery] = useKept('board.query', '');
+  const [filters, setFilters] = useKept<BoardFilter[]>('board.filters', []);
   const search = useRef<HTMLInputElement>(null);
   const shown = useMemo(
     () => filterBoard({ tasks, chats, messages, github, locks, planning }, youId, query, filters),

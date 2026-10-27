@@ -73,14 +73,17 @@ export class WorkspaceWatcher {
     const remoteUrl = await tryGit(cwd, ['remote', 'get-url', 'origin']);
     const remote = remoteUrl && /github\.com[/:]/i.test(remoteUrl) ? parseRepoRef(remoteUrl) : null;
     const head = await tryGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']);
-    if (head === null) throw new Error('Could not read the repository. Has it got at least one commit?');
-    const branch = head === 'HEAD' ? null : head;
+    // A new repository (git init, nothing committed yet) has a branch but no
+    // HEAD commit: everything in it is new.
+    const unborn = head === null ? await tryGit(cwd, ['symbolic-ref', '--short', 'HEAD']) : null;
+    if (head === null && unborn === null) throw new Error('Could not read the repository.');
+    const branch = unborn ?? (head === 'HEAD' ? null : head);
 
-    const base = await this.baseRef();
+    const base = unborn === null ? await this.baseRef() : null;
     const mergeBase = base ? await tryGit(cwd, ['merge-base', 'HEAD', base]) : null;
     // Against the merge base: everything this branch changed, committed or not.
-    // Without one, just what is not committed yet.
-    const diff = await git(cwd, ['diff', '--name-status', '-z', mergeBase ?? 'HEAD']);
+    // Without one, just what is not committed yet. With no commit at all, what is staged.
+    const diff = await git(cwd, unborn === null ? ['diff', '--name-status', '-z', mergeBase ?? 'HEAD'] : ['diff', '--cached', '--name-status', '-z']);
     const untracked = await git(cwd, ['ls-files', '--others', '--exclude-standard', '--full-name', '-z', '--', ':/']);
     const all = [
       ...parseNameStatus(diff),

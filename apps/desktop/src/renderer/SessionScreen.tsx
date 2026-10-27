@@ -15,6 +15,7 @@ import { EngineSettings } from './Engine';
 import { PriceSettings } from './Cost';
 import { PlanningScreen } from './Planning';
 import { SetupScreen } from './Setup';
+import { keepFor } from './kept';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton, VersionSettings } from './UpdateButton';
@@ -90,6 +91,7 @@ function useLastSeen(sessionId: string | null): [number | null, () => void] {
 
 export function SessionScreen({ state }: { state: AppState }) {
   const { session, hosting } = state;
+  keepFor(session.session?.id ?? null);
   const participants = [...session.participants].sort((a, b) => a.connectedAt - b.connectedAt);
   const online = session.status === 'connected';
   const editable = state.canEditTasks;

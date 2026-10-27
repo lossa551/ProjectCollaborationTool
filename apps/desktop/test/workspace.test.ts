@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalWorkspace } from '../src/common/api';
+import { initRepository, readGitInfo } from '../src/main/git';
 import { WorkspaceWatcher, parseNameStatus, repositoryRoot } from '../src/main/workspace';
 
 const dirs: string[] = [];
@@ -69,6 +70,37 @@ describe('workspace watcher', () => {
     const plain = mkdtempSync(join(tmpdir(), 'pct-plain-'));
     dirs.push(plain);
     await expect(repositoryRoot(plain)).rejects.toThrow(/not inside a git repository/);
+  });
+
+  it('reads a new repository with no commit yet as a normal workspace', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pct-fresh-'));
+    dirs.push(dir);
+    // A project just made with its engine: files, but no git.
+    writeFileSync(join(dir, 'project.godot'), 'config_version=5\n');
+    mkdirSync(join(dir, 'scenes'));
+    writeFileSync(join(dir, 'scenes', 'main.tscn'), '[gd_scene]\n');
+    await expect(repositoryRoot(dir)).rejects.toThrow(/not inside a git repository/);
+
+    await initRepository(dir);
+    execFileSync('git', ['add', 'project.godot'], { cwd: dir, stdio: 'pipe' });
+    const state = await read(dir);
+    expect(state.error).toBeNull();
+    expect(state.workspace?.branch).toBe('main');
+    expect(state.workspace?.base).toBeNull();
+    expect(state.workspace?.files.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'project.godot', change: 'added' },
+      { path: 'scenes/main.tscn', change: 'untracked' },
+    ]);
+    expect(state.git?.hasCommits).toBe(false);
+    expect(state.git?.uncommitted.length).toBe(2);
+  });
+
+  it('says a repository with commits has them', async () => {
+    const { dir, git, write } = repo();
+    write('a.txt', 'x');
+    git('add', '.');
+    git('commit', '-qm', 'x');
+    expect((await readGitInfo(dir)).hasCommits).toBe(true);
   });
 
   it('reads renames from git diff output', () => {

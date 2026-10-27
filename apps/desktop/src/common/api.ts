@@ -59,6 +59,8 @@ export interface GitInfo {
   conflicted: string[];
   /** A merge (e.g. from a pull) is in progress. */
   merging: boolean;
+  /** False in a new repository with nothing committed yet. */
+  hasCommits: boolean;
   /** Local branches. */
   branches: string[];
   /** Branches on GitHub (as of the last fetch) that you do not have locally. */
@@ -90,6 +92,16 @@ export interface LocalAgent {
   folder: string;
 }
 
+/**
+ * A commit message draft (GitHub page). It lives in the main process so it
+ * carries on, and its result is kept, while you are on another screen.
+ */
+export type CommitDraft = { id: number; agent: string } & (
+  | { status: 'drafting' }
+  | { status: 'done'; message: string }
+  | { status: 'failed'; error: string }
+);
+
 export interface AppState {
   session: SessionState;
   hosting: HostingInfo | null;
@@ -116,6 +128,8 @@ export interface AppState {
   mutedNotices: NoticeKind[];
   /** Project setup while it runs. */
   setupProgress: SetupProgress | null;
+  /** The commit message an agent is drafting now, or drafted last. */
+  commitDraft: CommitDraft | null;
   /** Folder notes agents drafted, waiting for you to look at them. */
   noteDrafts: NoteDraft[];
   /** The agent that keeps folder notes up to date in this session; null when off. */
