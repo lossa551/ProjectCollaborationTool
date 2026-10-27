@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { CLAUDE_FILE, MEMORY_EXPORT_PATH, NOTE_FILE, SETUP_CONFIG_PATH, type ProjectFacts } from '@pct/shared';
+import { CLAUDE_FILE, GODOT_PLUGIN_SCRIPT_PATH, MEMORY_EXPORT_PATH, NOTE_FILE, SETUP_CONFIG_PATH, type ProjectFacts } from '@pct/shared';
 import { DRAFT_LISTING_LIMIT, type FolderInfo, type FolderNotesReport, type NoteDraftInput } from '../common/folder-notes';
 import { hasGitLfs, listProjectFiles } from './git';
 
@@ -15,9 +15,11 @@ export async function readProjectFacts(root: string): Promise<ProjectFacts> {
   const entries = await readdir(root, { withFileTypes: true });
   const topFiles = entries.map((e) => (e.isDirectory() ? `${e.name}/` : e.name)).sort();
   const uprojectName = topFiles.find((name) => /\.uproject$/i.test(name)) ?? null;
-  const [uproject, godotProject, config, gitignore, gitattributes, agents, claude, memory, lfs] = await Promise.all([
+  const godot = topFiles.includes('project.godot');
+  const [uproject, godotProject, godotPlugin, config, gitignore, gitattributes, agents, claude, memory, lfs] = await Promise.all([
     uprojectName ? readText(root, uprojectName) : Promise.resolve(null),
-    topFiles.includes('project.godot') ? readText(root, 'project.godot') : Promise.resolve(null),
+    godot ? readText(root, 'project.godot') : Promise.resolve(null),
+    godot ? readText(root, GODOT_PLUGIN_SCRIPT_PATH) : Promise.resolve(null),
     readText(root, SETUP_CONFIG_PATH),
     readText(root, '.gitignore'),
     readText(root, '.gitattributes'),
@@ -33,6 +35,7 @@ export async function readProjectFacts(root: string): Promise<ProjectFacts> {
     topFiles,
     uproject: uprojectName ? { name: uprojectName, text: uproject ?? '' } : null,
     godotProject,
+    godotPlugin,
     config,
     gitignore,
     gitattributes,

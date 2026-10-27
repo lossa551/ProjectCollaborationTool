@@ -120,6 +120,26 @@ export interface AppState {
   noteDrafts: NoteDraft[];
   /** The agent that keeps folder notes up to date in this session; null when off. */
   notesAgent: string | null;
+  /** The game engine on this PC. */
+  engine: EngineState;
+}
+
+/** Which engine MCP server agents on this PC use; see ENGINE_BRIDGES in @pct/agents. */
+export type EngineBridgeChoice = 'off' | 'godot' | 'summer';
+
+/** The game engine on this PC (issue #10). */
+export interface EngineState {
+  bridge: EngineBridgeChoice;
+  /** Godot (or Summer Engine) executable, for tests and the Godot MCP server. */
+  godotPath: string | null;
+  /** saved: chosen in Settings; env: GODOT_PATH; path: found on the PATH. */
+  godotSource: 'saved' | 'env' | 'path' | null;
+  /** Summer's engine server has a sign-in on this PC. */
+  summerSignedIn: boolean;
+  /** Agents of this session that get the engine's tools. */
+  agents: string[];
+  /** Your project folder is a Godot (or Summer Engine) project. */
+  godotProject: boolean;
 }
 
 /** What project setup would do in your project folder. */
@@ -384,6 +404,12 @@ export interface PctApi {
   cancelSetup(): void;
   /** The agent that drafts folder note updates by itself; null turns it off. */
   setNotesAgent(agentId: string | null): void;
+  /** Which engine MCP server agents on this PC use. */
+  setEngineBridge(bridge: EngineBridgeChoice): void;
+  /** Gives an agent the engine's tools in this session, or takes them away. */
+  setEngineAgent(agentId: string, on: boolean): void;
+  /** choose: asks for the Godot executable; otherwise forgets it and looks on the PATH again. */
+  setGodotPath(choose: boolean): Promise<Result>;
   /** Writes a drafted note into your project folder, for you to commit. */
   acceptNoteDraft(notePath: string): Promise<Result>;
   discardNoteDraft(notePath: string): void;
@@ -466,6 +492,9 @@ export const Channel = {
   cancelSetup: 'pct:cancel-setup',
   setNotesAgent: 'pct:set-notes-agent',
   acceptNoteDraft: 'pct:accept-note-draft',
+  setEngineBridge: 'pct:set-engine-bridge',
+  setEngineAgent: 'pct:set-engine-agent',
+  setGodotPath: 'pct:set-godot-path',
   discardNoteDraft: 'pct:discard-note-draft',
   state: 'pct:state',
   getUpdate: 'pct:get-update',

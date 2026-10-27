@@ -3,6 +3,14 @@ import type { MemoryEntry } from './memory.js';
 import { MEMORY_EXPORT_PATH } from './memory.js';
 import type { LockRules } from './model.js';
 import { NOTE_FILE } from './folder-notes.js';
+import {
+  GODOT_PLUGIN_CFG,
+  GODOT_PLUGIN_CFG_PATH,
+  GODOT_PLUGIN_SCRIPT,
+  GODOT_PLUGIN_SCRIPT_PATH,
+  pluginEnabled,
+  withPluginEnabled,
+} from './godot-plugin.js';
 
 // Project setup (issue #46): the engine project is made with the engine
 // itself, then the app looks at the folder, works out which engine it is,
@@ -176,6 +184,8 @@ export interface ProjectFacts {
   memoryFile: boolean;
   /** git lfs is installed. */
   lfs: boolean;
+  /** The app's Godot editor plugin script, if the project has it (addons/collab_tool/plugin.gd). */
+  godotPlugin?: string | null;
 }
 
 export interface DetectedProject {
@@ -210,7 +220,7 @@ export function detectProject(facts: ProjectFacts): DetectedProject {
   return { engine: 'generic', version: null, marker: null, name: null };
 }
 
-export const SetupItemId = z.enum(['gitignore', 'gitattributes', 'locks', 'bloat', 'memory', 'agents', 'claude']);
+export const SetupItemId = z.enum(['gitignore', 'gitattributes', 'locks', 'bloat', 'memory', 'agents', 'claude', 'plugin']);
 export type SetupItemId = z.infer<typeof SetupItemId>;
 
 /**
@@ -459,6 +469,22 @@ export function planSetup(engine: Engine, detected: DetectedProject, facts: Proj
     preview: rules,
   });
 
+  if (engine === 'godot' && facts.godotProject !== null) {
+    const current = (facts.godotPlugin ?? '').replace(/\r\n/g, '\n') === GODOT_PLUGIN_SCRIPT;
+    const enabled = pluginEnabled(facts.godotProject);
+    items.push({
+      id: 'plugin',
+      label: 'Show locks inside the Godot editor',
+      file: GODOT_PLUGIN_SCRIPT_PATH,
+      state: current && enabled ? 'done' : facts.godotPlugin == null ? 'missing' : 'drifted',
+      detail:
+        current && enabled
+          ? 'The editor plugin is there and turned on.'
+          : 'Adds the app\'s editor plugin to addons/collab_tool/ and turns it on in project.godot: a Locks dock in Godot and Summer Engine, a warning when the scene you open is locked by someone else, and a button to lock it.',
+      preview: `${GODOT_PLUGIN_CFG_PATH}\n${GODOT_PLUGIN_SCRIPT_PATH}\nproject.godot: [editor_plugins] enabled`,
+    });
+  }
+
   const hasImport = lines(facts.claude).includes(CLAUDE_IMPORT);
   items.push({
     id: 'claude',
@@ -491,6 +517,12 @@ export function setupFiles(engine: Engine, facts: ProjectFacts, chosen: SetupIte
   if (chosen.includes('bloat')) out[SETUP_CONFIG_PATH] = withConfig(facts.config, engine);
   if (chosen.includes('agents')) out[NOTE_FILE] = withRules(facts.agents, engine);
   if (chosen.includes('claude')) out[CLAUDE_FILE] = withClaudeImport(facts.claude);
+  if (chosen.includes('plugin') && engine === 'godot' && facts.godotProject !== null) {
+    out[GODOT_PLUGIN_CFG_PATH] = GODOT_PLUGIN_CFG;
+    out[GODOT_PLUGIN_SCRIPT_PATH] = GODOT_PLUGIN_SCRIPT;
+    const enabled = withPluginEnabled(facts.godotProject);
+    if (enabled !== facts.godotProject.replace(/\r\n/g, '\n')) out['project.godot'] = enabled;
+  }
   return out;
 }
 

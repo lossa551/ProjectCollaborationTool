@@ -353,6 +353,15 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
               </li>
             ))}
           </BloatSection>
+          {report.unusedGameFiles.length > 0 && (
+            <BloatSection title="Godot files the game never loads" count={report.unusedGameFiles.length} empty="">
+              {report.unusedGameFiles.map((path) => (
+                <li key={path}>
+                  <code className="small">{path}</code> {noteButton(`game:${path}`, `Possibly unused: ${path}`, path)}
+                </li>
+              ))}
+            </BloatSection>
+          )}
           <BloatSection
             title="Dependencies nothing uses"
             count={report.unusedDependencies.length}
