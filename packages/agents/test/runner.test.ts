@@ -497,7 +497,8 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     const bossCopy = working.chats.find((c) => c.id === boss)!.worktree!;
     martin.deleteChat(boss);
     await waitFor(martin, (s) => !s.chats.some((c) => c.id === boss));
-    await expect.poll(() => existsSync(bossCopy.folder)).toBe(false);
+    // The copy is saved and removed after the chat is gone; on Windows that takes a few seconds.
+    await expect.poll(() => existsSync(bossCopy.folder), { timeout: 15_000 }).toBe(false);
     expect(git('show', `${bossCopy.branch}:src/boss.gd`)).toBe('boss');
   });
 
