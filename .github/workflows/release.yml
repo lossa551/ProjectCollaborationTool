@@ -4,7 +4,7 @@ name: Release
 # Release. Installed apps find it there, download it and offer the update.
 # The version is apps/desktop's major.minor plus this workflow's run number,
 # so it always goes up: bump major or minor in package.json by hand when you
-# want to, the patch takes care of itself.
+# want to, the patch takes care of itself. The rules are in docs/releasing.md.
 on:
   push:
     branches: [main]
@@ -37,12 +37,25 @@ jobs:
           base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
           npm version "$base.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
           echo "VERSION=$base.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+      # A size line (small, medium or large) for the top of the release notes,
+      # from what changed since the last release; see docs/releasing.md.
+      - name: Judge the release size
+        shell: bash
+        run: |
+          : > "$RUNNER_TEMP/notes.md"
+          prev=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          if [ -n "$prev" ] && gh api "repos/$GITHUB_REPOSITORY/compare/$prev...$GITHUB_SHA" > "$RUNNER_TEMP/compare.json"; then
+            node .github/scripts/release-size.mjs "$RUNNER_TEMP/compare.json" > "$RUNNER_TEMP/notes.md" || : > "$RUNNER_TEMP/notes.md"
+          fi
+          cat "$RUNNER_TEMP/notes.md"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # The release is created here as a draft, on this exact commit, so that
       # electron-builder's parallel uploads all find it instead of racing to
       # create it, and installed apps only see it once every file is there.
       - name: Create a draft release
         shell: bash
-        run: gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        run: gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release -w @pct/desktop

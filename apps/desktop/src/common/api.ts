@@ -260,6 +260,10 @@ export type UpdateState =
 export interface UpdateInfo {
   /** The version running now. */
   version: string;
+  /** What the app speaks to the session host; both sides must match. */
+  protocol: number;
+  /** The layout of the session database it writes. */
+  database: number;
   state: UpdateState;
 }
 

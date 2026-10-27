@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { WORKSPACE_FILE_LIMIT, parseNameStatus, type ChatWorktree, type FileChange } from '@pct/shared';
 
@@ -16,7 +16,7 @@ import { WORKSPACE_FILE_LIMIT, parseNameStatus, type ChatWorktree, type FileChan
 
 export class WorktreeError extends Error {}
 
-function git(cwd: string, args: string[], timeout = 60_000): Promise<string> {
+function runGit(cwd: string, args: string[], timeout: number): Promise<string> {
   return new Promise((resolvePromise, reject) => {
     execFile('git', args, { cwd, timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (!error) return resolvePromise(String(stdout));
@@ -24,6 +24,30 @@ function git(cwd: string, args: string[], timeout = 60_000): Promise<string> {
       reject(new WorktreeError(String(stderr).trim() || String(stdout).trim() || error.message));
     });
   });
+}
+
+// Git commands in the same folder run one at a time. A turn's checkpoint, the
+// status shown to everyone and freeing locks can all touch a copy at once;
+// overlapping them makes git trip over its own index.lock, and on Windows a
+// folder cannot be removed while a git process still runs inside it.
+const queues = new Map<string, Promise<unknown>>();
+
+function inFolder<T>(folder: string, work: () => Promise<T>): Promise<T> {
+  const key = process.platform === 'win32' ? resolve(folder).toLowerCase() : resolve(folder);
+  const result = (queues.get(key) ?? Promise.resolve()).then(work, work);
+  const done = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  queues.set(key, done);
+  void done.then(() => {
+    if (queues.get(key) === done) queues.delete(key);
+  });
+  return result;
+}
+
+function git(cwd: string, args: string[], timeout = 60_000): Promise<string> {
+  return inFolder(cwd, () => runGit(cwd, args, timeout));
 }
 
 const tryGit = (cwd: string, args: string[]) => git(cwd, args).then((out) => out.trim(), () => null);
@@ -222,7 +246,20 @@ export async function branchMerged(root: string, branch: string, into: string): 
  * (with its commits) so nothing committed is lost.
  */
 export async function removeWorktree(root: string, folder: string, branch: string, deleteBranch: boolean): Promise<void> {
-  if (existsSync(folder)) await git(root, ['worktree', 'remove', '--force', folder], 10 * 60_000);
+  // Waits for git commands still running in the copy. Windows can also hold a
+  // file a moment longer (a virus scan, an editor), so a failed removal is tried again.
+  await inFolder(folder, async () => {
+    for (let attempt = 1; existsSync(folder); attempt++) {
+      try {
+        await runGit(root, ['worktree', 'remove', '--force', folder], 10 * 60_000);
+      } catch (error) {
+        if (attempt >= 5) throw error;
+        await new Promise((done) => setTimeout(done, 500 * attempt));
+        // A half-removed copy is no longer a worktree git knows; clear what is left.
+        if (existsSync(folder) && !existsSync(join(folder, '.git'))) rmSync(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      }
+    }
+  });
   await tryGit(root, ['worktree', 'prune']);
   if (deleteBranch && (await commitOf(root, `refs/heads/${branch}`))) await git(root, ['branch', '-D', branch]);
 }
@@ -242,9 +279,11 @@ export async function worktreeDiff(folder: string, base: { branch: string | null
   for (const path of untracked) {
     if (out.length > limit) break;
     // diff --no-index exits with 1 when the files differ, which they always do here.
-    out += await new Promise<string>((done) =>
-      execFile('git', ['diff', '--no-color', '--no-index', '--', '/dev/null', path], { cwd: folder, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (_e, stdout) =>
-        done(String(stdout)),
+    out += await inFolder(folder, () =>
+      new Promise<string>((done) =>
+        execFile('git', ['diff', '--no-color', '--no-index', '--', '/dev/null', path], { cwd: folder, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (_e, stdout) =>
+          done(String(stdout)),
+        ),
       ),
     );
   }
