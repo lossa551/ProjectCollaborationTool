@@ -141,7 +141,12 @@ write" on it; reading them needs nothing new.
 
 Traffic over Tailscale is already encrypted, so plain `ws://` is fine there.
 Use the TLS settings when the server is reachable on the open internet. The
-invite code contains the session secret: anyone with it can join.
+invite code contains the session secret: anyone with it can join. If it
+leaks, **New invite code** in the Invite popover replaces it: people who
+joined before stay in and their Rejoin keeps working, anyone holding only the
+old code is refused. The host can also **Remove…** someone from Who is doing
+what on Home: they and their agents are disconnected, their locks are freed,
+and their saved invite stops working until they get a new code.
 
 ## Releasing a new version
 

@@ -16,7 +16,7 @@ import {
   Task,
   DocId,
 } from '@pct/shared';
-import type { Identity, Storage } from './storage.js';
+import type { Identity, SessionAccess, Storage } from './storage.js';
 
 // Storage in one SQLite file, using the SQLite built into Node (and Electron),
 // so nothing native has to be compiled. Records are stored as JSON and
@@ -31,6 +31,12 @@ const IdentityRecord = z.object({
   kind: ParticipantKind,
   createdAt: z.number(),
   lastSeenAt: z.number(),
+});
+
+const AccessRecord = z.object({
+  issuedAt: z.number(),
+  retired: z.array(z.object({ secret: z.string(), retiredAt: z.number() })),
+  removed: z.array(z.object({ id: z.string(), name: z.string(), at: z.number() })),
 });
 
 export class SqliteStorage implements Storage {
@@ -114,6 +120,14 @@ export class SqliteStorage implements Storage {
 
   async saveSecret(secret: string) {
     this.setMeta('secret', secret);
+  }
+
+  async loadAccess(): Promise<SessionAccess | null> {
+    return this.getMeta('access', AccessRecord);
+  }
+
+  async saveAccess(access: SessionAccess) {
+    this.setMeta('access', access);
   }
 
   async findIdentity(tokenHash: string): Promise<Identity | null> {

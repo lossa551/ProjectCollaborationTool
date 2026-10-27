@@ -124,7 +124,7 @@ export class LocalAgents {
       name: request.name,
       kind: 'agent',
       identity: agentIdentity(request.profileId, newIdentity),
-      agent: { profileId: request.profileId, startedBy: request.startedBy },
+      agent: { profileId: request.profileId, startedBy: request.startedBy, startedById: request.startedById },
     });
     this.onChange();
   }

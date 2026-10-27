@@ -29,12 +29,30 @@ export interface Identity {
   lastSeenAt: number;
 }
 
+/**
+ * Who may still join besides holders of the current invite code. Making a new
+ * code retires the old secret: from then on it only lets back in people who
+ * had joined before, so a leaked code stops working but a saved Rejoin does
+ * not. People the host removed are refused until they get a code made after
+ * their removal.
+ */
+export interface SessionAccess {
+  /** When the current secret was made; 0 for one made before codes could change. */
+  issuedAt: number;
+  /** Earlier secrets, newest first. */
+  retired: { secret: string; retiredAt: number }[];
+  removed: { id: string; name: string; at: number }[];
+}
+
 export interface Storage {
   loadSession(): Promise<SessionInfo | null>;
   saveSession(session: SessionInfo): Promise<void>;
   /** The session secret, kept so invite codes stay valid across restarts. */
   loadSecret(): Promise<string | null>;
   saveSecret(secret: string): Promise<void>;
+  /** Null until the host first makes a new invite code or removes someone. */
+  loadAccess(): Promise<SessionAccess | null>;
+  saveAccess(access: SessionAccess): Promise<void>;
   findIdentity(tokenHash: string): Promise<Identity | null>;
   saveIdentity(tokenHash: string, identity: Identity): Promise<void>;
   listTasks(): Promise<Task[]>;
@@ -76,6 +94,7 @@ export interface Storage {
 export class MemoryStorage implements Storage {
   private session: SessionInfo | null = null;
   private secret: string | null = null;
+  private access: SessionAccess | null = null;
   private readonly identities = new Map<string, Identity>();
   private readonly tasks = new Map<string, Task>();
   private readonly locks = new Map<string, Lock>();
@@ -102,6 +121,14 @@ export class MemoryStorage implements Storage {
 
   async saveSecret(secret: string) {
     this.secret = secret;
+  }
+
+  async loadAccess() {
+    return this.access;
+  }
+
+  async saveAccess(access: SessionAccess) {
+    this.access = access;
   }
 
   async findIdentity(tokenHash: string) {

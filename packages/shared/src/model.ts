@@ -18,7 +18,7 @@ export const Participant = z.object({
   focus: z.string().nullable(),
   connectedAt: z.number(),
   /** For a running agent: its agent profile and the person whose PC runs it. */
-  agent: z.object({ profileId: z.string(), startedBy: z.string() }).nullable().default(null),
+  agent: z.object({ profileId: z.string(), startedBy: z.string(), startedById: z.string().optional() }).nullable().default(null),
 });
 export type Participant = z.infer<typeof Participant>;
 

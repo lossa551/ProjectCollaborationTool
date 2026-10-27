@@ -84,7 +84,7 @@ export interface JoinOptions {
   name: string;
   kind?: ParticipantKind;
   /** For an agent runner: the agent profile it runs and who started it. */
-  agent?: { profileId: string; startedBy: string };
+  agent?: { profileId: string; startedBy: string; startedById?: string };
   /** Secret kept on this machine; see HelloMessage.identity. Use newIdentity() to make one. */
   identity: string;
 }
@@ -165,6 +165,7 @@ const FATAL_CLOSE_CODES = new Set<number>([
   CloseCode.protocolMismatch,
   CloseCode.replaced,
   CloseCode.agentRunning,
+  CloseCode.removed,
 ]);
 
 export class SessionClient {
@@ -749,6 +750,10 @@ export class SessionClient {
         break;
       case 'bloat.changed':
         this.setState({ ...this.state, bloat: message.report });
+        break;
+      case 'session.secret':
+        // Reconnects use the new invite code; the app saves it for Rejoin (see onMessage).
+        if (this.join) this.join = { ...this.join, secret: message.secret };
         break;
       case 'error':
         this.setState({ ...this.state, error: { code: message.code, message: message.message } });

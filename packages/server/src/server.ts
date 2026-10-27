@@ -25,7 +25,7 @@ import { AgentChats, CHAT_HISTORY_LIMIT } from './chats.js';
 import { SharedDocs } from './docs.js';
 import { GitHubWatcher, describeGitHubChanges, type GitHubOptions } from './github.js';
 import { LockTable } from './locks.js';
-import { MemoryStorage, type Storage } from './storage.js';
+import { MemoryStorage, type Identity, type SessionAccess, type Storage } from './storage.js';
 
 export interface ServerOptions {
   /** Port to listen on; 0 picks a free one. Default 7420. */
@@ -51,7 +51,8 @@ export interface ServerOptions {
 
 export interface RunningServer {
   port: number;
-  secret: string;
+  /** The secret in the current invite code; newSecret changes it. */
+  readonly secret: string;
   session: SessionInfo;
   /** Local WebSocket URL, for a client on the same machine. */
   localUrl: string;
@@ -59,6 +60,17 @@ export interface RunningServer {
   github(): GitHubStatus;
   /** Sets or clears the token used for GitHub; polling starts again with it. */
   setGitHubToken(token: string | null): void;
+  /**
+   * Makes a new invite secret and sends it to everyone connected. The old
+   * code then only lets back in people who had joined before (their saved
+   * Rejoin keeps working); anyone holding only the old code is refused.
+   */
+  newSecret(by: string | null): Promise<string>;
+  /**
+   * Host only: disconnects a person and the agents they started, frees their
+   * locks and refuses them until they get an invite code made after this.
+   */
+  removeParticipant(id: string, by: string | null): Promise<{ ok: true; name: string } | { ok: false; message: string }>;
   close(): Promise<void>;
 }
 
@@ -66,9 +78,13 @@ interface Connection {
   socket: WebSocket;
   participant: Participant | null;
   alive: boolean;
+  /** Set when the host removed them, so leaving is not reported as well. */
+  removed?: boolean;
 }
 
 const ACTIVITY_ON_JOIN = 100;
+/** Earlier invite secrets kept, so people offline through a few new codes can still rejoin. */
+const RETIRED_SECRETS = 10;
 
 export function generateSecret(): string {
   return randomBytes(24).toString('base64url');
@@ -87,7 +103,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     secret = generateSecret();
     await storage.saveSecret(secret);
   }
-  const sessionSecret = secret;
+  let sessionSecret = secret;
+  let access: SessionAccess = (await storage.loadAccess()) ?? { issuedAt: 0, retired: [], removed: [] };
   const log = options.log ?? (() => {});
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
@@ -206,7 +223,9 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
             CloseCode.protocolMismatch,
           );
         }
-        if (!secretsMatch(message.secret, sessionSecret)) {
+        const current = secretsMatch(message.secret, sessionSecret);
+        const retired = current ? undefined : access.retired.find((r) => secretsMatch(message.secret, r.secret));
+        if (!current && !retired) {
           return fail(conn, 'bad_secret', 'The invite code is wrong or out of date', CloseCode.badSecret);
         }
         if (message.agent) {
@@ -217,6 +236,9 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         const now = Date.now();
         const tokenHash = createHash('sha256').update(message.identity).digest('hex');
         const known = await storage.findIdentity(tokenHash);
+        if (conn.socket.readyState !== conn.socket.OPEN) return;
+        const refused = admit(known, message, retired);
+        if (refused) return fail(conn, refused.code, refused.message, refused.closeCode);
         const identity = {
           id: known?.id ?? randomUUID(),
           name: message.name,
@@ -272,6 +294,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           chats: chats.listChats(),
           bloat,
         });
+        // Joined with an earlier code: their app saves the current one for next time.
+        if (retired) send(conn, { type: 'session.secret', secret: sessionSecret });
         broadcast({ type: 'participant.joined', participant }, conn);
         record(participant, 'joined the session');
         log(`${participant.name} (${participant.kind}) joined`);
@@ -594,11 +618,86 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           broadcast({ type: 'chat.message', message: m });
         }
         broadcast({ type: 'participant.left', participantId: participant.id });
-        record(participant, 'left the session');
+        if (!conn.removed) record(participant, 'left the session');
         log(`${participant.name} left`);
       }
     });
   });
+
+  /** Why a hello with a valid secret is still turned away, or null to let it in. */
+  const admit = (
+    known: Identity | null,
+    hello: { kind: Participant['kind']; agent?: { startedBy: string; startedById?: string } },
+    retired: { retiredAt: number } | undefined,
+  ): { code: ErrorCode; message: string; closeCode: number } | null => {
+    // An earlier code only lets back in people who had joined before it was replaced.
+    if (retired && !(known && known.kind === 'human' && hello.kind === 'human' && !hello.agent && known.createdAt <= retired.retiredAt)) {
+      return { code: 'bad_secret', message: 'This invite code was replaced by a new one. Ask the host for the new code.', closeCode: CloseCode.badSecret };
+    }
+    const removal = known && access.removed.find((r) => r.id === known.id);
+    if (removal) {
+      // A code made after the removal is the host inviting them back.
+      if (retired || access.issuedAt <= removal.at) {
+        return { code: 'removed', message: 'The host removed you from this session. Ask them for a new invite code to come back.', closeCode: CloseCode.removed };
+      }
+      access = { ...access, removed: access.removed.filter((r) => r !== removal) };
+      void persist('session access', storage.saveAccess(access));
+    }
+    const starter = hello.agent?.startedById && access.removed.find((r) => r.id === hello.agent!.startedById);
+    if (starter) {
+      return { code: 'removed', message: `${starter.name} was removed from this session, so agents started on their PC cannot join.`, closeCode: CloseCode.removed };
+    }
+    return null;
+  };
+
+  const newSecret = async (by: string | null) => {
+    const now = Date.now();
+    const next = generateSecret();
+    const nextAccess: SessionAccess = {
+      ...access,
+      issuedAt: now,
+      retired: [{ secret: sessionSecret, retiredAt: now }, ...access.retired].slice(0, RETIRED_SECRETS),
+    };
+    await storage.saveSecret(next);
+    await storage.saveAccess(nextAccess);
+    sessionSecret = next;
+    access = nextAccess;
+    broadcast({ type: 'session.secret', secret: next });
+    record(by ? { name: by } : null, 'made a new invite code; the old one no longer lets anyone new join');
+    log('made a new invite code');
+    return next;
+  };
+
+  const removeParticipant = async (id: string, by: string | null) => {
+    const person = joined().find((p) => p.id === id && p.kind === 'human');
+    if (!person) return { ok: false as const, message: 'They are not in the session now.' };
+    const nextAccess = { ...access, removed: [...access.removed.filter((r) => r.id !== id), { id, name: person.name, at: Date.now() }] };
+    await storage.saveAccess(nextAccess);
+    access = nextAccess;
+    record(by ? { name: by } : null, `removed ${person.name} from the session`);
+    // Their agents run on their PC, so they go too.
+    const gone = new Set([id]);
+    for (const conn of connections) {
+      const p = conn.participant;
+      if (!p || (p.id !== id && p.agent?.startedById !== id)) continue;
+      gone.add(p.id);
+      conn.removed = true;
+      const why = p.id === id ? 'The host removed you from this session. Ask them for a new invite code to come back.' : `${person.name} was removed from the session, so their agents stopped`;
+      fail(conn, 'removed', why, CloseCode.removed);
+    }
+    const freed = locks.list().filter((lock) => gone.has(lock.holder.id));
+    for (const lock of freed) {
+      locks.drop(lock.id);
+      void persist('lock', storage.deleteLock(lock.id));
+      broadcast({ type: 'lock.removed', lockId: lock.id });
+    }
+    if (freed.length > 0) {
+      const what = freed.length === 1 ? `lock on ${freed[0]!.path} was` : `${freed.length} locks were`;
+      record(null, `${person.name}'s ${what} freed because they were removed from the session`);
+    }
+    log(`${person.name} was removed`);
+    return { ok: true as const, name: person.name };
+  };
 
   const heartbeat = setInterval(() => {
     const now = Date.now();
@@ -631,12 +730,16 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
 
   return {
     port,
-    secret: sessionSecret,
+    get secret() {
+      return sessionSecret;
+    },
     session: currentSession,
     localUrl: `${scheme}://127.0.0.1:${port}${SOCKET_PATH}`,
     participants: joined,
     github: () => github.getStatus(),
     setGitHubToken: (token) => github.setToken(token),
+    newSecret,
+    removeParticipant,
     async close() {
       clearInterval(heartbeat);
       github.stop();

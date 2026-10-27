@@ -233,6 +233,10 @@ export interface PctApi {
   /** choose: asks for a folder (say, in OneDrive or on a second drive); otherwise goes back to the default. */
   setBackupFolder(choose: boolean): Promise<Result>;
   leave(): Promise<void>;
+  /** Host only: replaces the invite code. People who joined before keep their Rejoin; the old code lets no one new in. */
+  newInvite(): Promise<Result>;
+  /** Host only: asks, then disconnects a person (and their agents), frees their locks and refuses their saved invite. */
+  removeParticipant(participantId: string): Promise<Result>;
   setPresence(status: 'active' | 'idle' | 'away', focus: string | null): void;
   createTask(title: string, stage: TaskStage): void;
   updateTask(taskId: string, changes: TaskChanges): void;
@@ -336,6 +340,8 @@ export const Channel = {
   testNotice: 'pct:test-notice',
   openTarget: 'pct:open-target',
   leave: 'pct:leave',
+  newInvite: 'pct:new-invite',
+  removeParticipant: 'pct:remove-participant',
   setPresence: 'pct:set-presence',
   createTask: 'pct:create-task',
   updateTask: 'pct:update-task',
