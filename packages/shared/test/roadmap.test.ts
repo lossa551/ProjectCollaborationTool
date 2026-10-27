@@ -51,6 +51,7 @@ const task = (id: string, featureId: string, stage: Task['stage'], extra: Partia
   branch: null,
   featureId,
   criteria: [],
+  budget: null,
   createdAt: 0,
   updatedAt: 0,
   version: 1,

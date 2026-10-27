@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { TokenUsage } from '@pct/shared';
 import { clip } from './files.js';
 
 // Command-line agents (Claude Code, Codex CLI) run headless in the project
@@ -18,7 +19,13 @@ export type CliEvent =
   | { type: 'text'; text: string }
   | { type: 'tool'; id: string; name: string; summary: string }
   | { type: 'tool_result'; id: string; output: string; failed: boolean }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /** What a run used, per model, as the tool reported it at the end; cost when it said. */
+  | { type: 'usage'; model: string | null; usage: TokenUsage; cost: number | null }
+  /** One model call while the run goes on (Claude Code), for budget checks before the run ends. */
+  | { type: 'progress'; id: string; model: string | null; usage: TokenUsage };
+
+const count = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.round(value) : 0);
 
 const summarizeInput = (input: Record<string, unknown>): string => {
   for (const key of ['file_path', 'notebook_path', 'path', 'command', 'pattern', 'url', 'query', 'description']) {
@@ -38,7 +45,17 @@ const resultText = (content: unknown): string => {
 
 /** One line of `claude -p --output-format stream-json` as chat events. */
 export function parseClaudeLine(line: string): CliEvent[] {
-  let event: { type?: string; subtype?: string; session_id?: string; message?: { content?: unknown }; is_error?: boolean; result?: unknown };
+  let event: {
+    type?: string;
+    subtype?: string;
+    session_id?: string;
+    message?: { id?: unknown; model?: unknown; content?: unknown; usage?: Record<string, unknown> };
+    is_error?: boolean;
+    result?: unknown;
+    total_cost_usd?: unknown;
+    usage?: Record<string, unknown>;
+    modelUsage?: Record<string, Record<string, unknown>>;
+  };
   try {
     event = JSON.parse(line);
   } catch {
@@ -48,6 +65,16 @@ export function parseClaudeLine(line: string): CliEvent[] {
   if (event.type === 'system' && event.subtype === 'init' && event.session_id) out.push({ type: 'session', id: event.session_id });
   const content = Array.isArray(event.message?.content) ? (event.message.content as Record<string, unknown>[]) : [];
   if (event.type === 'assistant') {
+    const message = event.message;
+    if (typeof message?.id === 'string' && message.usage) {
+      const u = message.usage;
+      out.push({
+        type: 'progress',
+        id: message.id,
+        model: typeof message.model === 'string' ? message.model : null,
+        usage: { input: count(u.input_tokens), output: count(u.output_tokens), cacheRead: count(u.cache_read_input_tokens), cacheWrite: count(u.cache_creation_input_tokens) },
+      });
+    }
     for (const block of content) {
       if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) out.push({ type: 'text', text: block.text });
       if (block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
@@ -60,6 +87,28 @@ export function parseClaudeLine(line: string): CliEvent[] {
       if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
         out.push({ type: 'tool_result', id: block.tool_use_id, output: clip(resultText(block.content), 4000), failed: block.is_error === true });
       }
+    }
+  }
+  if (event.type === 'result') {
+    // Per model when it says (a run can use a small model on the side), else the whole run.
+    const models = event.modelUsage && typeof event.modelUsage === 'object' ? Object.entries(event.modelUsage) : [];
+    if (models.length > 0) {
+      for (const [model, u] of models) {
+        out.push({
+          type: 'usage',
+          model,
+          usage: { input: count(u.inputTokens), output: count(u.outputTokens), cacheRead: count(u.cacheReadInputTokens), cacheWrite: count(u.cacheCreationInputTokens) },
+          cost: typeof u.costUSD === 'number' ? u.costUSD : null,
+        });
+      }
+    } else if (event.usage) {
+      const u = event.usage;
+      out.push({
+        type: 'usage',
+        model: null,
+        usage: { input: count(u.input_tokens), output: count(u.output_tokens), cacheRead: count(u.cache_read_input_tokens), cacheWrite: count(u.cache_creation_input_tokens) },
+        cost: typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null,
+      });
     }
   }
   if (event.type === 'result' && event.is_error) {
@@ -99,6 +148,12 @@ export function parseCodexLine(line: string): CliEvent[] {
       out.push({ type: 'tool', id, name: 'file change', summary });
       out.push({ type: 'tool_result', id, output: '', failed: item.status === 'failed' });
     }
+  }
+  if (type === 'turn.completed' && event.usage && typeof event.usage === 'object') {
+    // Input tokens include the cached ones.
+    const u = event.usage as Record<string, unknown>;
+    const cached = Math.min(count(u.input_tokens), count(u.cached_input_tokens));
+    out.push({ type: 'usage', model: null, usage: { input: count(u.input_tokens) - cached, output: count(u.output_tokens), cacheRead: cached, cacheWrite: 0 }, cost: null });
   }
   if (type === 'turn.failed' || type === 'error') {
     const error = event.error as { message?: unknown } | undefined;

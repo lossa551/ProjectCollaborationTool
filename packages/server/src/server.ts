@@ -5,7 +5,11 @@ import type { AddressInfo } from 'node:net';
 import { WebSocketServer, type RawData, type WebSocket } from 'ws';
 import {
   CloseCode,
+  DEFAULT_PRICES,
   PROTOCOL_VERSION,
+  addUsage,
+  formatCost,
+  usageKey,
   SOCKET_PATH,
   decodeBytes,
   encodeBytes,
@@ -18,6 +22,7 @@ import {
   type Participant,
   type ServerMessage,
   type SessionInfo,
+  type UsageRow,
   type Workspace,
 } from '@pct/shared';
 import { TaskBoard } from './board.js';
@@ -131,6 +136,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   const chats = new AgentChats(await storage.listAgents(), await storage.listChats(), storage);
   const docs = new SharedDocs(await storage.loadDocs(), (docId, state) => persist('shared document', storage.saveDoc(docId, state)));
   let bloat = await storage.loadBloat();
+  const usage = new Map((await storage.listUsage()).map((row) => [usageKey(row), row] as const));
+  let prices = (await storage.loadPrices()) ?? DEFAULT_PRICES;
   /** Each participant's local checkout, while they are connected. */
   const workspaces = new Map<string, Workspace>();
 
@@ -293,6 +300,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           agents: chats.listAgents(),
           chats: chats.listChats(),
           bloat,
+          usage: [...usage.values()],
+          prices,
         });
         // Joined with an earlier code: their app saves the current one for next time.
         if (retired) send(conn, { type: 'session.secret', secret: sessionSecret });
@@ -327,6 +336,10 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
         case 'task.update': {
+          // An agent must not raise its own budget.
+          if (message.changes.budget !== undefined && participant.kind !== 'human') {
+            return fail(conn, 'not_allowed', 'Only people set budgets');
+          }
           const result = board.update(message.taskId, message.changes, findParticipant, message.expected);
           if (!result.ok) return fail(conn, 'not_found', result.message);
           if (result.conflicts.length > 0) {
@@ -531,10 +544,20 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
         case 'chat.update': {
+          if (message.budget !== undefined && participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people set budgets');
           if (message.taskId && !board.get(message.taskId)) return fail(conn, 'not_found', 'That task no longer exists');
+          const before = chats.getChat(message.chatId);
           const result = chats.updateChat(message.chatId, message);
           if (!result.ok) return fail(conn, result.code, result.message);
           chatChanged(result.value);
+          if (message.budget !== undefined && before && before.budget !== message.budget) {
+            const what = `the chat "${result.value.title}"`;
+            record(
+              participant,
+              message.budget === null ? `removed the budget of ${what}` : `set a ${formatCost(message.budget)} budget for ${what}`,
+              result.value.taskId,
+            );
+          }
           break;
         }
         case 'chat.delete': {
@@ -579,6 +602,26 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           // An agent acting for a person (an undo) records it as theirs.
           const actor = message.noteBy && participant.kind === 'agent' ? { name: message.noteBy } : participant;
           if (message.note) record(actor, message.note, result.value.taskId);
+          break;
+        }
+        case 'usage.record': {
+          // Only a chat's own agent reports what it used.
+          const chat = chats.getChat(message.usage.chatId);
+          if (!chat) break;
+          if (participant.agent?.profileId !== chat.agentId) return fail(conn, 'not_allowed', 'Only the chat’s agent reports its usage');
+          const key = usageKey(message.usage);
+          const row: UsageRow = addUsage(usage.get(key), message.usage, chat);
+          usage.set(key, row);
+          void persist('usage', storage.saveUsage(row));
+          broadcast({ type: 'usage.changed', row });
+          break;
+        }
+        case 'prices.update': {
+          if (participant.kind !== 'human') return fail(conn, 'not_allowed', 'Only people change prices');
+          prices = message.prices;
+          void persist('prices', storage.savePrices(prices));
+          broadcast({ type: 'prices.changed', prices });
+          record(participant, 'changed the model prices');
           break;
         }
         case 'chat.stop': {

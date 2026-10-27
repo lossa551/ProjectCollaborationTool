@@ -1,3 +1,4 @@
+import type { TokenUsage } from '@pct/shared';
 import type { LoopMessage, ModelAdapter, ModelRequest, ModelTurn, StopReason, ToolCall } from './types.js';
 
 // Any API that speaks the OpenAI chat completions format: DeepSeek, OpenAI,
@@ -51,6 +52,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
       body: JSON.stringify({
         model: this.model,
         stream: true,
+        // The last chunk then says how many tokens the call used.
+        stream_options: { include_usage: true },
         messages: toMessages(request.system, request.messages),
         tools: request.tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.schema } })),
       }),
@@ -62,6 +65,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
 
     let text = '';
     let finish: string | null = null;
+    let usage: TokenUsage | undefined;
+    let answeredBy: string | undefined;
     const calls = new Map<number, { id: string; name: string; args: string }>();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -83,6 +88,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
             finish_reason?: string | null;
           }[];
           error?: { message?: string };
+          model?: string;
+          usage?: ApiUsage | null;
         };
         try {
           chunk = JSON.parse(data);
@@ -90,6 +97,8 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
           continue;
         }
         if (chunk.error) throw new Error(chunk.error.message ?? 'The model API reported an error');
+        if (chunk.usage) usage = readUsage(chunk.usage);
+        if (chunk.model) answeredBy = chunk.model;
         const choice = chunk.choices?.[0];
         if (!choice) continue;
         if (choice.delta?.content) {
@@ -120,6 +129,21 @@ export class OpenAICompatibleAdapter implements ModelAdapter {
         return { id: c.id || `call_${index}`, name: c.name, input };
       });
     const stop = toolCalls.length > 0 ? 'tool_use' : (STOP[finish ?? ''] ?? 'end');
-    return { text, toolCalls, stop };
+    return { text, toolCalls, stop, ...(usage && { usage }), ...(answeredBy && { model: answeredBy }) };
   }
+}
+
+interface ApiUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  /** DeepSeek's names for cached and uncached input. */
+  prompt_cache_hit_tokens?: number;
+}
+
+/** Prompt tokens include the cached ones; they are counted apart, since they cost less. */
+function readUsage(raw: ApiUsage): TokenUsage {
+  const prompt = raw.prompt_tokens ?? 0;
+  const cached = Math.min(prompt, raw.prompt_cache_hit_tokens ?? raw.prompt_tokens_details?.cached_tokens ?? 0);
+  return { input: prompt - cached, output: raw.completion_tokens ?? 0, cacheRead: cached, cacheWrite: 0 };
 }

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import {
   CRITERION_STATE_LABELS,
   STAGE_LABELS,
+  formatCost,
   mergeCriteria,
   type CriterionState,
   type Participant,
@@ -57,6 +58,7 @@ export class TaskBoard {
       branch: null,
       featureId: input.featureId ?? null,
       criteria: mergeCriteria([], uniqueIds(input.criteria ?? [])),
+      budget: null,
       createdAt: now,
       updatedAt: now,
       version: 1,
@@ -104,6 +106,8 @@ export class TaskBoard {
       `the acceptance criteria of "${current.title}" were changed by someone else`,
     );
 
+    clash('budget', (expected.budget ?? null) === current.budget, `the budget of "${current.title}" was changed by someone else`);
+
     const next: Task = { ...current };
     const descriptions: string[] = [];
 
@@ -144,6 +148,13 @@ export class TaskBoard {
     if (changes.criteria !== undefined && criteriaKey(changes.criteria) !== criteriaKey(current.criteria)) {
       next.criteria = mergeCriteria(current.criteria, uniqueIds(changes.criteria));
       descriptions.push(`changed the acceptance criteria of "${next.title}"`);
+    }
+
+    if (changes.budget !== undefined && changes.budget !== current.budget) {
+      next.budget = changes.budget;
+      descriptions.push(
+        changes.budget === null ? `removed the budget of "${next.title}"` : `set a ${formatCost(changes.budget)} budget for "${next.title}"`,
+      );
     }
 
     if (descriptions.length === 0) return { ok: true, task: current, descriptions, conflicts };

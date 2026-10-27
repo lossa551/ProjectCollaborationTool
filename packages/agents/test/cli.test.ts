@@ -72,6 +72,38 @@ describe('CLI output', () => {
     expect(parseClaudeLine('not json')).toEqual([]);
   });
 
+  it('reads what a Claude Code run used and cost', () => {
+    expect(
+      parseClaudeLine(
+        JSON.stringify({
+          type: 'assistant',
+          message: { id: 'm1', model: 'claude-opus-5-5', content: [], usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 900, cache_creation_input_tokens: 40 } },
+        }),
+      ),
+    ).toEqual([{ type: 'progress', id: 'm1', model: 'claude-opus-5-5', usage: { input: 10, output: 5, cacheRead: 900, cacheWrite: 40 } }]);
+    expect(
+      parseClaudeLine(
+        JSON.stringify({
+          type: 'result',
+          subtype: 'success',
+          total_cost_usd: 0.31,
+          usage: { input_tokens: 12, output_tokens: 300 },
+          modelUsage: {
+            'claude-opus-5-5': { inputTokens: 12, outputTokens: 280, cacheReadInputTokens: 20000, cacheCreationInputTokens: 3000, costUSD: 0.3 },
+            'claude-haiku-5-5': { inputTokens: 500, outputTokens: 20, costUSD: 0.01 },
+          },
+        }),
+      ),
+    ).toEqual([
+      { type: 'usage', model: 'claude-opus-5-5', usage: { input: 12, output: 280, cacheRead: 20000, cacheWrite: 3000 }, cost: 0.3 },
+      { type: 'usage', model: 'claude-haiku-5-5', usage: { input: 500, output: 20, cacheRead: 0, cacheWrite: 0 }, cost: 0.01 },
+    ]);
+    // Older versions: one total for the run.
+    expect(parseClaudeLine(JSON.stringify({ type: 'result', total_cost_usd: 0.2, usage: { input_tokens: 7, output_tokens: 8 } }))).toEqual([
+      { type: 'usage', model: null, usage: { input: 7, output: 8, cacheRead: 0, cacheWrite: 0 }, cost: 0.2 },
+    ]);
+  });
+
   it('reads Codex exec --json', () => {
     expect(parseCodexLine('{"type":"thread.started","thread_id":"th"}')).toEqual([{ type: 'session', id: 'th' }]);
     expect(parseCodexLine('{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"Done"}}')).toEqual([{ type: 'text', text: 'Done' }]);
@@ -82,6 +114,10 @@ describe('CLI output', () => {
       { type: 'tool_result', id: 'i2', output: 'a', failed: true },
     ]);
     expect(parseCodexLine('{"type":"turn.failed","error":{"message":"quota"}}')).toEqual([{ type: 'error', message: 'quota' }]);
+    // Codex counts cached input inside the input tokens.
+    expect(parseCodexLine('{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50}}')).toEqual([
+      { type: 'usage', model: null, usage: { input: 200, output: 50, cacheRead: 800, cacheWrite: 0 }, cost: null },
+    ]);
   });
 });
 
@@ -92,6 +128,8 @@ describe('OpenAI-compatible adapter', () => {
       { choices: [{ delta: { content: 'lo' } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'read_file', arguments: '{"pa' } }] } }] },
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'th":"a.gd"}' } }] }, finish_reason: 'tool_calls' }] },
+      // With stream_options.include_usage the last chunk has no choices, only the usage.
+      { choices: [], model: 'deepseek-chat', usage: { prompt_tokens: 1200, completion_tokens: 30, prompt_cache_hit_tokens: 1000 } },
     ];
     const body = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n';
     let sent: { url: string; body: unknown } | null = null;
@@ -109,7 +147,14 @@ describe('OpenAI-compatible adapter', () => {
       onText: (d) => deltas.push(d),
     });
     expect(deltas.join('')).toBe('Hello');
-    expect(turn).toEqual({ text: 'Hello', toolCalls: [{ id: 'c1', name: 'read_file', input: { path: 'a.gd' } }], stop: 'tool_use' });
+    expect(turn).toEqual({
+      text: 'Hello',
+      toolCalls: [{ id: 'c1', name: 'read_file', input: { path: 'a.gd' } }],
+      stop: 'tool_use',
+      usage: { input: 200, output: 30, cacheRead: 1000, cacheWrite: 0 },
+      model: 'deepseek-chat',
+    });
+    expect((sent!.body as { stream_options: unknown }).stream_options).toEqual({ include_usage: true });
     expect(sent!.url).toBe('https://api.deepseek.com/chat/completions');
     expect((sent!.body as { messages: unknown[] }).messages[0]).toEqual({ role: 'system', content: 'sys' });
   });

@@ -4,7 +4,9 @@ import {
   MemoryKind,
   STAGE_LABELS,
   TaskStage,
+  budgetsFor,
   describeConnection,
+  totalUsage,
   type AgentProfile,
   type ChatInfo,
   type ChatMessage,
@@ -13,6 +15,7 @@ import {
 import type { AppState, WorktreeAction } from '../common/api';
 import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
+import { BudgetField, BudgetMeter, CostLine } from './Cost';
 
 // Screen 7: shared agent chats. Everyone in the session sees every chat live
 // and can post in it; the agent answers from the PC that runs it. Edits and
@@ -225,6 +228,7 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
             {agent ? `${agent.name} · ${describeConnection(agent.connection)}` : 'This agent was removed'}
             {runner ? ` · on ${runner.agent!.startedBy}’s PC` : ' · not running'}
           </span>
+          <ChatCost state={state} chat={chat} />
           {chat.branchedFrom && (
             <span className="branched-from small muted">
               Branched from{' '}
@@ -774,6 +778,7 @@ export function ChatSidePanel({
             )}
           </section>
           <HeldLocks state={state} chat={chat} />
+          <BudgetSection state={state} chat={chat} task={task} />
           <section>
             <h2>Task</h2>
             <select value={chat.taskId ?? ''} disabled={!online} onChange={(e) => window.pct.updateChat(chat.id, { taskId: e.target.value || null })}>
@@ -1071,6 +1076,51 @@ function HeldLocks({ state, chat }: { state: AppState; chat: ChatInfo }) {
       ) : (
         <p className="muted small">Nothing yet. The agent locks each file before its first edit.</p>
       )}
+    </section>
+  );
+}
+
+/** Under the chat title: what the chat used and cost, and its budgets when one is used up. */
+function ChatCost({ state, chat }: { state: AppState; chat: ChatInfo }) {
+  const { session } = state;
+  const total = totalUsage(
+    session.usage.filter((r) => r.chatId === chat.id),
+    session.prices,
+  );
+  const task = session.tasks.find((t) => t.id === chat.taskId) ?? null;
+  const over = budgetsFor(chat, task, session.usage, session.prices).filter((b) => b.spent >= b.limit);
+  return (
+    <span className="chat-cost small">
+      <CostLine total={total} empty="No tokens used yet" />
+      {over.map((b) => (
+        <span key={b.key} className="badge badge-warn" title={`${b.label}: ${b.spent.toFixed(2)} of ${b.limit.toFixed(2)} dollars`}>
+          Over budget{b.key === 'chat' ? '' : ' (task)'}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** The side panel's budgets: this chat's, which anyone can set, and its task's. */
+function BudgetSection({ state, chat, task }: { state: AppState; chat: ChatInfo; task: Task | null }) {
+  const { session } = state;
+  const online = session.status === 'connected';
+  const budgets = budgetsFor(chat, task, session.usage, session.prices);
+  const chatSpent = totalUsage(
+    session.usage.filter((r) => r.chatId === chat.id),
+    session.prices,
+  ).cost;
+  const taskBudget = budgets.find((b) => b.key !== 'chat');
+  return (
+    <section>
+      <h2>Budget</h2>
+      <BudgetField budget={chat.budget} spent={chatSpent} disabled={!online} onChange={(budget) => window.pct.updateChat(chat.id, { budget })} />
+      {taskBudget && (
+        <p className="small">
+          Task: <BudgetMeter spent={taskBudget.spent} limit={taskBudget.limit} />
+        </p>
+      )}
+      <p className="muted small">When a budget is used up, the agent stops and asks here before it spends more.</p>
     </section>
   );
 }

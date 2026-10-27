@@ -11,7 +11,10 @@ import type {
   SessionInfo,
   Task,
   DocId,
+  PriceTable,
+  UsageRow,
 } from '@pct/shared';
+import { usageKey } from '@pct/shared';
 
 // Where the server keeps durable state. The in-memory store is the first
 // implementation; SqliteStorage keeps it on disk, and Postgres when the server
@@ -84,6 +87,13 @@ export interface Storage {
   /** The last bloat check anyone shared. */
   loadBloat(): Promise<BloatReport | null>;
   saveBloat(report: BloatReport): Promise<void>;
+  /** What agents used, per chat, day and model. */
+  listUsage(): Promise<UsageRow[]>;
+  /** Adds a row, or replaces the one for the same chat, day, model and source. */
+  saveUsage(row: UsageRow): Promise<void>;
+  /** Null until someone changes the prices; the server then uses the defaults. */
+  loadPrices(): Promise<PriceTable | null>;
+  savePrices(prices: PriceTable): Promise<void>;
   /** Append-only log of what happened, for the activity feed and later undo. */
   appendActivity(entry: Activity): Promise<void>;
   /** The most recent entries, oldest first. */
@@ -98,6 +108,8 @@ export class MemoryStorage implements Storage {
   private readonly identities = new Map<string, Identity>();
   private readonly tasks = new Map<string, Task>();
   private readonly locks = new Map<string, Lock>();
+  private readonly usage = new Map<string, UsageRow>();
+  private prices: PriceTable | null = null;
   private lockRules: LockRules | null = null;
   private githubRepo: RepoRef | null = null;
   private readonly activity: Activity[] = [];
@@ -230,6 +242,22 @@ export class MemoryStorage implements Storage {
 
   async saveBloat(report: BloatReport) {
     this.bloat = report;
+  }
+
+  async listUsage() {
+    return [...this.usage.values()];
+  }
+
+  async saveUsage(row: UsageRow) {
+    this.usage.set(usageKey(row), row);
+  }
+
+  async loadPrices() {
+    return this.prices;
+  }
+
+  async savePrices(prices: PriceTable) {
+    this.prices = prices;
   }
 
   async appendActivity(entry: Activity) {

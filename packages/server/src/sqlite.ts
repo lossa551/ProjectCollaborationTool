@@ -15,6 +15,9 @@ import {
   SessionInfo,
   Task,
   DocId,
+  PriceTable,
+  UsageRow,
+  usageKey,
 } from '@pct/shared';
 import type { Identity, SessionAccess, Storage } from './storage.js';
 
@@ -23,7 +26,7 @@ import type { Identity, SessionAccess, Storage } from './storage.js';
 // checked against the shared schemas when read back; a row that no longer
 // fits (say, from a newer version) is skipped rather than crashing the server.
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const IdentityRecord = z.object({
   id: z.string(),
@@ -83,6 +86,12 @@ export class SqliteStorage implements Storage {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS docs (id TEXT PRIMARY KEY, state BLOB NOT NULL);
         PRAGMA user_version = 3;
+      `);
+    }
+    if (version < 4) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS usage (key TEXT PRIMARY KEY, data TEXT NOT NULL);
+        PRAGMA user_version = 4;
       `);
     }
   }
@@ -258,6 +267,24 @@ export class SqliteStorage implements Storage {
 
   async saveBloat(report: BloatReport) {
     this.setMeta('bloat', report);
+  }
+
+  async listUsage() {
+    return this.all('SELECT data FROM usage', UsageRow);
+  }
+
+  async saveUsage(row: UsageRow) {
+    this.db
+      .prepare('INSERT INTO usage (key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data')
+      .run(usageKey(row), JSON.stringify(row));
+  }
+
+  async loadPrices() {
+    return this.getMeta('prices', PriceTable);
+  }
+
+  async savePrices(prices: PriceTable) {
+    this.setMeta('prices', prices);
   }
 
   async appendActivity(entry: Activity) {

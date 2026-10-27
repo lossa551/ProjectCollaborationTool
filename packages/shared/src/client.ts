@@ -24,6 +24,7 @@ import type {
 } from './model.js';
 import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import type { BloatReport } from './bloat.js';
+import { DEFAULT_PRICES, addUsage, usageKey, type PriceTable, type UsageReport, type UsageRow } from './usage.js';
 import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
 import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
 import { DEFAULT_MILESTONES, applyPlanOp, readIssueMarks, readMilestones, readPlanning, type IssueMarks, type Milestone, type PlanItem, type PlanOp } from './planning.js';
@@ -73,6 +74,10 @@ export interface SessionState {
   memory: MemoryEntry[];
   /** The last bloat check anyone ran. */
   bloat: BloatReport | null;
+  /** What agents used, per chat, day and model. */
+  usage: UsageRow[];
+  /** Model prices the session estimates cost with. */
+  prices: PriceTable;
   /** Task changes made while offline, waiting to be sent. */
   pending: number;
   error: { code: ErrorCode | 'connection_lost'; message: string } | null;
@@ -127,6 +132,8 @@ const INITIAL_STATE: SessionState = {
   issueMarks: {},
   memory: [],
   bloat: null,
+  usage: [],
+  prices: DEFAULT_PRICES,
   pending: 0,
   error: null,
 };
@@ -154,6 +161,8 @@ export interface TaskChanges {
   branch?: string | null;
   /** Acceptance criteria as written; a criterion keeps its result while its id stays. */
   criteria?: { id: string; text: string }[];
+  /** Dollars the task's agents may spend, or null for no limit. */
+  budget?: number | null;
 }
 
 /** Marks document changes that came from the server, so they are not sent back. */
@@ -234,6 +243,8 @@ export class SessionClient {
         agents: snapshot.agents,
         chats: snapshot.chats,
         bloat: snapshot.bloat,
+        usage: snapshot.usage,
+        prices: snapshot.prices ?? DEFAULT_PRICES,
       }),
       planning: readPlanning(this.docs.planning),
       milestones: readMilestones(this.docs.planning),
@@ -248,10 +259,10 @@ export class SessionClient {
 
   /** What to save so the next connect can start from here; null before the first join. */
   getSnapshot(): SessionSnapshot | null {
-    const { session, tasks, locks, lockRules, activity, github, agents, chats, bloat } = this.state;
+    const { session, tasks, locks, lockRules, activity, github, agents, chats, bloat, usage, prices } = this.state;
     if (!session) return null;
     const docs = Object.fromEntries(DOC_IDS.map((id) => [id, encodeBytes(Y.encodeStateAsUpdate(this.docs[id]))]));
-    return { session, tasks, locks, lockRules, activity, github, agents, chats, bloat, docs, queue: [...this.queue] };
+    return { session, tasks, locks, lockRules, activity, github, agents, chats, bloat, usage, prices, docs, queue: [...this.queue] };
   }
 
   /** Task changes are allowed while connected, and offline once we know the session. */
@@ -295,6 +306,7 @@ export class SessionClient {
       if (changes.readFirst !== undefined) expected.readFirst = task.readFirst;
       if (changes.branch !== undefined) expected.branch = task.branch;
       if (changes.criteria !== undefined) expected.criteria = task.criteria.map(({ id, text }) => ({ id, text }));
+      if (changes.budget !== undefined) expected.budget = task.budget;
     }
     this.sendTask({ type: 'task.update', taskId, changes, expected });
   }
@@ -400,6 +412,25 @@ export class SessionClient {
     this.send({ type: 'lock.rules.update', rules });
   }
 
+  setPrices(prices: PriceTable): void {
+    this.send({ type: 'prices.update', prices });
+  }
+
+  /**
+   * Reports what one model call used (agents only). Counted here at once, so
+   * a budget check right after sees it before the server answers.
+   */
+  recordUsage(usage: UsageReport): void {
+    if (this.state.status !== 'connected') return;
+    const chat = this.state.chats.find((c) => c.id === usage.chatId);
+    if (chat) {
+      const key = usageKey(usage);
+      const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat);
+      this.setState({ ...this.state, usage: upsertUsage(this.state.usage, row) });
+    }
+    this.send({ type: 'usage.record', usage });
+  }
+
   linkRepo(repo: RepoRef | null): void {
     this.send({ type: 'github.link', repo });
   }
@@ -462,7 +493,7 @@ export class SessionClient {
     return id;
   }
 
-  updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void {
+  updateChat(chatId: string, changes: { title?: string; taskId?: string | null; budget?: number | null }): void {
     this.send({ type: 'chat.update', chatId, ...changes });
   }
 
@@ -601,6 +632,8 @@ export class SessionClient {
           agents: message.agents,
           chats: message.chats,
           bloat: message.bloat,
+          usage: message.usage,
+          prices: message.prices,
           planning: readPlanning(this.docs.planning),
           milestones: readMilestones(this.docs.planning),
           issueMarks: readIssueMarks(this.docs.planning),
@@ -675,6 +708,12 @@ export class SessionClient {
         break;
       case 'lock.rules.changed':
         this.setState({ ...this.state, lockRules: message.rules });
+        break;
+      case 'usage.changed':
+        this.setState({ ...this.state, usage: upsertUsage(this.state.usage, message.row) });
+        break;
+      case 'prices.changed':
+        this.setState({ ...this.state, prices: message.prices });
         break;
       case 'activity':
         this.setState({ ...this.state, activity: [...this.state.activity, message.entry].slice(-ACTIVITY_LIMIT) });
@@ -803,6 +842,15 @@ function upsert<T extends { id: string }>(items: T[], item: T): T[] {
 }
 
 /** The local effect of a task change, shown until the server confirms it. */
+function upsertUsage(rows: UsageRow[], row: UsageRow): UsageRow[] {
+  const key = usageKey(row);
+  const index = rows.findIndex((r) => usageKey(r) === key);
+  if (index < 0) return [...rows, row];
+  const next = [...rows];
+  next[index] = row;
+  return next;
+}
+
 function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
   switch (message.type) {
     case 'task.create': {
@@ -819,6 +867,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           branch: null,
           featureId: message.featureId ?? null,
           criteria: (message.criteria ?? []).map(({ id, text }) => newCriterion(id, text)),
+          budget: null,
           createdAt: now,
           updatedAt: now,
           version: 0,
@@ -836,6 +885,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
               readFirst: message.changes.readFirst ?? t.readFirst,
               branch: message.changes.branch !== undefined ? message.changes.branch : t.branch,
               criteria: message.changes.criteria ? mergeCriteria(t.criteria, message.changes.criteria) : t.criteria,
+              budget: message.changes.budget !== undefined ? message.changes.budget : t.budget,
             }
           : t,
       );

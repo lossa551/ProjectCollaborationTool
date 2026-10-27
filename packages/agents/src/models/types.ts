@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TokenUsage } from '@pct/shared';
 
 // One shape for every model API, so the agent loop does not care which
 // provider runs it. Adapters translate to and from their API's format.
@@ -35,6 +36,10 @@ export interface ModelTurn {
   toolCalls: ToolCall[];
   stop: StopReason;
   raw?: unknown;
+  /** Tokens the provider counted for this call, when it said. */
+  usage?: TokenUsage;
+  /** The model that answered, when the provider said (e.g. a dated version of an alias). */
+  model?: string;
 }
 
 export interface ModelRequest {

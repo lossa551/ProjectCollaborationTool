@@ -2662,3 +2662,117 @@ input.milestone-date {
 .notice-kinds .check input {
   margin-top: 3px;
 }
+
+/* Agent cost and budgets (issue #37) */
+
+.chat-cost {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.cost-line strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.budget-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.budget-track {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.budget-fill {
+  display: block;
+  height: 100%;
+  background: var(--good);
+}
+
+.budget-meter.near .budget-fill {
+  background: var(--warn);
+}
+
+.budget-meter.over .budget-fill {
+  background: var(--bad);
+}
+
+.budget-meter.over > .small {
+  color: var(--bad);
+}
+
+.budget-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.budget-form {
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.budget-form input {
+  width: 90px;
+}
+
+.cost-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+}
+
+.cost-list li {
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cost-list .cost-total {
+  font-weight: 600;
+  border-bottom: 0;
+}
+
+.price-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.price-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 4px 6px 4px 0;
+}
+
+.price-table td {
+  padding: 3px 6px 3px 0;
+}
+
+.price-table input {
+  width: 100%;
+}
+
+.price-table input.num {
+  width: 80px;
+}
+
+.price-settings .row {
+  gap: 10px;
+  align-items: center;
+}

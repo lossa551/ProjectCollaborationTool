@@ -84,6 +84,9 @@ export const Criterion = z.object({
 });
 export type Criterion = z.infer<typeof Criterion>;
 
+/** A spending limit in US dollars; the agent pauses and asks to go on when it is reached. */
+export const Budget = z.number().positive().max(1_000_000);
+
 export const Task = z.object({
   id: z.string(),
   title: TaskTitle,
@@ -99,6 +102,8 @@ export const Task = z.object({
   featureId: z.string().nullable().default(null),
   /** What must be true before the task is done, each with its test result. */
   criteria: z.array(Criterion).max(CRITERIA_LIMIT).default([]),
+  /** What all the task's agent chats together may spend; null for no limit. */
+  budget: Budget.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
   /** Bumped on every change; lets offline edits detect conflicts later. */
@@ -497,6 +502,8 @@ export const ChatInfo = z.object({
   /** What the agent is doing right now, in one line, e.g. "Editing src/player.ts". Null when idle. */
   activity: ChatActivity.nullable().default(null),
   context: ChatContext.nullable(),
+  /** What this chat's agent may spend; null for no limit. */
+  budget: Budget.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
 });

@@ -17,11 +17,15 @@ import {
   type LockRules,
   type Overlap,
   type Participant,
+  type PriceTable,
   type Task,
   type TaskChanges,
+  type UsageRow,
   type Workspace,
+  totalUsage,
 } from '@pct/shared';
 import { WorktreeSummary } from './AgentChat';
+import { BudgetField, CostShort } from './Cost';
 import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
 import { IssueChips } from './Issues';
@@ -69,9 +73,14 @@ export function TaskDetail({
   youId,
   editable,
   online,
+  usage,
+  prices,
   onClose,
 }: {
   task: Task;
+  /** What agents used, to show the task's cost. */
+  usage: UsageRow[];
+  prices: PriceTable;
   planning: PlanItem[];
   /** Open GitHub issues linked to the task. */
   issues: Issue[];
@@ -312,6 +321,7 @@ export function TaskDetail({
           </ul>
         </section>
       )}
+      <TaskCost task={task} chats={chats} agents={agents} usage={usage} prices={prices} editable={editable} onOpenChat={onOpenChat} />
       <section>
         <h3 className="section-title">Locks</h3>
         {taskLocks.length > 0 ? (
@@ -346,5 +356,64 @@ export function TaskDetail({
         </button>
       )}
     </aside>
+  );
+}
+
+/** What the task's agent chats used and cost, per chat, and the task's budget. */
+function TaskCost({
+  task,
+  chats,
+  agents,
+  usage,
+  prices,
+  editable,
+  onOpenChat,
+}: {
+  task: Task;
+  chats: ChatInfo[];
+  agents: AgentProfile[];
+  usage: UsageRow[];
+  prices: PriceTable;
+  editable: boolean;
+  onOpenChat: (chatId: string) => void;
+}) {
+  const rows = usage.filter((r) => r.taskId === task.id);
+  const total = totalUsage(rows, prices);
+  // Chats that used something for the task, even if they moved on to another task or were deleted since.
+  const chatIds = [...new Set(rows.map((r) => r.chatId))];
+  return (
+    <section>
+      <h3 className="section-title">Agent cost</h3>
+      {total.calls === 0 ? (
+        <p className="muted small">No agent has worked on this task yet.</p>
+      ) : (
+        <ul className="cost-list small">
+          {chatIds.map((id) => {
+            const chat = chats.find((c) => c.id === id);
+            const agent = agents.find((a) => a.id === (chat?.agentId ?? rows.find((r) => r.chatId === id)?.agentId));
+            return (
+              <li key={id}>
+                <span className="grow">
+                  {chat ? (
+                    <button className="link" onClick={() => onOpenChat(chat.id)}>
+                      {chat.title}
+                    </button>
+                  ) : (
+                    <span className="muted">Deleted chat</span>
+                  )}
+                  {agent && <span className="muted"> · {agent.name}</span>}
+                </span>
+                <CostShort total={totalUsage(rows.filter((r) => r.chatId === id), prices)} />
+              </li>
+            );
+          })}
+          <li className="cost-total">
+            <span className="grow">All chats</span>
+            <CostShort total={total} />
+          </li>
+        </ul>
+      )}
+      <BudgetField budget={task.budget} spent={total.cost} disabled={!editable} onChange={(budget) => window.pct.updateTask(task.id, { budget })} />
+    </section>
   );
 }

@@ -25,6 +25,7 @@ const task: Task = {
   branch: null,
   featureId: null,
   criteria: [],
+  budget: null,
   createdAt: 1,
   updatedAt: 2,
   version: 3,

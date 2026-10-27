@@ -35,6 +35,7 @@ const api: PctApi = {
   releaseLock: (lockId) => ipcRenderer.send(Channel.releaseLock, lockId),
   recoverLock: (lockId) => ipcRenderer.send(Channel.recoverLock, lockId),
   setLockRules: (rules) => ipcRenderer.send(Channel.setLockRules, rules),
+  setPrices: (prices) => ipcRenderer.send(Channel.setPrices, prices),
   chooseWorkspace: () => ipcRenderer.invoke(Channel.chooseWorkspace),
   stopWorkspace: () => ipcRenderer.send(Channel.stopWorkspace),
   cloneRepo: () => ipcRenderer.invoke(Channel.cloneRepo),
