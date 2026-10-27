@@ -127,7 +127,9 @@ export function SetupScreen({ state, onDone }: { state: AppState; onDone: () => 
             ))}
           </select>
         </label>
-        {plan?.engine === 'godot' && <p className="muted small">A Summer Engine project looks like a Godot one: pick Summer Engine if it is one.</p>}
+        {plan?.engine === 'godot' && (
+          <p className="muted small">Summer Engine is built on Godot and uses the same project files, so this preset covers both.</p>
+        )}
         {plan?.firstCommit && <p className="muted small">This repository has no commit yet. Setup makes the first one.</p>}
         {plan?.reminders.map((r) => (
           <p key={r} className="warning small">
