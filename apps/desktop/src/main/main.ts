@@ -8,6 +8,10 @@ import {
   type ChatInfo,
   type ChatWorktree,
   Handoff,
+  ISSUE_BODY_LIMIT,
+  ISSUE_COMMENT_LIMIT,
+  ISSUE_TITLE_LIMIT,
+  IssueLinkKind,
   LockAcquireMessage,
   LockRules,
   MEMORY_EXPORT_PATH,
@@ -1129,6 +1133,26 @@ ipcMain.handle(Channel.linkRepo, (_event, input: unknown): Result => {
   if (!repo) return { ok: false, error: 'Enter the repository as owner/name, or paste its GitHub address.' };
   client.linkRepo(repo);
   return { ok: true };
+});
+ipcMain.handle(Channel.createIssue, async (_event, input: unknown): Promise<ResultWith<number>> => {
+  const request = (input ?? {}) as { title?: unknown; body?: unknown; link?: { kind?: unknown; id?: unknown } | null };
+  const title = typeof request.title === 'string' ? request.title.trim().slice(0, ISSUE_TITLE_LIMIT) : '';
+  if (!title) return { ok: false, error: 'The issue needs a title.' };
+  const body = typeof request.body === 'string' ? request.body.slice(0, ISSUE_BODY_LIMIT) : '';
+  const kind = IssueLinkKind.safeParse(request.link?.kind);
+  const id = request.link?.id;
+  const link = kind.success && typeof id === 'string' && id.length >= 8 && id.length <= 64 ? { kind: kind.data, id } : null;
+  const result = await client.createIssue(title, body);
+  if (!result.ok) return result;
+  if (link) client.editPlanning({ op: 'issue', number: result.number, link: { ...link, linked: true } });
+  pushState();
+  return { ok: true, value: result.number };
+});
+ipcMain.handle(Channel.closeIssue, async (_event, number: unknown, comment: unknown): Promise<Result> => {
+  if (typeof number !== 'number' || !Number.isInteger(number) || number <= 0) return { ok: false, error: 'No such issue.' };
+  if (typeof comment !== 'string' || !comment.trim()) return { ok: false, error: 'Write a comment to close the issue with.' };
+  const result = await client.closeIssue(number, comment.slice(0, ISSUE_COMMENT_LIMIT));
+  return result.ok ? { ok: true } : result;
 });
 ipcMain.handle(Channel.setGitHubToken, async (_event, input: unknown): Promise<Result> => {
   if (!hosted) return { ok: false, error: 'Only the host sets the GitHub token.' };

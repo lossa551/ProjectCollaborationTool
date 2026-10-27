@@ -227,6 +227,30 @@ export const Branch = z.object({
 });
 export type Branch = z.infer<typeof Branch>;
 
+export const IssueLabel = z.object({
+  name: z.string(),
+  /** Hex colour without the "#", as GitHub gives it. */
+  color: z.string(),
+});
+export type IssueLabel = z.infer<typeof IssueLabel>;
+
+/** An open issue (not a pull request) in the linked repository. */
+export const Issue = z.object({
+  number: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  author: z.string(),
+  labels: z.array(IssueLabel),
+  /** GitHub logins. */
+  assignees: z.array(z.string()),
+  /** The issue text, shortened; used when a feature is made from it. */
+  body: z.string(),
+  comments: z.number().int(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+export type Issue = z.infer<typeof Issue>;
+
 export const GitHubStatus = z.object({
   repo: RepoRef.nullable(),
   defaultBranch: z.string().nullable(),
@@ -238,6 +262,8 @@ export const GitHubStatus = z.object({
   branches: z.array(Branch),
   /** Open pull requests, then the most recently closed or merged ones. */
   pulls: z.array(PullRequest),
+  /** Open issues, most recently updated first. */
+  issues: z.array(Issue).default([]),
 });
 export type GitHubStatus = z.infer<typeof GitHubStatus>;
 
@@ -249,6 +275,7 @@ export const EMPTY_GITHUB_STATUS: GitHubStatus = {
   fetchedAt: null,
   branches: [],
   pulls: [],
+  issues: [],
 };
 
 /** The pull request for a branch: the open one, else the most recent closed one. */

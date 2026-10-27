@@ -7,18 +7,22 @@ import {
   describeDaysLeft,
   featureDependencies,
   featureStage,
+  issueLinks,
+  issuesOfFeature,
   moveFeature,
   plannedTasks,
   renderPlan,
   roadmap,
   type Assignee,
   type FeatureState,
+  type Issue,
   type Milestone,
   type RoadmapFeature,
   type RoadmapLane,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { PullBadge } from './GitHub';
+import { IssueChips } from './Issues';
 import { ApproveForm, FeatureBadge } from './Planning';
 
 // The Roadmap view (issue #42), the first view of the Planning screen: one
@@ -61,6 +65,7 @@ export function RoadmapView({
   const { session } = state;
   const editable = state.canEditTasks;
   const lanes = useMemo(() => roadmap(session), [session.planning, session.milestones, session.tasks, session.github, session.chats, session.agents]);
+  const links = useMemo(() => issueLinks(session), [session.planning, session.tasks, session.issueMarks]);
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -103,6 +108,7 @@ export function RoadmapView({
                     feature={feature}
                     lane={lane}
                     state={state}
+                    issues={issuesOfFeature(session, feature.item, links)}
                     open={open === feature.item.id}
                     onToggle={() => setOpen(open === feature.item.id ? null : feature.item.id)}
                     dropBefore={drop?.milestoneId === lane.milestone.id && drop.beforeId === feature.item.id}
@@ -228,6 +234,7 @@ function FeatureRow({
   feature,
   lane,
   state,
+  issues,
   open,
   onToggle,
   dropBefore,
@@ -241,6 +248,8 @@ function FeatureRow({
   feature: RoadmapFeature;
   lane: RoadmapLane;
   state: AppState;
+  /** Its open GitHub issues. */
+  issues: Issue[];
   open: boolean;
   onToggle: () => void;
   dropBefore: boolean;
@@ -303,7 +312,9 @@ function FeatureRow({
           {feature.criteria > 0 ? `${status.verified}/${feature.criteria} verified` : ''}
         </span>
         <span className="roadmap-pulls">
-          {feature.pulls.slice(0, 2).map((p) => (
+          {/* Room for two badges: an issue and a pull request, or two pull requests. */}
+          <IssueChips issues={issues.slice(0, 1)} />
+          {feature.pulls.slice(0, issues.length > 0 ? 1 : 2).map((p) => (
             <PullBadge key={p.number} pull={p} />
           ))}
         </span>

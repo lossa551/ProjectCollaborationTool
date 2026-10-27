@@ -41,10 +41,12 @@ import {
   Workspace,
 } from './model.js';
 import { BloatReport } from './bloat.js';
+import { ISSUE_BODY_LIMIT, ISSUE_COMMENT_LIMIT, ISSUE_TITLE_LIMIT } from './issues.js';
+import { IssueNumber } from './planning.js';
 import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -188,6 +190,22 @@ export const LockRulesUpdateMessage = z.object({
 export const GitHubLinkMessage = z.object({
   type: z.literal('github.link'),
   repo: RepoRef.nullable(),
+});
+
+/** Opens an issue on GitHub with the host's token; answered with github.issue.result. */
+export const GitHubIssueCreateMessage = z.object({
+  type: z.literal('github.issue.create'),
+  requestId: z.string().min(1).max(64),
+  title: z.string().trim().min(1).max(ISSUE_TITLE_LIMIT),
+  body: z.string().max(ISSUE_BODY_LIMIT),
+});
+
+/** Closes an issue as completed, after posting a comment; answered with github.issue.result. */
+export const GitHubIssueCloseMessage = z.object({
+  type: z.literal('github.issue.close'),
+  requestId: z.string().min(1).max(64),
+  number: IssueNumber,
+  comment: z.string().trim().min(1).max(ISSUE_COMMENT_LIMIT),
 });
 
 /** Your local checkout: branch and changed files. Null when you stop sharing it. */
@@ -337,6 +355,8 @@ export const ClientMessage = z.discriminatedUnion('type', [
   LockRecoverMessage,
   LockRulesUpdateMessage,
   GitHubLinkMessage,
+  GitHubIssueCreateMessage,
+  GitHubIssueCloseMessage,
   WorkspaceUpdateMessage,
   AgentSaveMessage,
   AgentDeleteMessage,
@@ -424,6 +444,15 @@ export const ActivityMessage = z.object({
 export const GitHubStatusMessage = z.object({
   type: z.literal('github.status'),
   status: GitHubStatus,
+});
+
+/** The answer to github.issue.create or github.issue.close, sent only to whoever asked. */
+export const GitHubIssueResultMessage = z.object({
+  type: z.literal('github.issue.result'),
+  requestId: z.string(),
+  /** The issue's number and address when it worked; what went wrong otherwise. */
+  issue: z.object({ number: z.number().int(), url: z.string() }).nullable(),
+  error: z.string().nullable(),
 });
 
 export const WorkspaceChangedMessage = z.object({
@@ -542,6 +571,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   LockRulesChangedMessage,
   ActivityMessage,
   GitHubStatusMessage,
+  GitHubIssueResultMessage,
   WorkspaceChangedMessage,
   AgentChangedMessage,
   AgentRemovedMessage,

@@ -136,6 +136,7 @@ const base = (extra: Partial<SessionState> = {}) => ({
   chats: [] as ChatInfo[],
   messages: {} as Record<string, ChatMessage[]>,
   planning: [] as PlanItem[],
+  issueMarks: {},
   memory: [],
   activity: [] as Activity[],
   ...extra,

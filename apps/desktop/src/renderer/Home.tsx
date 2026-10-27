@@ -5,11 +5,13 @@ import {
   describeDaysLeft,
   featureCounts,
   groupActivity,
+  newIssues,
   parseLockWait,
   pullProblems,
   roadmap,
   samePath,
   sinceLastHere,
+  untriagedIssues,
   whoIsDoing,
   type FeatureState,
   type Lock,
@@ -20,6 +22,7 @@ import {
 import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
 import { PullBadge } from './GitHub';
+import { confirmCloseIssue } from './Issues';
 import { RiskBadge } from './Roadmap';
 import { recall, remember } from './storage';
 
@@ -35,6 +38,7 @@ const NEED_BUTTON: Record<NeedItem['kind'], string> = {
   overlap: 'Show',
   'abandoned-lock': 'Recover',
   plan: 'Review plan',
+  'close-issue': 'Close…',
 };
 
 /** Feature states in the order they matter, with how each reads on Home. */
@@ -84,7 +88,7 @@ export function HomeScreen({
   onFeatures: (filter: FeatureState | null) => void;
   onInvite: () => void;
   onSettings: () => void;
-  onCode: (tab: 'github' | 'locks') => void;
+  onCode: (tab: 'github' | 'issues' | 'locks') => void;
 }) {
   const { session } = state;
   return (
@@ -101,6 +105,7 @@ export function HomeScreen({
           <Pulls state={state} onCode={onCode} />
           <Locks state={state} go={go} onCode={onCode} />
         </div>
+        <Issues state={state} since={since} onCode={onCode} />
         <ActivityFeed state={state} go={go} />
       </div>
     </div>
@@ -110,6 +115,11 @@ export function HomeScreen({
 function NeedsYou({ needs, online, go }: { needs: NeedItem[]; online: boolean; go: (target: NeedTarget) => void }) {
   const act = (item: NeedItem) => {
     if (!item.act) return go(item.target);
+    if (item.act.type === 'close-issue') {
+      const { number, comment } = item.act;
+      void confirmCloseIssue({ number, title: item.detail ?? '' }, comment).then((error) => error && alert(error));
+      return;
+    }
     if (item.act.type === 'release-lock') return window.pct.releaseLock(item.act.lockId);
     if (confirm(`${item.text}. Recover the lock? Their unsaved work on it may be lost.`)) window.pct.recoverLock(item.act.lockId);
   };
@@ -365,6 +375,49 @@ function Pulls({ state, onCode }: { state: AppState; onCode: (tab: 'github') => 
           </p>
         </>
       )}
+    </section>
+  );
+}
+
+/** Rows of issues to triage on Home; the Issues tab has the rest. */
+const ISSUE_LINES = 4;
+
+/** Issues nobody has linked or triaged yet, the new ones marked. */
+function Issues({ state, since, onCode }: { state: AppState; since: number | null; onCode: (tab: 'issues') => void }) {
+  const { session } = state;
+  const { github } = session;
+  const open = useMemo(
+    () => untriagedIssues(session).sort((a, b) => b.createdAt - a.createdAt),
+    [session.github, session.planning, session.tasks, session.issueMarks],
+  );
+  if (!github.repo || github.issues.length === 0) return null;
+  const fresh = since === null ? [] : newIssues(session, since);
+  return (
+    <section className="home-panel">
+      <h2>
+        Issues to triage <span className="muted">{open.length}</span>
+        <button className="link small" onClick={() => onCode('issues')}>
+          All
+        </button>
+      </h2>
+      {open.length === 0 ? (
+        <p className="muted small">Every open issue is linked to a feature or task, or triaged.</p>
+      ) : (
+        <ul className="home-rows">
+          {open.slice(0, ISSUE_LINES).map((issue) => (
+            <li key={issue.number}>
+              <span className="grow ellipsis" title={issue.title}>
+                <span className="muted">#{issue.number}</span> {issue.title}
+              </span>
+              {fresh.includes(issue) && <span className="feature-badge feature-unverified">New</span>}
+              <button className="secondary small" onClick={() => onCode('issues')}>
+                Link
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open.length > ISSUE_LINES && <p className="muted small">{open.length - ISSUE_LINES} more to triage.</p>}
     </section>
   );
 }
