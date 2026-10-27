@@ -295,6 +295,9 @@ export function SessionScreen({ state }: { state: AppState }) {
             github={session.github}
             overlaps={overlaps}
             chats={session.chats}
+            messages={session.messages}
+            planning={session.planning}
+            youId={youId}
             editable={editable}
             selectedId={selectedId}
             onSelect={setSelectedId}

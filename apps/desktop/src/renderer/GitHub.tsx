@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import {
   describeSource,
   filesOutsideScope,
+  locksAfterCommit,
   pullForBranch,
   type GitHubStatus,
   type Overlap,
@@ -229,6 +230,8 @@ function GitCard({ state }: { state: AppState }) {
   const [message, setMessage] = useState('');
   const [newBranch, setNewBranch] = useState('');
   const [fromLatest, setFromLatest] = useState(true);
+  // After a commit: offer to free the locks you held then on files with nothing left to commit.
+  const [committedAt, setCommittedAt] = useState<number | null>(null);
 
   const act = async (label: string, run: () => Promise<{ ok: true; value?: string } | { ok: false; error: string }>) => {
     setBusy(label);
@@ -289,6 +292,11 @@ function GitCard({ state }: { state: AppState }) {
   const mismatch = repo && local.remote && (local.remote.owner !== repo.owner || local.remote.name !== repo.name);
   const changed = info.uncommitted;
   const disabled = busy !== null;
+  const youId = state.session.you?.id ?? null;
+  const freeable =
+    committedAt === null
+      ? []
+      : locksAfterCommit(state.session, youId, [], changed.map((f) => f.path)).yours.filter((l) => l.acquiredAt <= committedAt);
 
   return (
     <section className="card">
@@ -367,7 +375,12 @@ function GitCard({ state }: { state: AppState }) {
         className="lock-form"
         onSubmit={(e) => {
           e.preventDefault();
-          void git('Committing', { type: 'commit', message }).then((ok) => ok && setMessage(''));
+          setCommittedAt(null);
+          void git('Committing', { type: 'commit', message }).then((ok) => {
+            if (!ok) return;
+            setMessage('');
+            setCommittedAt(Date.now());
+          });
         }}
       >
         <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What did you change?" disabled={disabled} />
@@ -375,6 +388,34 @@ function GitCard({ state }: { state: AppState }) {
           Commit all
         </button>
       </form>
+      {freeable.length > 0 && (
+        <div className="commit-locks">
+          <p className="small">
+            You still hold {freeable.length === 1 ? 'a lock' : `${freeable.length} locks`} on {freeable.length === 1 ? 'a file' : 'files'} with no uncommitted changes now.
+            Release {freeable.length === 1 ? 'it' : 'them'} so others can work on {freeable.length === 1 ? 'it' : 'them'}?
+          </p>
+          <ul className="git-files">
+            {freeable.map((lock) => (
+              <li key={lock.id}>
+                <code>{lock.path}</code> <span className="muted small">{lock.kind === 'exclusive' ? 'exclusive' : 'soft'}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="lock-form">
+            <button
+              onClick={() => {
+                for (const lock of freeable) window.pct.releaseLock(lock.id);
+                setCommittedAt(null);
+              }}
+            >
+              Release {freeable.length === 1 ? 'it' : `all ${freeable.length}`}
+            </button>
+            <button className="secondary" onClick={() => setCommittedAt(null)}>
+              Keep {freeable.length === 1 ? 'it' : 'them'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <h3 className="section-title gh-subtitle">Branch</h3>
       <div className="lock-form">

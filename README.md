@@ -6,7 +6,8 @@ and agent chat. Design notes live in [docs/design](docs/design).
 
 Working so far: hosting a session on your PC or joining one by invite code,
 live presence, a shared task board (five stages, drag to move, assign to a
-person or agent, allowed paths, activity feed), and file locks (exclusive for
+person or agent, allowed paths, activity feed, search with Mine / Agents /
+Blocked / Unverified filters; empty columns shrink), and file locks (exclusive for
 files matching the lock rules, soft for the rest, abandoned locks can be
 recovered). Sessions are saved, everyone keeps the same identity across
 reconnects, and tasks can be edited while the host is offline (changes sync
@@ -17,7 +18,9 @@ whether those stay inside the task's allowed paths, and where two people (or a
 pull request or a lock) touch the same file. The GitHub page also runs
 everyday git for your own copy with the git on your PC: clone the linked
 repository into a folder (it becomes your project folder), pull, commit, push,
-and switch or create branches. Issues: the repository's open issues show on
+and switch or create branches. After a commit it offers to release your locks
+on files with nothing left to commit, and frees the committed files' locks of
+idle agents on your PC that work in your project folder. Issues: the repository's open issues show on
 the Code screen's Issues tab, filtered by label and assignee; link one to a
 feature or task (or write `#123` in its text), make a feature from an issue, or
 open an issue from a feature. When a linked feature is done the app offers to

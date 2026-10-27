@@ -30,6 +30,7 @@ import {
   decodeInvite,
   encodeInvite,
   isNotePath,
+  locksAfterCommit,
   normalizePath,
   parseRepoRef,
   renderHandoff,
@@ -74,7 +75,7 @@ import {
   workspaceFolder,
 } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { Notifier } from './notifications';
@@ -354,6 +355,7 @@ async function gitAction(input: unknown): Promise<ResultWith<string>> {
   if (gitBusy || cloning) return { ok: false, error: 'Git is still busy with the last action.' };
   gitBusy = true;
   try {
+    if (action.type === 'commit') return { ok: true, value: await commitAndFreeLocks(folder, action.message) };
     return { ok: true, value: await runGitAction(folder, action, await gitToken()) };
   } catch (error) {
     return failure(error);
@@ -361,6 +363,28 @@ async function gitAction(input: unknown): Promise<ResultWith<string>> {
     gitBusy = false;
     void watcher?.poll();
   }
+}
+
+const changedPaths = async (folder: string) => (await readGitInfo(folder).catch(() => null))?.uncommitted.map((f) => f.path) ?? [];
+
+/**
+ * Commits everything, then frees the locks agents on this PC hold on the
+ * committed files when they work in this folder and are between turns. Your
+ * own locks are offered on the GitHub page instead (see locksAfterCommit).
+ */
+async function commitAndFreeLocks(folder: string, message: string): Promise<string> {
+  const before = await changedPaths(folder);
+  const result = await runGitAction(folder, { type: 'commit', message }, null);
+  if (result !== 'Committed.') return result;
+  const after = await changedPaths(folder);
+  const committed = before.filter((path) => !after.includes(path));
+  const { agents } = locksAfterCommit(client.getState(), client.getState().you?.id ?? null, committed, after);
+  for (const lock of agents) client.releaseLock(lock.id);
+  // The page offers to free your locks from the files it lists as changed.
+  await watcher?.poll();
+  if (agents.length === 0) return result;
+  const names = [...new Set(agents.map((l) => l.holder.name))].join(', ');
+  return `Committed, and freed ${names}'s ${plural(agents.length, 'lock')} on the committed files.`;
 }
 
 // Backups of the hosted session: on host start, then checked every hour so
