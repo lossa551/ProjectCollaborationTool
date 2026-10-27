@@ -434,10 +434,20 @@ function SnapshotPopover({ canTag, onClose }: { canTag: boolean; onClose: () => 
 
 function InvitePopover({ hosting, onClose }: { hosting: HostingInfo; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const copy = () => {
     window.pct.copyText(hosting.invite);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  };
+  const replace = async () => {
+    setBusy(true);
+    const done = await window.pct.newInvite();
+    setBusy(false);
+    setConfirming(false);
+    setResult(done.ok ? { ok: true, text: 'New code made. The old one no longer lets anyone new join.' } : { ok: false, text: done.error });
   };
   return (
     <div className="popover card">
@@ -458,9 +468,34 @@ function InvitePopover({ hosting, onClose }: { hosting: HostingInfo; onClose: ()
           again so your friend can reach you.
         </p>
       )}
-      <button className="secondary" onClick={onClose}>
-        Close
-      </button>
+      {confirming ? (
+        <div className="invite-confirm">
+          <p className="muted">
+            The current code stops working for anyone who has not joined yet. People who joined before stay in, and their
+            Rejoin keeps working. Use this if the code was pasted somewhere it should not be.
+          </p>
+          <div className="row">
+            <button onClick={() => void replace()} disabled={busy}>
+              Make a new code
+            </button>
+            <button className="secondary" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        result && <p className={result.ok ? 'muted' : 'error'}>{result.text}</p>
+      )}
+      <div className="row">
+        {!confirming && (
+          <button className="secondary" onClick={() => setConfirming(true)} title="Replace the invite code, say if it leaked">
+            New invite code
+          </button>
+        )}
+        <button className="secondary" onClick={onClose}>
+          Close
+        </button>
+      </div>
     </div>
   );
 }

@@ -46,7 +46,7 @@ import { IssueNumber } from './planning.js';
 import { DocId, EncodedUpdate } from './docs.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -66,7 +66,7 @@ export const HelloMessage = z.object({
    */
   identity: z.string().min(16).max(128),
   /** Set when an agent runner joins: which agent profile it runs and who started it. */
-  agent: z.object({ profileId: z.string(), startedBy: z.string().max(64) }).optional(),
+  agent: z.object({ profileId: z.string(), startedBy: z.string().max(64), startedById: z.string().max(64).optional() }).optional(),
 });
 
 export const PresenceUpdateMessage = z.object({
@@ -533,6 +533,15 @@ export const BloatChangedMessage = z.object({
   report: BloatReport,
 });
 
+/**
+ * The host made a new invite code. Everyone connected gets its secret, so
+ * reconnecting (and a saved Rejoin) keeps working; the old code stops working.
+ */
+export const SessionSecretMessage = z.object({
+  type: z.literal('session.secret'),
+  secret: z.string().min(1),
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -550,6 +559,8 @@ export const ErrorCode = z.enum([
   'replaced',
   'conflict',
   'agent_running',
+  /** The host removed you from the session. */
+  'removed',
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
@@ -584,6 +595,7 @@ export const ServerMessage = z.discriminatedUnion('type', [
   DocStateMessage,
   DocChangedMessage,
   BloatChangedMessage,
+  SessionSecretMessage,
   PongMessage,
   ErrorMessage,
 ]);
@@ -599,6 +611,8 @@ export const CloseCode = {
   replaced: 4005,
   /** That agent is already running on someone's PC. */
   agentRunning: 4006,
+  /** The host removed this person (or an agent they started) from the session. */
+  removed: 4007,
 } as const;
 
 function parse<T>(schema: z.ZodType<T>, raw: string): T | null {

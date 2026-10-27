@@ -716,6 +716,65 @@ async function joinSession({ name, invite }: JoinRequest): Promise<Result> {
   return { ok: true };
 }
 
+// Invite codes (issue #36). The host can make a new code when the old one
+// leaked, and remove someone from the session. Everyone connected gets the
+// new secret through the session; it is saved here so Rejoin keeps working.
+
+client.onMessage((message) => {
+  if (message.type !== 'session.secret') return;
+  if (joined) joined = { ...joined, secret: message.secret };
+  const entry = currentKey ? sessions().get(currentKey) : null;
+  // The host's own invite is updated by newInvite.
+  if (!entry || entry.role !== 'join' || !entry.invite) return;
+  const saved = decodeInvite(entry.invite);
+  if (saved) sessions().update(entry.key, { invite: encodeInvite({ ...saved, secret: message.secret }) });
+});
+
+async function newInvite(): Promise<Result> {
+  const server = hosted;
+  const current = hosting && decodeInvite(hosting.invite);
+  if (!server || !hosting || !current) return { ok: false, error: 'Only the host can make a new invite code.' };
+  try {
+    const secret = await server.newSecret(client.getState().you?.name ?? null);
+    hosting = { ...hosting, invite: encodeInvite({ ...current, secret }) };
+    joined = { url: server.localUrl, secret };
+    if (currentKey) sessions().update(currentKey, { invite: hosting.invite });
+    pushState();
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+async function removeParticipant(id: unknown): Promise<Result> {
+  const state = client.getState();
+  const person = state.participants.find((p) => p.id === id && p.kind === 'human');
+  if (!hosted) return { ok: false, error: 'Only the host can remove someone from the session.' };
+  if (!person) return { ok: false, error: 'They are not in the session now.' };
+  if (person.id === state.you?.id) return { ok: false, error: 'To leave, stop hosting.' };
+  const answer = await messageBox({
+    type: 'warning',
+    title: 'Remove from session',
+    message: `Remove ${person.name} from the session?`,
+    detail:
+      `${person.name} is disconnected, along with any agents running on their PC, and their locks are freed. ` +
+      'Their saved Rejoin stops working until you send them a new invite code.',
+    checkboxLabel: `Also make a new invite code (${person.name}'s PC knows the current one)`,
+    checkboxChecked: true,
+    buttons: ['Remove', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  if (answer.response !== 0) return { ok: true };
+  try {
+    const result = await hosted.removeParticipant(person.id, state.you?.name ?? null);
+    if (!result.ok) return { ok: false, error: result.message };
+  } catch (error) {
+    return failure(error);
+  }
+  return answer.checkboxChecked ? newInvite() : { ok: true };
+}
+
 async function leave() {
   // Keep the cache: changes not sent yet go out the next time you join.
   flushCache();
@@ -1089,6 +1148,8 @@ ipcMain.handle(Channel.getState, () => appState());
 ipcMain.handle(Channel.host, (_event, request: HostRequest) => host(request));
 ipcMain.handle(Channel.join, (_event, request: JoinRequest) => joinSession(request));
 ipcMain.handle(Channel.leave, () => leave());
+ipcMain.handle(Channel.newInvite, () => newInvite());
+ipcMain.handle(Channel.removeParticipant, (_event, id: unknown) => removeParticipant(id));
 ipcMain.handle(Channel.listSessions, () => listSessions());
 ipcMain.handle(Channel.resume, (_event, request: ResumeRequest) => {
   if (!request || typeof request.key !== 'string' || typeof request.name !== 'string') return { ok: false, error: 'Pick a session.' };

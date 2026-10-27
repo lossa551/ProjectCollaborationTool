@@ -25,6 +25,8 @@ const api: PctApi = {
     return () => ipcRenderer.off(Channel.openTarget, handler);
   },
   leave: () => ipcRenderer.invoke(Channel.leave),
+  newInvite: () => ipcRenderer.invoke(Channel.newInvite),
+  removeParticipant: (participantId) => ipcRenderer.invoke(Channel.removeParticipant, participantId),
   setPresence: (status, focus) => ipcRenderer.send(Channel.setPresence, status, focus),
   createTask: (title, stage) => ipcRenderer.send(Channel.createTask, title, stage),
   updateTask: (taskId, changes) => ipcRenderer.send(Channel.updateTask, taskId, changes),

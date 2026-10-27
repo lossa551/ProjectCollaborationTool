@@ -233,6 +233,11 @@ function MilestoneSummary({ lane, onOpen }: { lane: RoadmapLane; onOpen: () => v
 function WhoIsDoing({ state, go }: { state: AppState; go: (target: NeedTarget) => void }) {
   const { session } = state;
   const youId = session.you?.id ?? null;
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const remove = async (participantId: string) => {
+    const done = await window.pct.removeParticipant(participantId);
+    setRemoveError(done.ok ? null : done.error);
+  };
   const rows = useMemo(
     () =>
       whoIsDoing(session).sort(
@@ -284,10 +289,20 @@ function WhoIsDoing({ state, go }: { state: AppState; go: (target: NeedTarget) =
                 )}
               </span>
               <span className={`presence presence-${p.status} small`}>{p.status}</span>
+              {state.hosting && p.kind === 'human' && p.id !== youId && (
+                <button
+                  className="link small"
+                  onClick={() => void remove(p.id)}
+                  title="Disconnect them and their agents, free their locks and refuse their saved invite"
+                >
+                  Remove…
+                </button>
+              )}
             </li>
           );
         })}
       </ul>
+      {removeError && <p className="error small">{removeError}</p>}
     </section>
   );
 }
