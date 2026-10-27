@@ -670,3 +670,131 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     expect(state.chats).toHaveLength(0);
   });
 });
+
+describe('agent runner with a game engine', () => {
+  const fixture = joinPath(import.meta.dirname, 'fixtures', 'fake-engine-mcp.mjs');
+  const calls = (log: string) => (existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+
+  async function startChat(martin: SessionClient, profile: AgentProfile, text: string) {
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Level' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text });
+    return chatId;
+  }
+
+  it('offers the Godot server’s tools, runs them on its own folder and locks the scene first', async () => {
+    // The model asks for another folder: the app always gives the server this chat's.
+    const turns: ModelTurn[] = [
+      { text: '', toolCalls: [{ id: 't1', name: 'godot_create_scene', input: { projectPath: '/somewhere/else', scenePath: 'res://src/level.tscn' } }], stop: 'tool_use' },
+      { text: 'Made the level.', toolCalls: [], stop: 'end' },
+    ];
+    const box = { log: '' };
+    const { martin, profile, model, root: project } = await setup(turns, DEFAULT_APPROVALS, {
+      engine: () => ({ server: { kind: 'godot', command: process.execPath, args: [fixture], env: { FAKE_KIND: 'godot', FAKE_LOG: box.log } }, godotPath: null }),
+      // In the project folder, so the new scene shows as changed there and keeps its lock.
+      worktrees: false,
+    });
+    const log = (box.log = joinPath(project, '..', `${project.split(/[\\/]/).at(-1)}.log`));
+    dirs.push(log);
+    execFileSync('git', ['init', '-q'], { cwd: project });
+    writeFileSync(joinPath(project, 'project.godot'), 'config_version=5\n');
+    const chatId = await startChat(martin, profile, 'Make a level scene');
+
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Made the level.' && !m.streaming));
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    expect(readFileSync(joinPath(project, 'src/level.tscn'), 'utf8')).toContain('[gd_scene');
+    expect(calls(log)).toEqual([{ name: 'create_scene', args: { projectPath: project, scenePath: 'res://src/level.tscn' } }]);
+    const state = martin.getState();
+    expect(state.locks.find((l) => l.path === 'src/level.tscn')).toMatchObject({ holder: { name: 'Builder' }, chatId });
+    expect(state.messages[chatId]!.find((m) => m.tool)?.tool).toMatchObject({ name: 'godot_create_scene', summary: 'Godot create_scene: src/level.tscn', status: 'done' });
+    expect(model.requests[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['write_file', 'godot_create_scene', 'godot_run_project']));
+    expect(model.requests[0]!.tools.map((t) => t.name)).not.toContain('run_tests');
+    expect(model.requests[0]!.system).toContain(`projectPath is always ${project}`);
+    expect(state.chats.find((c) => c.id === chatId)?.context?.items.map((i) => i.label)).toContain('Game engine');
+  });
+
+  it('does not let an engine tool change a scene someone else holds', async () => {
+    const turns: ModelTurn[] = [
+      { text: '', toolCalls: [{ id: 't1', name: 'godot_create_scene', input: { scenePath: 'src/level.tscn' } }], stop: 'tool_use' },
+      { text: 'Someone has the level.', toolCalls: [], stop: 'end' },
+    ];
+    const holder: { log: string } = { log: '' };
+    const { martin, profile, root } = await setup(turns, DEFAULT_APPROVALS, {
+      lockWaitMs: 200,
+      engine: () => ({ server: { kind: 'godot', command: process.execPath, args: [fixture], env: { FAKE_KIND: 'godot', FAKE_LOG: holder.log } }, godotPath: null }),
+    });
+    holder.log = joinPath(root, 'calls.log');
+    writeFileSync(joinPath(root, 'project.godot'), '');
+    martin.acquireLock('src/level.tscn', { exclusive: true, reason: 'Blocking out the level' });
+    await waitFor(martin, (s) => s.locks.length === 1);
+    const chatId = await startChat(martin, profile, 'Make a level scene');
+
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.tool?.status === 'blocked'));
+    expect(state.messages[chatId]!.find((m) => m.tool?.status === 'blocked')!.tool!.output).toContain('src/level.tscn is still locked by Martin');
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Someone has the level.' && !m.streaming));
+    expect(existsSync(joinPath(root, 'src/level.tscn'))).toBe(false);
+    expect(calls(holder.log)).toEqual([]);
+  });
+
+  it('asks before playing the game, like a command', async () => {
+    const turns: ModelTurn[] = [
+      { text: '', toolCalls: [{ id: 't1', name: 'godot_run_project', input: {} }], stop: 'tool_use' },
+      { text: 'Not played.', toolCalls: [], stop: 'end' },
+    ];
+    const box = { log: '' };
+    const { martin, profile, root } = await setup(turns, DEFAULT_APPROVALS, {
+      engine: () => ({ server: { kind: 'godot', command: process.execPath, args: [fixture], env: { FAKE_KIND: 'godot', FAKE_LOG: box.log } }, godotPath: null }),
+    });
+    box.log = joinPath(root, 'calls.log');
+    writeFileSync(joinPath(root, 'project.godot'), '');
+    const chatId = await startChat(martin, profile, 'Play it');
+    const asking = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.approval?.state === 'pending'));
+    const card = asking.messages[chatId]!.find((m) => m.approval?.state === 'pending')!;
+    expect(card.approval!.action).toBe('Run Godot run_project');
+    martin.decideApproval(chatId, card.id, false);
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Not played.' && !m.streaming));
+    expect(calls(box.log)).toEqual([]);
+  });
+
+  it('works in the project folder with Summer, and tells the agent when Summer refuses a stale overwrite', async () => {
+    const turns: ModelTurn[] = [
+      {
+        text: '',
+        toolCalls: [{ id: 't1', name: 'summer_call', input: { operation: 'engine.write_file', input: { path: 'res://src/jump.gd', content: 'extends Node', expected_sha256: 'old' } } }],
+        stop: 'tool_use',
+      },
+      {
+        text: '',
+        toolCalls: [{ id: 't2', name: 'summer_call', input: { operation: 'engine.write_file', input: { path: 'res://src/jump.gd', content: 'extends Node', expected_sha256: 'new' } } }],
+        stop: 'tool_use',
+      },
+      { text: 'Wrote it after reading again.', toolCalls: [], stop: 'end' },
+    ];
+    const box = { root: '' };
+    const { martin, profile, model, root } = await setup(turns, DEFAULT_APPROVALS, {
+      engine: () => ({ server: { kind: 'summer', command: process.execPath, args: [fixture], env: { FAKE_KIND: 'summer', FAKE_ROOT: box.root } }, godotPath: null }),
+    });
+    box.root = root;
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'Test');
+    writeFileSync(joinPath(root, 'project.godot'), '');
+    git('add', '.');
+    git('commit', '-qm', 'start');
+    const chatId = await startChat(martin, profile, 'Write the jump script');
+
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Wrote it after reading again.' && !m.streaming));
+    const messages = state.messages[chatId]!;
+    expect(messages.some((m) => m.kind === 'notice' && m.text.includes('did not overwrite a file that changed'))).toBe(true);
+    expect(model.requests[1]!.messages.at(-1)).toMatchObject({ role: 'tool', results: [{ isError: true }] });
+    expect((model.requests[1]!.messages.at(-1) as { results: { content: string }[] }).results[0]!.content).toContain('Read it again');
+    // Summer edits the project open in its editor: the chat works there, with no copy of its own.
+    expect(readFileSync(joinPath(root, 'src/jump.gd'), 'utf8')).toBe('extends Node');
+    expect(state.chats.find((c) => c.id === chatId)?.worktree ?? null).toBeNull();
+    expect(messages.filter((m) => m.tool).at(-1)?.tool).toMatchObject({ status: 'done', summary: 'Summer engine.write_file: src/jump.gd' });
+    expect(messages.filter((m) => m.tool).at(-1)?.tool?.output).toContain('Wrote: res://src/jump.gd');
+  });
+});
+
