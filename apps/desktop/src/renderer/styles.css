@@ -2071,6 +2071,10 @@ pre.fn-prompt {
   background: var(--warn);
 }
 
+.tone-good {
+  background: var(--good);
+}
+
 .progress {
   height: 8px;
   border-radius: 99px;
@@ -2991,4 +2995,12 @@ input.milestone-date {
 
 .engine-godot p {
   margin: 4px 0 0;
+}
+
+.engine-active {
+  margin: 10px 0 2px;
+}
+
+.engine-panel .home-rows li .grow {
+  min-width: 0;
 }

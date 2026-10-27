@@ -80,6 +80,7 @@ const api: PctApi = {
   acceptNoteDraft: (notePath) => ipcRenderer.invoke(Channel.acceptNoteDraft, notePath),
   setEngineBridge: (bridge) => ipcRenderer.send(Channel.setEngineBridge, bridge),
   setEngineAgent: (agentId, on) => ipcRenderer.send(Channel.setEngineAgent, agentId, on),
+  installGodotPlugin: () => ipcRenderer.invoke(Channel.installGodotPlugin),
   setGodotPath: (choose) => ipcRenderer.invoke(Channel.setGodotPath, choose),
   discardNoteDraft: (notePath) => ipcRenderer.send(Channel.discardNoteDraft, notePath),
   onState(listener) {

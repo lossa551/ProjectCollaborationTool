@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { GODOT_LOCKS_FILE, GODOT_PLUGIN_CFG, GODOT_PLUGIN_CFG_PATH, GODOT_REQUESTS_FILE, type Lock, type SessionState } from '@pct/shared';
+import { GODOT_EDITOR_FILE, GODOT_LOCKS_FILE, GODOT_PLUGIN_CFG, GODOT_PLUGIN_CFG_PATH, GODOT_REQUESTS_FILE, type Lock, type SessionState } from '@pct/shared';
 import { GodotEditorLink } from '../src/main/godot-editor';
 
 const dirs: string[] = [];
@@ -68,5 +68,33 @@ describe('Godot editor plugin link', () => {
     links.push(link);
     await link.update(root, state([lock('l1', 'game/a.tscn', { id: 'friend', name: 'Sam' })]));
     expect(() => readFileSync(join(root, 'game', ...GODOT_LOCKS_FILE.split('/')))).toThrow();
+  });
+
+  it('notices when the editor opens the project, changes scene, and closes or stops answering', async () => {
+    const root = project();
+    let now = 1_000_000;
+    const seen: (string | null)[] = [];
+    const link = new GodotEditorLink({ lock: () => {}, release: () => {}, editorChanged: (e) => seen.push(e && `${e.editor} ${e.scene}`) }, () => now);
+    links.push(link);
+    await link.update(root, state([]));
+    const file = join(root, 'game', ...GODOT_EDITOR_FILE.split('/'));
+    const beat = (scene: string) =>
+      writeFileSync(file, JSON.stringify({ editor: 'godot', program: '/opt/godot', version: '4.5.1', pid: process.pid, scene, at: now / 1000 }));
+    beat('res://a.tscn');
+    link.readEditor();
+    link.readEditor();
+    beat('res://b.tscn');
+    link.readEditor();
+    expect(link.openEditor()?.scene).toBe('res://b.tscn');
+    // The editor crashed: its last beat gets old.
+    now += 60_000;
+    link.readEditor();
+    expect(link.openEditor()).toBeNull();
+    now += 1_000;
+    beat('res://b.tscn');
+    link.readEditor();
+    rmSync(file);
+    link.readEditor();
+    expect(seen).toEqual(['godot res://a.tscn', 'godot res://b.tscn', null, 'godot res://b.tscn', null]);
   });
 });

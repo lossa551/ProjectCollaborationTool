@@ -127,8 +127,10 @@ interface Preferences {
   engineBridge?: string;
   /** The Godot (or Summer Engine) executable, for tests and the Godot MCP server. */
   godotPath?: string;
-  /** By session id: the agents that get the engine's tools. */
-  engineAgents?: Record<string, string[]>;
+  /** The Godot program last seen running as an editor, used when none is chosen. */
+  foundGodotPath?: string;
+  /** By session id: the agents that do not get the engine's tools (all others do). */
+  engineAgentsOff?: Record<string, string[]>;
 }
 
 const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
@@ -148,10 +150,11 @@ function readPreferences(): Preferences {
         }),
       ...(typeof prefs.engineBridge === 'string' && { engineBridge: prefs.engineBridge }),
       ...(typeof prefs.godotPath === 'string' && { godotPath: prefs.godotPath }),
-      ...(prefs.engineAgents !== null &&
-        typeof prefs.engineAgents === 'object' && {
-          engineAgents: Object.fromEntries(
-            Object.entries(prefs.engineAgents)
+      ...(typeof prefs.foundGodotPath === 'string' && { foundGodotPath: prefs.foundGodotPath }),
+      ...(prefs.engineAgentsOff !== null &&
+        typeof prefs.engineAgentsOff === 'object' && {
+          engineAgentsOff: Object.fromEntries(
+            Object.entries(prefs.engineAgentsOff)
               .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
               .map(([id, agents]) => [id, agents.filter((a): a is string => typeof a === 'string')]),
           ),
@@ -208,9 +211,9 @@ export function saveNotesAgent(sessionId: string, agentId: string | null) {
   savePreferences({ notesAgents: agents });
 }
 
-/** The engine MCP server agents on this PC use: off, godot or summer. */
+/** The engine MCP server agents on this PC use: auto (the default), off, godot or summer. */
 export function engineBridge(): string {
-  return readPreferences().engineBridge ?? 'off';
+  return readPreferences().engineBridge ?? 'auto';
 }
 
 export function saveEngineBridge(bridge: string) {
@@ -226,14 +229,22 @@ export function saveGodotPath(path: string | null) {
   savePreferences({ godotPath: path ?? undefined });
 }
 
-/** The agents of a session that get the engine's tools on this PC. */
-export function engineAgents(sessionId: string): string[] {
-  return readPreferences().engineAgents?.[sessionId] ?? [];
+export function foundGodotPath(): string | null {
+  return readPreferences().foundGodotPath ?? null;
+}
+
+export function saveFoundGodotPath(path: string) {
+  if (foundGodotPath() !== path) savePreferences({ foundGodotPath: path });
+}
+
+/** The agents of a session that you took the engine's tools away from on this PC. */
+export function engineAgentsOff(sessionId: string): string[] {
+  return readPreferences().engineAgentsOff?.[sessionId] ?? [];
 }
 
 export function saveEngineAgent(sessionId: string, agentId: string, on: boolean) {
-  const all = { ...readPreferences().engineAgents };
-  const agents = (all[sessionId] ?? []).filter((id) => id !== agentId);
-  all[sessionId] = on ? [...agents, agentId] : agents;
-  savePreferences({ engineAgents: all });
+  const all = { ...readPreferences().engineAgentsOff };
+  const off = (all[sessionId] ?? []).filter((id) => id !== agentId);
+  all[sessionId] = on ? off : [...off, agentId];
+  savePreferences({ engineAgentsOff: all });
 }

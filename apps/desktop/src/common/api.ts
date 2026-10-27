@@ -124,22 +124,42 @@ export interface AppState {
   engine: EngineState;
 }
 
-/** Which engine MCP server agents on this PC use; see ENGINE_BRIDGES in @pct/agents. */
-export type EngineBridgeChoice = 'off' | 'godot' | 'summer';
+/** Which engine MCP server agents on this PC use; see ENGINE_BRIDGES in @pct/agents. auto picks from what is open. */
+export type EngineBridgeChoice = 'auto' | 'off' | 'godot' | 'summer';
+
+/** A Godot or Summer Engine editor on this PC. */
+export interface EngineEditor {
+  kind: 'godot' | 'summer';
+  /** It has your project open (the Locks plugin says so); false when it is only running. */
+  projectOpen: boolean;
+  /** The open scene, as a path in your project folder; null when not known. */
+  scene: string | null;
+  version: string | null;
+}
 
 /** The game engine on this PC (issue #10). */
 export interface EngineState {
   bridge: EngineBridgeChoice;
+  /** The server agents get now: the choice, or what auto picked; null for none. */
+  active: 'godot' | 'summer' | null;
+  /** Why it is that, in a few words (for auto, or why there is none). */
+  activeWhy: string;
   /** Godot (or Summer Engine) executable, for tests and the Godot MCP server. */
   godotPath: string | null;
-  /** saved: chosen in Settings; env: GODOT_PATH; path: found on the PATH. */
-  godotSource: 'saved' | 'env' | 'path' | null;
+  /** saved: chosen in Settings; env: GODOT_PATH; editor: the running editor's; path: on the PATH; found: a usual install folder. */
+  godotSource: 'saved' | 'env' | 'editor' | 'path' | 'found' | null;
   /** Summer's engine server has a sign-in on this PC. */
   summerSignedIn: boolean;
+  /** Node.js is installed (npx starts the MCP servers); null until checked. */
+  node: boolean | null;
   /** Agents of this session that get the engine's tools. */
   agents: string[];
   /** Your project folder is a Godot (or Summer Engine) project. */
   godotProject: boolean;
+  /** The app's Locks plugin in the project: missing, older than this app's, or up to date; null without a project.godot at the top. */
+  plugin: 'missing' | 'old' | 'ok' | null;
+  /** The editor that is open, preferring one that has your project. */
+  editor: EngineEditor | null;
 }
 
 /** What project setup would do in your project folder. */
@@ -412,6 +432,8 @@ export interface PctApi {
   setEngineBridge(bridge: EngineBridgeChoice): void;
   /** Gives an agent the engine's tools in this session, or takes them away. */
   setEngineAgent(agentId: string, on: boolean): void;
+  /** Adds or updates the Locks plugin in your project folder's Godot project, and commits it. */
+  installGodotPlugin(): Promise<ResultWith<{ reload: boolean }>>;
   /** choose: asks for the Godot executable; otherwise forgets it and looks on the PATH again. */
   setGodotPath(choose: boolean): Promise<Result>;
   /** Writes a drafted note into your project folder, for you to commit. */
@@ -498,6 +520,7 @@ export const Channel = {
   acceptNoteDraft: 'pct:accept-note-draft',
   setEngineBridge: 'pct:set-engine-bridge',
   setEngineAgent: 'pct:set-engine-agent',
+  installGodotPlugin: 'pct:install-godot-plugin',
   setGodotPath: 'pct:set-godot-path',
   discardNoteDraft: 'pct:discard-note-draft',
   state: 'pct:state',

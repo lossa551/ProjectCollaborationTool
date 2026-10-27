@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { describeConnection } from '@pct/shared';
-import type { AppState, EngineBridgeChoice } from '../common/api';
+import type { AppState, EngineBridgeChoice, EngineState } from '../common/api';
 
 // Settings: the game engine on this PC (issue #10). Agents act in Godot or
 // Summer Engine through the engine's MCP server, which the app runs and checks
@@ -8,7 +8,11 @@ import type { AppState, EngineBridgeChoice } from '../common/api';
 // run on the PC that started them.
 
 const BRIDGES: { id: EngineBridgeChoice; label: string; detail: string }[] = [
-  { id: 'off', label: 'Off', detail: 'Agents work on the project files only.' },
+  {
+    id: 'auto',
+    label: 'Automatic',
+    detail: 'Summer Engine’s server while Summer Engine is open, the Godot MCP server otherwise. Picked again at each agent turn.',
+  },
   {
     id: 'godot',
     label: 'Godot MCP server',
@@ -21,7 +25,31 @@ const BRIDGES: { id: EngineBridgeChoice; label: string; detail: string }[] = [
     detail:
       'Drives the Summer Engine editor that has your project open: scene edits, play, console and screenshots. Agents that use it work in your project folder, not a copy, because that is what the editor has open.',
   },
+  { id: 'off', label: 'Off', detail: 'Agents work on the project files only.' },
 ];
+
+const SERVER_NAMES = { godot: 'the Godot MCP server', summer: 'Summer Engine’s server' };
+
+const GODOT_SOURCES: Record<NonNullable<EngineState['godotSource']>, string> = {
+  saved: '(chosen here)',
+  env: '(from GODOT_PATH)',
+  editor: '(the Godot editor you ran)',
+  path: '(found on the PATH)',
+  found: '(found where Godot is usually kept)',
+};
+
+export const NODE_URL = 'https://nodejs.org/en/download';
+
+/** One line on what the editor is doing, for Settings and Home. */
+export function describeEditor(engine: EngineState): string {
+  const { editor } = engine;
+  if (!editor) return 'Neither Godot nor Summer Engine is running.';
+  const name = editor.kind === 'godot' ? 'Godot' : 'Summer Engine';
+  if (!editor.projectOpen) {
+    return engine.plugin === 'ok' ? `${name} is running, without your project open.` : `${name} is running. Add the Locks plugin and the app sees when it has your project open.`;
+  }
+  return `${name}${editor.version ? ` ${editor.version}` : ''} has your project open${editor.scene ? `, on ${editor.scene}` : ''}.`;
+}
 
 export function EngineSettings({ state }: { state: AppState }) {
   const { engine, session } = state;
@@ -56,7 +84,26 @@ export function EngineSettings({ state }: { state: AppState }) {
           </label>
         ))}
       </div>
-      {engine.bridge === 'summer' && !engine.summerSignedIn && (
+      <p className="small engine-active">
+        {engine.active ? (
+          <>
+            Agents use <strong>{SERVER_NAMES[engine.active]}</strong> now. <span className="muted">{engine.activeWhy}</span>
+          </>
+        ) : (
+          <span className="muted">Agents get no engine tools now. {engine.activeWhy}</span>
+        )}
+      </p>
+      <p className="muted small">{describeEditor(engine)}</p>
+      {engine.node === false && engine.bridge !== 'off' && (
+        <p className="warning small">
+          Node.js is not installed on this PC. The app starts the engine’s MCP server with npx, which comes with Node.js.{' '}
+          <button className="link small" onClick={() => window.open(NODE_URL)}>
+            Get Node.js
+          </button>{' '}
+          (the app finds it within a minute after you install it).
+        </p>
+      )}
+      {(engine.bridge === 'summer' || (engine.bridge === 'auto' && engine.editor?.kind === 'summer')) && !engine.summerSignedIn && (
         <p className="warning small">
           Summer is not signed in on this PC yet. Run <code>npx summer-engine@latest login</code> once, and open your project in Summer
           Engine before an agent uses it.
@@ -86,7 +133,7 @@ export function EngineSettings({ state }: { state: AppState }) {
               ))}
             </ul>
           )}
-          <p className="muted small">Takes effect from each agent’s next turn.</p>
+          <p className="muted small">New agents get it too. Takes effect from each agent’s next turn.</p>
         </>
       )}
 
@@ -96,13 +143,12 @@ export function EngineSettings({ state }: { state: AppState }) {
           {engine.godotPath ? (
             <>
               <code className="small">{engine.godotPath}</code>
-              <span className="muted small">
-                {' '}
-                {engine.godotSource === 'saved' ? '(chosen here)' : engine.godotSource === 'env' ? '(from GODOT_PATH)' : '(found on the PATH)'}
-              </span>
+              <span className="muted small"> {engine.godotSource ? GODOT_SOURCES[engine.godotSource] : ''}</span>
             </>
           ) : (
-            <span className="muted small">Not found. Choose Godot’s (or Summer Engine’s) program so agents can run the game’s tests.</span>
+            <span className="muted small">
+              Not found yet. Open your project in Godot once and the app takes it from there, or choose Godot’s (or Summer Engine’s) program.
+            </span>
           )}
           <p className="muted small">
             With the GUT or gdUnit4 add-on in the project, agents run the tests headless and record the results on the task’s acceptance

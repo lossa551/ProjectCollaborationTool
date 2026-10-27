@@ -61,9 +61,13 @@ notes up to date by itself: stale or missing notes are drafted for people to
 review on the Folder notes tab. For Godot and Summer Engine projects, setup
 can also add the app's editor plugin: a Locks dock in the editor, a warning
 when the scene you open is locked by someone else, and Lock this scene.
-Settings, Game engine: agents can act in the engine through the Godot MCP
-server (headless Godot on their own copy) or Summer Engine's (the editor that
-has your project open). The app runs that server itself and checks every
+Agents act in the engine through the Godot MCP server (headless Godot on
+their own copy) or Summer Engine's (the editor that has your project open),
+picked on their own: Summer's while Summer Engine is open, Godot's otherwise
+(Settings, Game engine, to choose yourself). Home shows when Godot or Summer
+Engine has your project open, warns when the scene you opened is locked by
+someone else, finds Godot from the editor you run, and adds the Locks plugin
+in one click. The app runs that server itself and checks every
 call: scene and resource changes take locks and follow task paths and
 approvals like file edits, playing the game asks like a command, and Summer's
 stale overwrite refusals show in the chat. With Godot's path set and GUT or

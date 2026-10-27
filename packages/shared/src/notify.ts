@@ -7,7 +7,7 @@ import { needsYou, parseLockWait, pullProblems, yourBranches, type NeedTarget } 
 // in the background. The tracker compares each session state with the last
 // one and returns only what is new, so a toast shows once per thing.
 
-export type NoticeKind = 'approval' | 'agent' | 'lock-wait' | 'pull' | 'connection';
+export type NoticeKind = 'approval' | 'agent' | 'lock-wait' | 'pull' | 'connection' | 'engine';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; detail: string }[] = [
   { kind: 'approval', label: 'Approvals', detail: 'An agent asks for approval in a chat you started or opened.' },
@@ -15,6 +15,7 @@ export const NOTICE_KINDS: { kind: NoticeKind; label: string; detail: string }[]
   { kind: 'lock-wait', label: 'Your locks', detail: 'Someone is waiting for a file you have locked.' },
   { kind: 'pull', label: 'Your pull requests', detail: 'A check fails or a merge conflict appears on your pull request.' },
   { kind: 'connection', label: 'Host connection', detail: 'The host goes offline or comes back (when you joined a session).' },
+  { kind: 'engine', label: 'Game engine', detail: 'Godot or Summer Engine opens your project while others hold locks in it, or the Locks plugin is missing.' },
 ];
 
 /** How a failed agent turn starts its notice in the chat; the runner writes it. */

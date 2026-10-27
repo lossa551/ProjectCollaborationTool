@@ -37,6 +37,7 @@ export const ENGINE_LABELS: Record<Engine, string> = {
 /** The project's own setup settings, committed with it so everyone's app uses the same. */
 export const SETUP_CONFIG_PATH = '.collab-tool.json';
 export const SETUP_COMMIT_MESSAGE = 'Set up project for collab tool';
+export const GODOT_PLUGIN_COMMIT_MESSAGE = 'Add the editor plugin that shows the session’s locks in Godot';
 export const CLAUDE_FILE = 'CLAUDE.md';
 
 export const SetupConfig = z.object({
@@ -218,6 +219,17 @@ export function detectProject(facts: ProjectFacts): DetectedProject {
     return { engine: 'godot', version, marker: 'project.godot', name };
   }
   return { engine: 'generic', version: null, marker: null, name: null };
+}
+
+/**
+ * The app's Godot editor plugin in this project: missing, there but older
+ * than this app's (or turned off), or up to date. Null when there is no Godot project.
+ */
+export function godotPluginState(facts: Pick<ProjectFacts, 'godotProject' | 'godotPlugin'>): 'missing' | 'old' | 'ok' | null {
+  if (facts.godotProject === null) return null;
+  if (facts.godotPlugin == null) return 'missing';
+  const current = facts.godotPlugin.replace(/\r\n/g, '\n') === GODOT_PLUGIN_SCRIPT;
+  return current && pluginEnabled(facts.godotProject) ? 'ok' : 'old';
 }
 
 export const SetupItemId = z.enum(['gitignore', 'gitattributes', 'locks', 'bloat', 'memory', 'agents', 'claude', 'plugin']);
@@ -469,16 +481,15 @@ export function planSetup(engine: Engine, detected: DetectedProject, facts: Proj
     preview: rules,
   });
 
-  if (engine === 'godot' && facts.godotProject !== null) {
-    const current = (facts.godotPlugin ?? '').replace(/\r\n/g, '\n') === GODOT_PLUGIN_SCRIPT;
-    const enabled = pluginEnabled(facts.godotProject);
+  const plugin = godotPluginState(facts);
+  if (engine === 'godot' && plugin) {
     items.push({
       id: 'plugin',
       label: 'Show locks inside the Godot editor',
       file: GODOT_PLUGIN_SCRIPT_PATH,
-      state: current && enabled ? 'done' : facts.godotPlugin == null ? 'missing' : 'drifted',
+      state: plugin === 'ok' ? 'done' : plugin === 'missing' ? 'missing' : 'drifted',
       detail:
-        current && enabled
+        plugin === 'ok'
           ? 'The editor plugin is there and turned on.'
           : 'Adds the app\'s editor plugin to addons/collab_tool/ and turns it on in project.godot: a Locks dock in Godot and Summer Engine, a warning when the scene you open is locked by someone else, and a button to lock it.',
       preview: `${GODOT_PLUGIN_CFG_PATH}\n${GODOT_PLUGIN_SCRIPT_PATH}\nproject.godot: [editor_plugins] enabled`,
