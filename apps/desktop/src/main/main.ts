@@ -40,6 +40,7 @@ import {
   Engine,
   SETUP_COMMIT_MESSAGE,
   PRESETS,
+  PROTOCOL_VERSION,
   SetupItemId,
   detectProject,
   engineEntry,
@@ -48,7 +49,7 @@ import {
   withPresetLocks,
   type CliTool,
 } from '@pct/shared';
-import { SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
+import { SCHEMA_VERSION, SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
 import {
   Channel,
   type AppState,
@@ -1683,7 +1684,7 @@ ipcMain.handle(Channel.folderNotePaths, () => folderNotePaths());
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
-const updateInfo = () => ({ version: app.getVersion(), state: getUpdateState() });
+const updateInfo = () => ({ version: app.getVersion(), protocol: PROTOCOL_VERSION, database: SCHEMA_VERSION, state: getUpdateState() });
 ipcMain.handle(Channel.getUpdate, () => updateInfo());
 // Hosting stops cleanly before the restart, so the friend sees the host leave.
 ipcMain.handle(Channel.update, () => applyUpdate(leave));

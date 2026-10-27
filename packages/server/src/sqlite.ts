@@ -26,7 +26,8 @@ import type { Identity, SessionAccess, Storage } from './storage.js';
 // checked against the shared schemas when read back; a row that no longer
 // fits (say, from a newer version) is skipped rather than crashing the server.
 
-const SCHEMA_VERSION = 4;
+/** The database layout this app writes; older files are upgraded when opened. */
+export const SCHEMA_VERSION = 4;
 
 const IdentityRecord = z.object({
   id: z.string(),

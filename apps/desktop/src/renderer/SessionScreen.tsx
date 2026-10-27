@@ -16,7 +16,7 @@ import { PlanningScreen } from './Planning';
 import { SetupScreen } from './Setup';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
-import { UpdateButton } from './UpdateButton';
+import { UpdateButton, VersionSettings } from './UpdateButton';
 
 // Nav from issue #34: Home first, agent setup behind the Settings gear, and
 // GitHub, locks and overlaps together under Code.
@@ -279,6 +279,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             />
             <PriceSettings state={state} />
             <NotificationSettings state={state} />
+            <VersionSettings />
           </div>
         ) : view === 'agents' ? (
           <ChatScreen
