@@ -190,3 +190,76 @@ export function folderNoteFindings(report: FolderNotesReport): FolderNoteFinding
   }
   return out;
 }
+
+/** What a drafting agent is shown of a folder: it gets no tools, so the files come with the prompt. */
+export interface NoteDraftInput {
+  /** The note as it is now; null for a first note. */
+  existing: string | null;
+  /** Paths of the files the note covers. */
+  listing: string[];
+  /** The start of the files most worth reading. */
+  files: { path: string; text: string }[];
+  subfolders: FolderInfo[];
+}
+
+/** Most file names listed in a drafting prompt. */
+export const DRAFT_LISTING_LIMIT = 200;
+
+/**
+ * The prompt for an agent that drafts a note without tools (first notes from
+ * project setup, and the updates the app queues by itself). The answer is the
+ * whole note; a person reviews it before it is written or committed.
+ */
+export function noteDraftPrompt(folder: FolderInfo, input: NoteDraftInput): string {
+  const note = folder.notePath ?? notePathFor(folder.path);
+  const lines = [
+    input.existing
+      ? `Update the folder note ${note} so it matches ${folderLabel(folder.path)} again.`
+      : `Write a first folder note, ${note}, for ${folderLabel(folder.path)}. It has ${plural(folder.ownFiles, 'readable file')} (about ${formatTokens(folder.ownTokens)} tokens).`,
+    '',
+  ];
+  if (input.existing) {
+    lines.push('The note now:', '', '````markdown', input.existing.trim(), '````', '');
+    if (folder.changed.length) {
+      lines.push(`Files changed since it was last committed:`, ...folder.changed.slice(0, 60).map((c) => `- ${c.path} (${c.change})`), '');
+    }
+    if (folder.deadReferences.length) lines.push('It names these, which no longer exist:', ...folder.deadReferences.map((r) => `- ${r}`), '');
+  }
+  const shown = input.listing.slice(0, DRAFT_LISTING_LIMIT);
+  lines.push('Files in the folder:', ...shown.map((p) => `- ${p}`));
+  if (input.listing.length > shown.length) lines.push(`- and ${input.listing.length - shown.length} more`);
+  lines.push('');
+  if (input.subfolders.length) {
+    lines.push('Subfolders:', ...input.subfolders.map((s) => `- ${s.path}/${s.notePath ? ' (has its own note)' : ''}`), '');
+  }
+  for (const file of input.files) lines.push(`--- ${file.path} (start) ---`, file.text.trimEnd(), '');
+  lines.push(
+    ...WHAT_A_NOTE_SAYS,
+    input.existing ? 'Keep what is still right; fix or remove what is wrong.' : '',
+    '',
+    'Answer with the whole note as Markdown and nothing else: no introduction and no code fence around it.',
+  );
+  return lines.join('\n');
+}
+
+/** The note out of a drafting agent's answer: a code fence around it taken off. */
+export function cleanNote(answer: string): string {
+  let text = answer.trim();
+  const fenced = /^(`{3,}|~{3,})[\w-]*\n([\s\S]*?)\n\1\s*$/.exec(text);
+  if (fenced) text = fenced[2]!.trim();
+  return text ? `${text}\n` : '';
+}
+
+/** A note an agent drafted, waiting for a person to look at it. */
+export interface NoteDraft {
+  /** The folder. */
+  folder: string;
+  notePath: string;
+  text: string;
+  /** The note as it was when drafted; null for a first note. */
+  previous: string | null;
+  /** Why it was drafted, e.g. "stale: 12 files changed". */
+  reason: string;
+  agentName: string;
+  draftedAt: number;
+}

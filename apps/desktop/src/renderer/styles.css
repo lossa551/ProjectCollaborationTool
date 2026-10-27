@@ -2840,3 +2840,95 @@ input.milestone-date {
   gap: 10px;
   align-items: center;
 }
+
+/* Project setup (#46) */
+.setup-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 920px;
+}
+
+.setup-engine select {
+  max-width: 260px;
+}
+
+.setup-items,
+.setup-folders,
+.fn-draft-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 12px;
+}
+
+.setup-item > .check {
+  flex: 1;
+  align-items: flex-start;
+}
+
+.setup-done {
+  opacity: 0.7;
+}
+
+.setup-preview {
+  flex-basis: 100%;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.setup-badge-missing {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.setup-badge-drifted,
+.setup-badge-unavailable {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.setup-badge-done {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.setup-running {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.setup-outcome .fn-paths {
+  margin-top: 4px;
+}
+
+.fn-draft-list li {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.fn-draft-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.setup-screen .check,
+.fn-drafts .check {
+  white-space: normal;
+}

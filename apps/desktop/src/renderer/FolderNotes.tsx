@@ -10,6 +10,7 @@ import {
   updateNotePrompt,
   type FolderInfo,
   type FolderNotesReport,
+  type NoteDraft,
   type NoteState,
 } from '../common/folder-notes';
 import { runnerOf } from './Agents';
@@ -119,6 +120,7 @@ export function FolderNotesScreen({
 
   return (
     <div className="folder-notes">
+      <NoteDrafts state={state} />
       <section className="card">
         <div className="fn-header">
           <div className="grow">
@@ -405,5 +407,79 @@ function PromptActions({
       {message && <p className={message.ok ? 'good small' : 'error small'}>{message.text}</p>}
       {taskId && <p className="muted small">Sending to an agent chat now links the chat to that task.</p>}
     </div>
+  );
+}
+
+/**
+ * Notes the notes agent drafted by itself (see project setup), waiting for a
+ * person: accept writes the file into your project folder for you to commit.
+ */
+function NoteDrafts({ state }: { state: AppState }) {
+  const agent = state.session.agents.find((a) => a.id === state.notesAgent) ?? null;
+  const [open, setOpen] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const drafts = state.noteDrafts;
+  if (!agent && drafts.length === 0) return null;
+  const accept = async (draft: NoteDraft) => {
+    const result = await window.pct.acceptNoteDraft(draft.notePath);
+    setError(result.ok ? null : result.error);
+  };
+  return (
+    <section className="card fn-drafts">
+      <div className="fn-header">
+        <div className="grow">
+          <h2>
+            Drafted notes <span className="muted">{drafts.length === 0 ? 'none waiting' : `${drafts.length} to review`}</span>
+          </h2>
+          <p className="muted small">
+            {agent
+              ? `${agent.name} keeps folder notes up to date: when a note goes stale or a big folder has none, it drafts the note here for you to review.`
+              : 'Drafts from before the notes agent was turned off.'}
+          </p>
+        </div>
+        {agent && (
+          <button className="secondary" onClick={() => window.pct.setNotesAgent(null)} title="Stop drafting notes by itself; you can turn it on again in project setup">
+            Turn off
+          </button>
+        )}
+      </div>
+      {error && <p className="error small">{error}</p>}
+      <ul className="fn-draft-list">
+        {drafts.map((draft) => (
+          <li key={draft.notePath}>
+            <div className="row">
+              <code className="grow">{draft.notePath}</code>
+              <span className="muted small">
+                {draft.previous ? 'Update' : 'First note'} by {draft.agentName}
+              </span>
+              <button className="link small" onClick={() => setOpen(open === draft.notePath ? null : draft.notePath)}>
+                {open === draft.notePath ? 'Hide' : 'Review'}
+              </button>
+              <button className="small" onClick={() => void accept(draft)}>
+                Accept
+              </button>
+              <button className="secondary small" onClick={() => window.pct.discardNoteDraft(draft.notePath)}>
+                Discard
+              </button>
+            </div>
+            <span className="muted small">{draft.reason}</span>
+            {open === draft.notePath && (
+              <div className="fn-draft-compare">
+                {draft.previous && (
+                  <div>
+                    <h3 className="section-title">Now</h3>
+                    <pre className="fn-prompt">{draft.previous}</pre>
+                  </div>
+                )}
+                <div>
+                  <h3 className="section-title">Draft</h3>
+                  <pre className="fn-prompt">{draft.text}</pre>
+                </div>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

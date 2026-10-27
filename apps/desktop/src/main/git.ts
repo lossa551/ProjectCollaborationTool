@@ -92,6 +92,37 @@ export async function listProjectFiles(cwd: string): Promise<string[]> {
   return [...new Set(out.split('\0').filter(Boolean))];
 }
 
+/**
+ * Commits just these paths, with whatever else is staged left staged and out
+ * of the commit. Returns the short commit id, or null when nothing changed.
+ */
+export async function commitPaths(cwd: string, paths: string[], message: string): Promise<string | null> {
+  if (paths.length === 0) return null;
+  try {
+    await run(['add', '--', ...paths], { cwd });
+    if ((await tryRun(['diff', '--cached', '--quiet', '--', ...paths], cwd)) !== null) return null;
+    await run(['commit', '-m', message, '--', ...paths], { cwd, timeout: 60_000 });
+    return (await run(['rev-parse', '--short', 'HEAD'], { cwd })).trim();
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
+/** The repository has at least one commit (a new engine project may not). */
+export async function hasCommit(cwd: string): Promise<boolean> {
+  return (await tryRun(['rev-parse', '--verify', '--quiet', 'HEAD'], cwd)) !== null;
+}
+
+/** Git LFS is installed on this PC. */
+export async function hasGitLfs(cwd: string): Promise<boolean> {
+  return (await tryRun(['lfs', 'version'], cwd)) !== null;
+}
+
+/** Turns on Git LFS's hooks in this repository (needed once per clone). */
+export async function installGitLfs(cwd: string): Promise<void> {
+  await run(['lfs', 'install', '--local'], { cwd });
+}
+
 /** Tells git to trust a folder owned by another user (git's safe.directory setting). */
 export async function trustFolder(folder: string): Promise<void> {
   await run(['config', '--global', '--add', 'safe.directory', folder.replace(/\\/g, '/')], { cwd: folder });

@@ -17,3 +17,4 @@ export * from './notify.js';
 export * from './usage.js';
 export * from './board.js';
 export * from './commit-message.js';
+export * from './setup.js';

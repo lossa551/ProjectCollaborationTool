@@ -5,6 +5,8 @@ import type {
   Handoff,
   IssueLinkKind,
   CriterionState,
+  DetectedProject,
+  Engine,
   LockRules,
   PriceTable,
   MemoryOp,
@@ -14,12 +16,14 @@ import type {
   PlanOp,
   RepoRef,
   SessionState,
+  SetupItem,
+  SetupItemId,
   TaskChanges,
   TaskStage,
   Workspace,
   UndoMode,
 } from '@pct/shared';
-import type { FolderNotesReport } from './folder-notes';
+import type { FolderNotesReport, NoteDraft } from './folder-notes';
 
 // The bridge between the window (renderer) and the main process, exposed by
 // the preload script as window.pct.
@@ -110,6 +114,53 @@ export interface AppState {
   memoryExport: MemoryExportState | null;
   /** Windows notification kinds you turned off on this PC. */
   mutedNotices: NoticeKind[];
+  /** Project setup while it runs. */
+  setupProgress: SetupProgress | null;
+  /** Folder notes agents drafted, waiting for you to look at them. */
+  noteDrafts: NoteDraft[];
+  /** The agent that keeps folder notes up to date in this session; null when off. */
+  notesAgent: string | null;
+}
+
+/** What project setup would do in your project folder. */
+export interface SetupPlan {
+  root: string;
+  detected: DetectedProject;
+  /** The preset shown: the detected one unless you picked another. */
+  engine: Engine;
+  items: SetupItem[];
+  /** Things setup cannot do itself, for the engine. */
+  reminders: string[];
+  /** Folders worth a first note, biggest first. */
+  noteFolders: { path: string; tokens: number; files: number }[];
+  /** The folder is not on a branch with a commit yet; setup makes the first commit. */
+  firstCommit: boolean;
+}
+
+export interface SetupRequest {
+  engine: Engine;
+  items: SetupItemId[];
+  /** The agent that writes the first notes, and keeps them up to date when keepNotes is set. */
+  notesAgent: string | null;
+  noteFolders: string[];
+  keepNotes: boolean;
+  /** Commit everything setup wrote as one commit. */
+  commit: boolean;
+}
+
+export interface SetupOutcome {
+  /** Files written, repo-relative. */
+  written: string[];
+  /** The commit, when one was made. */
+  commit: string | null;
+  /** First notes that could not be drafted. */
+  failedNotes: { folder: string; error: string }[];
+}
+
+export interface SetupProgress {
+  step: string;
+  done: number;
+  total: number;
 }
 
 export interface HandoffRequest {
@@ -325,6 +376,17 @@ export interface PctApi {
   folderNoteTask(folder: string): Promise<ResultWith<string>>;
   /** Paths of the AGENTS.md notes in your project folder; empty without one. */
   folderNotePaths(): Promise<string[]>;
+  /** What project setup would do in your project folder; engine picks another preset than the detected one. */
+  readSetup(engine: Engine | null): Promise<ResultWith<SetupPlan>>;
+  /** Writes the chosen setup, has an agent draft the first folder notes, and commits it all as one commit. */
+  runSetup(request: SetupRequest): Promise<ResultWith<SetupOutcome>>;
+  /** Stops setup between steps (notes drafted so far are kept). */
+  cancelSetup(): void;
+  /** The agent that drafts folder note updates by itself; null turns it off. */
+  setNotesAgent(agentId: string | null): void;
+  /** Writes a drafted note into your project folder, for you to commit. */
+  acceptNoteDraft(notePath: string): Promise<Result>;
+  discardNoteDraft(notePath: string): void;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
   /** Restarts into a downloaded update, or checks for one. */
@@ -399,6 +461,12 @@ export const Channel = {
   scanFolderNotes: 'pct:scan-folder-notes',
   folderNoteTask: 'pct:folder-note-task',
   folderNotePaths: 'pct:folder-note-paths',
+  readSetup: 'pct:read-setup',
+  runSetup: 'pct:run-setup',
+  cancelSetup: 'pct:cancel-setup',
+  setNotesAgent: 'pct:set-notes-agent',
+  acceptNoteDraft: 'pct:accept-note-draft',
+  discardNoteDraft: 'pct:discard-note-draft',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
   update: 'pct:update',

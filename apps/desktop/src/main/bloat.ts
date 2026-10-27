@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { analyzeBloat, type BloatReport, type ScannedFile } from '@pct/shared';
+import { SETUP_CONFIG_PATH, analyzeBloat, matchesAny, parseSetupConfig, type BloatReport, type ScannedFile } from '@pct/shared';
 import { folderNoteFindings } from '../common/folder-notes';
 import { scanFolderNotes } from './folder-notes';
 import { listProjectFiles } from './git';
@@ -16,8 +16,15 @@ const FILE_LIMIT = 20_000;
 const HASH_LIMIT = 32 * 1024 * 1024;
 const TEXT_LIMIT = 1024 * 1024;
 
+/** The project's own skips, from project setup's .collab-tool.json (generated and engine-owned files). */
+async function bloatSkips(root: string): Promise<string[]> {
+  const text = await readFile(join(root, SETUP_CONFIG_PATH), 'utf8').catch(() => null);
+  return parseSetupConfig(text)?.bloatSkip ?? [];
+}
+
 export async function scanProject(root: string): Promise<{ files: ScannedFile[]; truncated: boolean }> {
-  const paths = await listProjectFiles(root);
+  const skips = await bloatSkips(root);
+  const paths = (await listProjectFiles(root)).filter((path) => !matchesAny(path, skips));
   const truncated = paths.length > FILE_LIMIT;
   const files: ScannedFile[] = [];
   const queue = paths.slice(0, FILE_LIMIT);

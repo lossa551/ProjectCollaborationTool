@@ -13,13 +13,14 @@ import { MemoryScreen } from './Memory';
 import { NotificationSettings } from './Notifications';
 import { PriceSettings } from './Cost';
 import { PlanningScreen } from './Planning';
+import { SetupScreen } from './Setup';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton } from './UpdateButton';
 
 // Nav from issue #34: Home first, agent setup behind the Settings gear, and
 // GitHub, locks and overlaps together under Code.
-type View = 'home' | 'board' | 'planning' | 'agents' | 'code' | 'memory' | 'settings';
+type View = 'home' | 'board' | 'planning' | 'agents' | 'code' | 'memory' | 'settings' | 'setup';
 const NAV: { label: string; view: View }[] = [
   { label: 'Home', view: 'home' },
   { label: 'Board', view: 'board' },
@@ -231,7 +232,7 @@ export function SessionScreen({ state }: { state: AppState }) {
             {item.view === 'agents' && approvals > 0 && <span className="nav-count">{approvals}</span>}
           </button>
         ))}
-        <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} />
+        <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} onSetup={() => setView('setup')} />
       </nav>
 
       <main className="content">
@@ -249,8 +250,11 @@ export function SessionScreen({ state }: { state: AppState }) {
             }}
             onInvite={() => setInviteOpen(true)}
             onSettings={() => setView('settings')}
+            onSetup={() => setView('setup')}
             onCode={openCode}
           />
+        ) : view === 'setup' ? (
+          <SetupScreen state={state} onDone={() => setView('home')} />
         ) : view === 'planning' ? (
           <PlanningScreen
             state={state}

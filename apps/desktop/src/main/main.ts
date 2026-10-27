@@ -37,6 +37,15 @@ import {
   cleanDraft,
   commitDraftPrompt,
   branchTask,
+  Engine,
+  SETUP_COMMIT_MESSAGE,
+  PRESETS,
+  SetupItemId,
+  detectProject,
+  engineEntry,
+  planSetup,
+  setupFiles,
+  withPresetLocks,
   type CliTool,
 } from '@pct/shared';
 import { SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
@@ -57,6 +66,10 @@ import {
   type SnapshotRequest,
   type ResultWith,
   type SavedSessionInfo,
+  type SetupOutcome,
+  type SetupPlan,
+  type SetupProgress,
+  type SetupRequest,
 } from '../common/api';
 import { LocalAgents, apiKeyStatus, createSocket, findCliTools } from './agents';
 import { SessionBackups } from './backups';
@@ -74,16 +87,19 @@ import {
   saveBackupFolder,
   saveGitHubToken,
   saveMemoryAutoExport,
+  saveNotesAgent,
   saveWorkspaceFolder,
+  notesAgent,
   workspaceFolder,
 } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
+import { GitError, clone, commitPaths, hasCommit, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { Notifier } from './notifications';
 import { scanFolderNotes } from './folder-notes';
-import type { FolderNotesReport } from '../common/folder-notes';
+import { cleanNote, noteDraftPrompt, type FolderInfo, type FolderNotesReport, type NoteDraft } from '../common/folder-notes';
+import { noteCandidates, noteDraftInput, readProjectFacts, writeProjectFiles } from './setup';
 
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. It also runs the
@@ -107,6 +123,13 @@ let textEdits = 0;
 let history: SessionHistory | null = null;
 const sessions = () => (history ??= new SessionHistory(app.getPath('userData')));
 let currentKey: string | null = null;
+/** Project setup while it runs, and how to stop it. */
+let setupProgress: SetupProgress | null = null;
+let setupAbort: AbortController | null = null;
+/** Folder notes agents drafted on their own, waiting for review; for your project folder. */
+let noteDrafts: NoteDraft[] = [];
+/** What each note looked like when it was last drafted (by note path), so a folder is drafted once per change. */
+const draftedNotes = new Map<string, string>();
 
 // Windows toasts for approvals, agents, your locks and pull requests, and the host's connection.
 const notifier = new Notifier({
@@ -129,6 +152,9 @@ const appState = (): AppState => ({
   textEdits,
   memoryExport: memoryExportState(),
   mutedNotices: notifier.muted(),
+  setupProgress,
+  noteDrafts,
+  notesAgent: currentNotesAgent(),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
@@ -142,6 +168,8 @@ let watchedSession: string | null = null;
 let knownDefaultBranch: string | null = null;
 
 function watchFolder(folder: string | null) {
+  noteDrafts = [];
+  draftedNotes.clear();
   watcher?.stop();
   watcher = null;
   workspace = null;
@@ -1133,7 +1161,10 @@ async function scanNotes(fresh: unknown): Promise<ResultWith<FolderNotesReport>>
     const scan = scanFolderNotes(folder);
     folderNotesScan = { key, done: scan };
     void scan
-      .then((report) => (folderNotes = { key, report }))
+      .then((report) => {
+        folderNotes = { key, report };
+        void keepNotesUpToDate(report);
+      })
       .catch(() => undefined)
       .finally(() => {
         if (folderNotesScan?.done === scan) folderNotesScan = null;
@@ -1174,6 +1205,212 @@ async function folderNoteTask(folder: unknown): Promise<ResultWith<string>> {
   const notePath = info.notePath ?? (info.path ? `${info.path}/AGENTS.md` : 'AGENTS.md');
   const title = info.notePath ? `Update folder note for ${label}` : `Write folder note for ${label}`;
   return { ok: true, value: client.createTask(title.slice(0, 200), { stage: 'planning', scope: [notePath] }) };
+}
+
+// Project setup (#46): the engine project is made with the engine, then the
+// wizard writes the preset into your project folder, has an agent draft the
+// first folder notes, and commits it all as one commit. From then on the
+// agent chosen there keeps the notes up to date by itself: when a scan finds
+// a note gone stale or a big folder without one, it drafts the note and the
+// draft waits on the Folder notes tab until someone accepts or discards it.
+
+const NOTE_PURPOSE = 'short folder notes (AGENTS.md) that tell other agents what a folder is for';
+
+function currentNotesAgent(): string | null {
+  const sessionId = client.getState().session?.id;
+  return sessionId ? notesAgent(sessionId) : null;
+}
+
+function showSetupProgress(step: string, done: number, total: number) {
+  setupProgress = { step, done, total };
+  pushState();
+}
+
+async function readSetup(engineInput: unknown): Promise<ResultWith<SetupPlan>> {
+  const root = workspace?.folder;
+  if (!root) return { ok: false, error: 'Choose your project folder first (bottom left): setup writes there.' };
+  try {
+    const facts = await readProjectFacts(root);
+    const detected = detectProject(facts);
+    const picked = Engine.safeParse(engineInput);
+    const engine = picked.success ? picked.data : detected.engine;
+    const state = client.getState();
+    const sessionId = state.session?.id;
+    const items = planSetup(engine, detected, facts, {
+      lockRules: state.lockRules,
+      memory: state.memory,
+      memoryAuto: sessionId ? autoExportOn(sessionId) : false,
+    });
+    // A brand-new engine project may have no commit yet; the notes scan needs history.
+    const committed = await hasCommit(root);
+    const notes = committed ? await scanNotes(false) : null;
+    const noteFolders = notes?.ok ? noteCandidates(notes.value).map((f) => ({ path: f.path, tokens: f.ownTokens, files: f.ownFiles })) : [];
+    return { ok: true, value: { root, detected, engine, items, reminders: PRESETS[engine].reminders, noteFolders, firstCommit: !committed } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** Has the agent draft one folder's note; it is started on this PC if it is not running. */
+async function draftNote(agentId: string, folder: FolderInfo, report: FolderNotesReport, signal: AbortSignal) {
+  const root = workspace?.folder;
+  if (!root) throw new Error('Choose your project folder first.');
+  if (!localAgents.isRunning(agentId)) {
+    const started = await startAgent(agentId);
+    if (!started.ok) throw new Error(started.error);
+  }
+  const input = await noteDraftInput(root, folder, report);
+  const text = cleanNote(await localAgents.draft(agentId, noteDraftPrompt(folder, input), null, signal, NOTE_PURPOSE));
+  if (!text) throw new Error('The agent answered with an empty note.');
+  return { text, previous: input.existing };
+}
+
+function parseSetupRequest(input: unknown): SetupRequest | null {
+  const r = (input ?? {}) as Record<string, unknown>;
+  const engine = Engine.safeParse(r.engine);
+  const items = SetupItemId.array().max(20).safeParse(r.items);
+  if (!engine.success || !items.success) return null;
+  const folders = Array.isArray(r.noteFolders) ? r.noteFolders.filter((f): f is string => typeof f === 'string' && normalizePath(f) === f).slice(0, 20) : [];
+  return {
+    engine: engine.data,
+    items: items.data,
+    notesAgent: typeof r.notesAgent === 'string' ? r.notesAgent : null,
+    noteFolders: folders,
+    keepNotes: r.keepNotes === true,
+    commit: r.commit !== false,
+  };
+}
+
+async function runSetup(input: unknown): Promise<ResultWith<SetupOutcome>> {
+  const request = parseSetupRequest(input);
+  if (!request) return { ok: false, error: 'That is not a setup to run.' };
+  const root = workspace?.folder;
+  const sessionId = client.getState().session?.id;
+  if (!root || !sessionId) return { ok: false, error: 'Choose your project folder first (bottom left): setup writes there.' };
+  if (setupAbort) return { ok: false, error: 'Setup is already running.' };
+  const abort = new AbortController();
+  setupAbort = abort;
+  const notes = request.notesAgent ? request.noteFolders : [];
+  const total = 2 + notes.length;
+  try {
+    showSetupProgress('Writing the setup files', 0, total);
+    const { engine, items } = request;
+    const facts = await readProjectFacts(root);
+    const detected = detectProject(facts);
+    const written = writeProjectFiles(root, setupFiles(engine, facts, items));
+    if (items.includes('gitattributes') && facts.lfs) await installGitLfs(root);
+    if (items.includes('locks')) client.setLockRules(withPresetLocks(client.getState().lockRules, engine));
+    if (items.includes('memory')) {
+      const entry = engineEntry(detected, engine);
+      if (!client.getState().memory.some((e) => e.title === entry.title)) {
+        client.editMemory({ op: 'create', id: randomUUID(), kind: 'decision', title: entry.title, body: entry.body });
+      }
+      saveMemoryAutoExport(sessionId, true);
+      memoryAuto = { sessionId, on: true };
+      // A half-synced memory is never written; auto-write catches up once it has arrived.
+      if (client.hasSynced('memory') && writeMemoryFile(root, client.getState().memory)) {
+        written.push(MEMORY_EXPORT_PATH);
+        memoryWrite = { at: Date.now(), error: null };
+      }
+    }
+
+    const failedNotes: SetupOutcome['failedNotes'] = [];
+    if (request.notesAgent && notes.length) {
+      const report = await scanFolderNotes(root);
+      for (const [i, path] of notes.entries()) {
+        if (abort.signal.aborted) break;
+        showSetupProgress(`Drafting the folder note for ${path}/`, 1 + i, total);
+        const folder = report.folders.find((f) => f.path === path);
+        if (!folder) continue;
+        try {
+          const { text } = await draftNote(request.notesAgent, folder, report, abort.signal);
+          const notePath = folder.notePath ?? `${path}/${NOTE_FILE}`;
+          written.push(...writeProjectFiles(root, { [notePath]: text }));
+        } catch (error) {
+          if (abort.signal.aborted) break;
+          failedNotes.push({ folder: path, error: failure(error).error });
+        }
+      }
+    }
+    saveNotesAgent(sessionId, request.keepNotes ? request.notesAgent : null);
+
+    let commit: string | null = null;
+    if (request.commit && !abort.signal.aborted) {
+      showSetupProgress('Committing', total - 1, total);
+      commit = await commitPaths(root, written, SETUP_COMMIT_MESSAGE);
+    }
+    void watcher?.poll();
+    return { ok: true, value: { written, commit, failedNotes } };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    setupAbort = null;
+    setupProgress = null;
+    pushState();
+  }
+}
+
+/** Drafts this many notes at most per scan, so a big drift does not run up a bill at once. */
+const UPKEEP_PER_SCAN = 2;
+const UPKEEP_CHECK_MS = 15 * 60_000;
+let upkeepRunning = false;
+
+/** How a folder looks to its note: a new draft is only made when this changes. */
+const noteFingerprint = (f: FolderInfo) => JSON.stringify([f.state, f.notePath, f.changed.map((c) => c.path), f.deadReferences, f.ownFiles]);
+
+async function keepNotesUpToDate(report: FolderNotesReport) {
+  const agentId = currentNotesAgent();
+  if (!agentId || upkeepRunning || setupAbort || client.getState().status !== 'connected') return;
+  if (!client.getState().agents.some((a) => a.id === agentId)) return;
+  const pending = new Set(noteDrafts.map((d) => d.notePath));
+  // The top folder's AGENTS.md holds the agent rules, which setup writes.
+  const due = report.folders
+    .filter((f) => f.path !== '' && (f.state === 'stale' || f.state === 'missing'))
+    .map((f) => ({ folder: f, notePath: f.notePath ?? `${f.path}/${NOTE_FILE}` }))
+    .filter(({ folder, notePath }) => !pending.has(notePath) && draftedNotes.get(notePath) !== noteFingerprint(folder))
+    .slice(0, UPKEEP_PER_SCAN);
+  if (due.length === 0) return;
+  upkeepRunning = true;
+  const abort = new AbortController();
+  try {
+    for (const { folder, notePath } of due) {
+      draftedNotes.set(notePath, noteFingerprint(folder));
+      const agentName = client.getState().agents.find((a) => a.id === agentId)?.name ?? 'An agent';
+      try {
+        const { text, previous } = await draftNote(agentId, folder, report, abort.signal);
+        const reason = folder.state === 'missing' ? 'Big folder with no note' : `Stale: ${folder.reasons.join('; ')}`;
+        noteDrafts = [...noteDrafts.filter((d) => d.notePath !== notePath), { folder: folder.path, notePath, text, previous, reason, agentName, draftedAt: Date.now() }];
+        pushState();
+      } catch (error) {
+        console.error(`Could not draft the folder note ${notePath}`, error);
+      }
+    }
+  } finally {
+    upkeepRunning = false;
+  }
+}
+
+setInterval(() => {
+  if (!currentNotesAgent() || !workspace?.folder) return;
+  void scanNotes(false).then((result) => {
+    if (result.ok) void keepNotesUpToDate(result.value);
+  });
+}, UPKEEP_CHECK_MS);
+
+function acceptNoteDraft(notePath: unknown): Result {
+  const draft = noteDrafts.find((d) => d.notePath === notePath);
+  const root = workspace?.folder;
+  if (!draft) return { ok: false, error: 'That draft is gone.' };
+  if (!root) return { ok: false, error: 'Choose your project folder first.' };
+  try {
+    writeProjectFiles(root, { [draft.notePath]: draft.text });
+    noteDrafts = noteDrafts.filter((d) => d !== draft);
+    pushState();
+    void watcher?.poll();
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
 }
 
 function createWindow() {
@@ -1263,6 +1500,21 @@ ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
   if (parsed.success) client.setLockRules(parsed.data);
 });
 ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
+ipcMain.handle(Channel.readSetup, (_event, engine: unknown) => readSetup(engine));
+ipcMain.handle(Channel.runSetup, (_event, request: unknown) => runSetup(request));
+ipcMain.on(Channel.cancelSetup, () => setupAbort?.abort());
+ipcMain.on(Channel.setNotesAgent, (_event, agentId: unknown) => {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId || (agentId !== null && typeof agentId !== 'string')) return;
+  saveNotesAgent(sessionId, agentId);
+  pushState();
+  if (agentId && folderNotes) void keepNotesUpToDate(folderNotes.report);
+});
+ipcMain.handle(Channel.acceptNoteDraft, (_event, notePath: unknown) => acceptNoteDraft(notePath));
+ipcMain.on(Channel.discardNoteDraft, (_event, notePath: unknown) => {
+  noteDrafts = noteDrafts.filter((d) => d.notePath !== notePath);
+  pushState();
+});
 ipcMain.on(Channel.stopWorkspace, () => stopWorkspace());
 ipcMain.handle(Channel.cloneRepo, () => cloneRepo());
 ipcMain.handle(Channel.gitAction, (_event, action: unknown) => gitAction(action));
