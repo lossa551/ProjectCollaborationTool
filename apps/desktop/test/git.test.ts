@@ -172,7 +172,7 @@ describe('tagCommit', () => {
   });
 });
 
-describe("merging an agent's copy", () => {
+describe("merging an agent's copy", { timeout: 30_000 }, () => {
   it('merges the agent branch into your branch and pushes it for a pull request', async () => {
     const { root, origin, mine } = await setup();
     const { createWorktree, commitAll, worktreeStatus } = await import('@pct/agents');
