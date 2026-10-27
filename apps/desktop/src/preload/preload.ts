@@ -73,6 +73,12 @@ const api: PctApi = {
   scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
   folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
   folderNotePaths: () => ipcRenderer.invoke(Channel.folderNotePaths),
+  readSetup: (engine) => ipcRenderer.invoke(Channel.readSetup, engine),
+  runSetup: (request) => ipcRenderer.invoke(Channel.runSetup, request),
+  cancelSetup: () => ipcRenderer.send(Channel.cancelSetup),
+  setNotesAgent: (agentId) => ipcRenderer.send(Channel.setNotesAgent, agentId),
+  acceptNoteDraft: (notePath) => ipcRenderer.invoke(Channel.acceptNoteDraft, notePath),
+  discardNoteDraft: (notePath) => ipcRenderer.send(Channel.discardNoteDraft, notePath),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);
     ipcRenderer.on(Channel.state, handler);

@@ -121,6 +121,8 @@ interface Preferences {
   memoryExport?: string[];
   /** Kinds of Windows notifications turned off; see NOTICE_KINDS. */
   mutedNotices?: string[];
+  /** By session id: the agent that keeps folder notes up to date (project setup). */
+  notesAgents?: Record<string, string>;
 }
 
 const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
@@ -134,6 +136,10 @@ function readPreferences(): Preferences {
       ...(typeof prefs.backupFolder === 'string' && { backupFolder: prefs.backupFolder }),
       ...(Array.isArray(prefs.memoryExport) && { memoryExport: prefs.memoryExport.filter((id): id is string => typeof id === 'string') }),
       ...(Array.isArray(prefs.mutedNotices) && { mutedNotices: prefs.mutedNotices.filter((k): k is string => typeof k === 'string') }),
+      ...(prefs.notesAgents !== null &&
+        typeof prefs.notesAgents === 'object' && {
+          notesAgents: Object.fromEntries(Object.entries(prefs.notesAgents).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+        }),
     };
   } catch {
     return {};
@@ -172,4 +178,16 @@ export function mutedNotices(): string[] {
 export function saveMutedNotice(kind: string, muted: boolean) {
   const kinds = mutedNotices().filter((k) => k !== kind);
   savePreferences({ mutedNotices: muted ? [...kinds, kind] : kinds });
+}
+
+/** The agent that drafts folder note updates on its own in this session; null when that is off. */
+export function notesAgent(sessionId: string): string | null {
+  return readPreferences().notesAgents?.[sessionId] ?? null;
+}
+
+export function saveNotesAgent(sessionId: string, agentId: string | null) {
+  const agents = { ...readPreferences().notesAgents };
+  if (agentId) agents[sessionId] = agentId;
+  else delete agents[sessionId];
+  savePreferences({ notesAgents: agents });
 }

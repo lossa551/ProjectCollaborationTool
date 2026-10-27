@@ -235,7 +235,7 @@ function draftAgentFor(usable: AgentProfile[]): AgentProfile | undefined {
 }
 
 /** Why this agent cannot draft from this PC, if it cannot. */
-function draftProblem(agent: AgentProfile, state: AppState): string | null {
+export function draftProblem(agent: AgentProfile, state: AppState): string | null {
   const runner = runnerOf(agent, state.session.participants);
   if (runner && !state.localAgents[agent.id]) return `runs on ${runner.agent?.startedBy ?? 'another'} PC`;
   return keyProblem(agent.connection, state) ? 'cannot run on this PC' : null;
@@ -739,7 +739,17 @@ function WorkspaceRow({
 }
 
 /** Bottom of the sidebar: your own workspace at a glance. */
-export function WorkspaceCard({ local, tasks, onOpenTask }: { local: LocalWorkspace | null; tasks: Task[]; onOpenTask: (taskId: string) => void }) {
+export function WorkspaceCard({
+  local,
+  tasks,
+  onOpenTask,
+  onSetup,
+}: {
+  local: LocalWorkspace | null;
+  tasks: Task[];
+  onOpenTask: (taskId: string) => void;
+  onSetup: () => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const choose = async () => {
     const result = await window.pct.chooseWorkspace();
@@ -793,6 +803,9 @@ export function WorkspaceCard({ local, tasks, onOpenTask }: { local: LocalWorksp
       ) : (
         <span className="muted small">Reading…</span>
       )}
+      <button className="link small" onClick={onSetup} title="Engine presets, agent rules and folder notes for this project">
+        Set up project
+      </button>
       <button className="link small" onClick={() => void choose()}>
         Change folder
       </button>

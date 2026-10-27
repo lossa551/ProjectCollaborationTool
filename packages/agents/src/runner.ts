@@ -219,9 +219,10 @@ export class AgentRunner {
    * Answers one prompt outside any chat, with no tools: used to draft a
    * commit message. What the call uses counts for this agent and the task.
    */
-  async draft(prompt: string, taskId: string | null, signal: AbortSignal): Promise<string> {
+  async draft(prompt: string, taskId: string | null, signal: AbortSignal, purpose = 'git commit messages'): Promise<string> {
     const agent = this.profile();
     if (!agent) throw new Error('This agent no longer exists.');
+    // Every draft (commit messages, folder notes) counts as the agent's own usage.
     const usageId = commitDraftUsageId(agent.id);
     const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null) =>
       this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId });
@@ -230,7 +231,7 @@ export class AgentRunner {
       const factory = this.options.createModel;
       if (!factory) throw new Error('This PC cannot run API agents');
       const turn = await factory(agent).complete({
-        system: `You are ${agent.name}, writing git commit messages for a project you work on with people.`,
+        system: `You are ${agent.name}, writing ${purpose} for a project you work on with people.`,
         messages: [{ role: 'user', text: prompt }],
         tools: [],
         signal,

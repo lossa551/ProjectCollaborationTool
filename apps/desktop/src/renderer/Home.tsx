@@ -10,6 +10,7 @@ import {
   pullProblems,
   roadmap,
   samePath,
+  todo,
   sinceLastHere,
   untriagedIssues,
   whoIsDoing,
@@ -77,6 +78,7 @@ export function HomeScreen({
   onFeatures,
   onInvite,
   onSettings,
+  onSetup,
   onCode,
 }: {
   state: AppState;
@@ -88,12 +90,13 @@ export function HomeScreen({
   onFeatures: (filter: FeatureState | null) => void;
   onInvite: () => void;
   onSettings: () => void;
+  onSetup: () => void;
   onCode: (tab: 'github' | 'issues' | 'locks') => void;
 }) {
   const { session } = state;
   return (
     <div className="home">
-      <SetupChecklist state={state} onInvite={onInvite} onSettings={onSettings} onCode={onCode} />
+      <SetupChecklist state={state} onInvite={onInvite} onSettings={onSettings} onSetup={onSetup} onCode={onCode} />
       <div className="home-col">
         <NeedsYou needs={needs} online={session.status === 'connected'} go={go} />
         <WhoIsDoing state={state} go={go} />
@@ -531,11 +534,13 @@ function SetupChecklist({
   state,
   onInvite,
   onSettings,
+  onSetup,
   onCode,
 }: {
   state: AppState;
   onInvite: () => void;
   onSettings: () => void;
+  onSetup: () => void;
   onCode: (tab: 'github') => void;
 }) {
   const { session, hosting, workspace } = state;
@@ -557,6 +562,17 @@ function SetupChecklist({
     if (!result.ok) setError(result.error ?? 'That did not work.');
   };
   const hasFolder = !!workspace?.folder && !workspace.error;
+  // Project setup's items still to do, checked again when the folder's changes do.
+  const [setupLeft, setSetupLeft] = useState<number | null>(null);
+  const changes = workspace?.git?.uncommitted.length ?? 0;
+  useEffect(() => {
+    if (!workspace?.folder) return setSetupLeft(null);
+    let current = true;
+    void window.pct.readSetup(null).then((result) => current && setSetupLeft(result.ok ? todo(result.value.items).length : null));
+    return () => {
+      current = false;
+    };
+  }, [workspace?.folder, changes, session.lockRules, session.memory.length]);
 
   const steps: SetupStep[] = [];
   if (hosting) {
@@ -599,6 +615,15 @@ function SetupChecklist({
     done: session.agents.length > 0,
     action: { label: 'Add agent', run: onSettings },
   });
+  if (workspace?.folder) {
+    steps.push({
+      key: 'project-setup',
+      label: 'Set up the project',
+      hint: 'Engine presets (ignore, LFS, locks), agent rules in AGENTS.md, project memory and first folder notes, in one commit.',
+      done: setupLeft === 0,
+      action: { label: 'Set up', run: onSetup },
+    });
+  }
 
   const left = steps.filter((s) => !s.done).length;
   if (hidden || left === 0) return null;
