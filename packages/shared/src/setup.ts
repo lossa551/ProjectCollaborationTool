@@ -14,13 +14,15 @@ import { NOTE_FILE } from './folder-notes.js';
 // people wrote: lines are added to .gitignore, and the agent rules live in
 // their own marked block of AGENTS.md.
 
-export const Engine = z.enum(['generic', 'godot', 'summer', 'unreal']);
+// Summer Engine is built on Godot and uses its project files (project.godot,
+// .tscn, .tres), so a Summer project is a Godot project here; Summer's MCP
+// server is an optional way for agents to drive the editor, not a project type.
+export const Engine = z.enum(['generic', 'godot', 'unreal']);
 export type Engine = z.infer<typeof Engine>;
 
 export const ENGINE_LABELS: Record<Engine, string> = {
   generic: 'No game engine',
-  godot: 'Godot',
-  summer: 'Summer Engine',
+  godot: 'Godot / Summer Engine',
   unreal: 'Unreal Engine',
 };
 
@@ -30,8 +32,8 @@ export const SETUP_COMMIT_MESSAGE = 'Set up project for collab tool';
 export const CLAUDE_FILE = 'CLAUDE.md';
 
 export const SetupConfig = z.object({
-  /** The preset the project was set up with: detection cannot tell Summer from Godot. */
-  engine: Engine,
+  /** The preset the project was set up with. Early setup files may say "summer", which is Godot now. */
+  engine: z.preprocess((value) => (value === 'summer' ? 'godot' : value), Engine),
   /** Files the bloat check leaves out (globs, as in lock rules). */
   bloatSkip: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
 });
@@ -92,6 +94,7 @@ const GODOT_RULES = [
   '- `.tscn` and `.tres` are text but merge badly: take an exclusive lock before changing one, and keep the change to what the task needs.',
   '- Refer to files with `res://` paths, and move or rename files in the editor (or through the app) so references are updated.',
   '- Put new scenes, scripts and assets next to the feature they belong to, the way the project already does it; record a new layout choice in project memory.',
+  '- The project may be opened in Godot or in Summer Engine (built on Godot, same project files). When the app offers Summer\'s MCP server or the `summer` CLI, change scenes through them, so writes are checked against the latest version.',
 ];
 
 export const PRESETS: Record<Engine, Preset> = {
@@ -111,20 +114,6 @@ export const PRESETS: Record<Engine, Preset> = {
     locks: ['*.tscn', '*.tres', '*.scn', '*.res'],
     bloatSkip: ['.godot/**', '**/*.import', '**/*.uid'],
     rules: GODOT_RULES,
-    reminders: [],
-  },
-  summer: {
-    engine: 'summer',
-    gitignore: ['.godot/', '/android/'],
-    lfs: ['*.png', '*.jpg', '*.webp', '*.exr', '*.hdr', '*.wav', '*.ogg', '*.mp3', '*.glb', '*.fbx', '*.blend', '*.ttf', '*.otf'],
-    locks: ['*.tscn', '*.tres', '*.scn', '*.res'],
-    bloatSkip: ['.godot/**', '**/*.import', '**/*.uid'],
-    rules: [
-      'Summer Engine is built on Godot, so the Godot rules below apply too.',
-      '- Change scenes through Summer\'s engine operations (its MCP server or the `summer` CLI) when the app offers them, so writes are checked against the latest version.',
-      '',
-      ...GODOT_RULES,
-    ],
     reminders: [],
   },
   unreal: {
@@ -199,13 +188,8 @@ export interface DetectedProject {
   name: string | null;
 }
 
-/**
- * Which engine the folder is for: a .uproject means Unreal, project.godot
- * Godot. Summer projects look like Godot ones, so the engine saved in the
- * setup file wins when it agrees with what the folder holds.
- */
+/** Which engine the folder is for: a .uproject means Unreal, project.godot Godot (or Summer Engine, which shares its files). */
 export function detectProject(facts: ProjectFacts): DetectedProject {
-  const saved = parseSetupConfig(facts.config)?.engine ?? null;
   if (facts.uproject) {
     let version: string | null = null;
     try {
@@ -221,7 +205,7 @@ export function detectProject(facts: ProjectFacts): DetectedProject {
     const features = /^config\/features\s*=\s*PackedStringArray\(([^)]*)\)/m.exec(facts.godotProject)?.[1] ?? '';
     const version = /"(\d+\.\d+)"/.exec(features)?.[1] ?? null;
     const name = /^config\/name\s*=\s*"([^"]*)"/m.exec(facts.godotProject)?.[1] ?? null;
-    return { engine: saved === 'summer' ? 'summer' : 'godot', version, marker: 'project.godot', name };
+    return { engine: 'godot', version, marker: 'project.godot', name };
   }
   return { engine: 'generic', version: null, marker: null, name: null };
 }
@@ -367,13 +351,15 @@ export function engineEntry(detected: DetectedProject, engine: Engine): { title:
     return { title: `${MEMORY_ENGINE_PREFIX} none`, body: 'Not a game engine project. Set up with Project Collaboration Tool\'s generic preset.' };
   }
   const version = detected.version ? ` ${detected.version}` : '';
+  // The memory entry names the engine plainly; Summer Engine shares Godot's version numbers.
+  const label = engine === 'godot' ? 'Godot' : ENGINE_LABELS[engine];
   const body = [
-    `${detected.name ? `${detected.name} is` : 'The project is'} made with ${ENGINE_LABELS[engine]}${version}${detected.marker ? ` (${detected.marker})` : ''}.`,
+    `${detected.name ? `${detected.name} is` : 'The project is'} made with ${label}${version}${detected.marker ? ` (${detected.marker})` : ''}.`,
     engine === 'unreal' ? "Stay on this engine version unless the team decides otherwise. Epic's official docs for it are the source of truth (see AGENTS.md)." : '',
   ]
     .filter(Boolean)
     .join(' ');
-  return { title: `${MEMORY_ENGINE_PREFIX} ${ENGINE_LABELS[engine]}${version}`, body };
+  return { title: `${MEMORY_ENGINE_PREFIX} ${label}${version}`, body };
 }
 
 /** What setup would do for this folder, item by item. Items with nothing in them for the preset are left out. */

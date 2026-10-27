@@ -48,7 +48,7 @@ and at the top of its chat. Chats can become tasks and hand work to another
 agent with the plan, decisions, paths and acceptance criteria. Project
 setup: make the project with its engine first (Unreal launcher, Godot or the
 `summer` CLI), then Set up project (bottom left, or the Home checklist) detects
-Unreal, Godot or a generic project and offers its preset item by item:
+Unreal, Godot (Summer Engine projects are Godot projects) or a generic project and offers its preset item by item:
 `.gitignore` lines, Git LFS in `.gitattributes`, engine lock rules for the
 session, bloat check skips in `.collab-tool.json`, a starter project memory
 entry with `docs/project-memory.md` kept up to date, the agent rules in a

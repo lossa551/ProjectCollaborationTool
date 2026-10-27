@@ -54,9 +54,9 @@ describe('detectProject', () => {
     expect(detectProject(facts({ godotProject: godot }))).toEqual({ engine: 'godot', version: '4.3', marker: 'project.godot', name: 'Moss' });
   });
 
-  it('keeps Summer when the setup file says so, since it looks like Godot', () => {
-    const detected = detectProject(facts({ godotProject: '', config: '{"engine":"summer","bloatSkip":[]}' }));
-    expect(detected.engine).toBe('summer');
+  it('treats a Summer Engine project as Godot, also from an early setup file', () => {
+    expect(detectProject(facts({ godotProject: '', config: '{"engine":"summer","bloatSkip":[]}' })).engine).toBe('godot');
+    expect(parseSetupConfig('{"engine":"summer","bloatSkip":[]}')?.engine).toBe('godot');
   });
 
   it('is generic otherwise, whatever the setup file says', () => {
@@ -93,7 +93,7 @@ describe('agent rules', () => {
   });
 
   it('have no engine section for a generic project', () => {
-    expect(agentRules('generic')).not.toMatch(/^## (Godot|Unreal|Summer)/m);
+    expect(agentRules('generic')).not.toMatch(/^## (Godot|Unreal)/m);
     expect(agentRules('generic')).toContain('# Agent rules');
   });
 
