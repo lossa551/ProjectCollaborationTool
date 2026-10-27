@@ -4,6 +4,7 @@ import { resolve as resolvePath } from 'node:path';
 import {
   CLI_TOOLS,
   WORKSPACE_FILE_LIMIT,
+  AGENT_ERROR_PREFIX,
   approvalActivity,
   lockWaitActivity,
   notesForPaths,
@@ -346,7 +347,7 @@ export class AgentRunner {
           if (run.abort.signal.aborted) {
             this.notice(chatId, run.stoppedBy ? `Stopped by ${run.stoppedBy}.` : 'Stopped.');
           } else {
-            this.notice(chatId, `Something went wrong: ${error instanceof Error ? error.message : String(error)}`);
+            this.notice(chatId, `${AGENT_ERROR_PREFIX}${error instanceof Error ? error.message : String(error)}`);
             this.log(`agent ${agent.name} failed: ${String(error)}`);
           }
           repairHistory(run.history);

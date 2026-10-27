@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { chatWorkspaces, findOverlaps, issuesOfTask, needsYou, untriagedIssues, whoIsDoing, type FeatureState, type NeedTarget } from '@pct/shared';
 import type { AppState, HostingInfo } from '../common/api';
 import { ChatScreen, ChatSidePanel } from './AgentChat';
@@ -10,6 +10,7 @@ import { HomeScreen } from './Home';
 import { IssuesScreen } from './Issues';
 import { LocksScreen } from './Locks';
 import { MemoryScreen } from './Memory';
+import { NotificationSettings } from './Notifications';
 import { PlanningScreen } from './Planning';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
@@ -124,7 +125,7 @@ export function SessionScreen({ state }: { state: AppState }) {
       }),
     [session.workspaces, session.participants, session.github, session.locks, session.chats, session.agents],
   );
-  // One "needs you" list for the Home nav count, Home itself and (later) notifications.
+  // One "needs you" list for the Home nav count and Home itself; notifications (main process) build on it too.
   const needs = useMemo(() => needsYou(session, youId, overlaps), [session, youId, overlaps]);
   const approvals = needs.filter((n) => n.kind === 'approval').length;
   const toTriage = useMemo(() => untriagedIssues(session).length, [session.github, session.planning, session.tasks, session.issueMarks]);
@@ -151,6 +152,17 @@ export function SessionScreen({ state }: { state: AppState }) {
         window.open(target.url);
     }
   };
+  // Clicking a Windows notification opens what it was about; a summary opens Home.
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(
+    () =>
+      window.pct.onOpenTarget((target) => {
+        if (target) goRef.current(target);
+        else setView('home');
+      }),
+    [],
+  );
   const openCode = (tab: CodeTab) => {
     setCodeTab(tab);
     setView('code');
@@ -191,7 +203,7 @@ export function SessionScreen({ state }: { state: AppState }) {
         <button
           className={view === 'settings' ? 'secondary gear active' : 'secondary gear'}
           onClick={() => setView('settings')}
-          title="Settings: agents and API keys"
+          title="Settings: agents, API keys and notifications"
           aria-label="Settings"
         >
           ⚙
@@ -250,15 +262,18 @@ export function SessionScreen({ state }: { state: AppState }) {
         ) : view === 'memory' ? (
           <MemoryScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
         ) : view === 'settings' ? (
-          <AgentsScreen
-            state={state}
-            onOpenChat={(agentId) => {
-              const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
-              setChatId(existing?.id ?? null);
-              setNewChatAgentId(existing ? null : agentId);
-              setView('agents');
-            }}
-          />
+          <div className="agents-screen">
+            <AgentsScreen
+              state={state}
+              onOpenChat={(agentId) => {
+                const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
+                setChatId(existing?.id ?? null);
+                setNewChatAgentId(existing ? null : agentId);
+                setView('agents');
+              }}
+            />
+            <NotificationSettings state={state} />
+          </div>
         ) : view === 'agents' ? (
           <ChatScreen
             state={state}

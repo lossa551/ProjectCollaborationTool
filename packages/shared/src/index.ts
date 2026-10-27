@@ -13,3 +13,4 @@ export * from './overview.js';
 export * from './roadmap.js';
 export * from './git.js';
 export * from './issues.js';
+export * from './notify.js';

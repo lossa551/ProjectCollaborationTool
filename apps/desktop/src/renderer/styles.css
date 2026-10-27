@@ -2634,3 +2634,31 @@ input.milestone-date {
   width: auto;
   max-width: 360px;
 }
+
+/* Settings: Windows notifications (issue #35). */
+.notice-settings header.row {
+  margin-top: 0;
+  align-items: flex-start;
+}
+
+.notice-settings h2 {
+  margin: 0 0 4px;
+}
+
+.notice-kinds {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notice-kinds .check {
+  white-space: normal;
+  align-items: flex-start;
+}
+
+.notice-kinds .check input {
+  margin-top: 3px;
+}
