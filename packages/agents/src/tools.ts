@@ -85,3 +85,17 @@ export const AGENT_TOOLS: ToolSpec[] = [
     ),
   },
 ];
+
+export const RunTestsInput = z.object({ target: z.string().max(500).optional() });
+
+/** Offered when the project is a Godot project with a test add-on (GUT or gdUnit4) and the app knows where Godot is. */
+export const RUN_TESTS_TOOL: ToolSpec = {
+  name: 'run_tests',
+  description:
+    'Run the game’s tests headless in Godot (GUT or gdUnit4) and get a summary: passing, failing and which tests failed. ' +
+    'Use the result as evidence for record_test_result. May need a person’s approval, like a command.',
+  schema: object(
+    { target: { type: 'string', description: 'A res:// test folder or test script; leave out for all tests.' } },
+    [],
+  ),
+};

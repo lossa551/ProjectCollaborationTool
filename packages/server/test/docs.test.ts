@@ -130,6 +130,7 @@ describe('shared documents', () => {
       truncated: false,
       duplicates: [{ reason: 'identical', paths: ['a.png', 'b.png'] }],
       unusedAssets: [],
+      unusedGameFiles: [],
       unusedDependencies: [],
       folderNotes: [],
     });

@@ -50,6 +50,8 @@ export const BloatReport = z.object({
   truncated: z.boolean(),
   duplicates: z.array(BloatDuplicate).max(BLOAT_LIST_LIMIT),
   unusedAssets: z.array(z.string().max(1024)).max(BLOAT_LIST_LIMIT),
+  /** Godot scenes, scripts and resources the game never loads (see findUnusedGodotFiles). */
+  unusedGameFiles: z.array(z.string().max(1024)).max(BLOAT_LIST_LIMIT).default([]),
   unusedDependencies: z.array(UnusedDependency).max(BLOAT_LIST_LIMIT),
   folderNotes: z.array(FolderNoteFinding).max(BLOAT_LIST_LIMIT).default([]),
 });
@@ -151,6 +153,18 @@ export function findDuplicates(files: ScannedFile[]): BloatDuplicate[] {
 const ASSET_REFERENCE = new RegExp(`([^\\s"'\`()/\\\\:<>|*?=,;{}\\[\\]]+)\\.(${ASSET_EXTENSIONS.join('|')})(?![a-z0-9])`, 'gi');
 
 export function findUnusedAssets(files: ScannedFile[]): string[] {
+  // Inside a Godot project, what the game loads is known exactly: see findUnusedGodotFiles.
+  const godot = godotProjects(files);
+  if (godot.length) {
+    const inGodot = (path: string) => godot.some((dir) => dir === '' || path.startsWith(`${dir}/`));
+    const unused = findUnusedGodotFiles(files).filter((path) => ASSET_EXTENSIONS.includes(extensionOf(path)));
+    return [...unused, ...findUnusedAssetsByName(files).filter((path) => !inGodot(path))];
+  }
+  return findUnusedAssetsByName(files);
+}
+
+/** Assets whose file name appears in no text file. */
+function findUnusedAssetsByName(files: ScannedFile[]): string[] {
   const texts = files.filter((f) => f.text !== null && !IGNORED_FOR_REFERENCES.test(f.path));
   const referenced = new Set<string>();
   for (const file of texts) {
@@ -170,6 +184,100 @@ export function findUnusedAssets(files: ScannedFile[]): string[] {
       return true;
     })
     .map((f) => f.path);
+}
+
+// Godot (issue #10): the game loads what project.godot points at (main
+// scene, autoloads, icon), and from there whatever those files refer to with
+// res:// paths, uid:// ids or a script's class_name. Anything no chain
+// reaches is never loaded. Add-ons and tests are left alone: the editor and
+// the test runner load them.
+
+/** Scenes, scripts and resources: Godot's own files, reported apart from assets. */
+const GODOT_GAME_FILES = new Set(['tscn', 'scn', 'tres', 'res', 'gd', 'cs', 'gdshader', 'gdshaderinc', 'shader']);
+const GODOT_TEXT = /\.(?:tscn|tres|gd|cs|godot|cfg|gdshader|gdshaderinc|shader|json|import|uid)$/i;
+/** Godot loads these by name when they are there. */
+const GODOT_IMPLICIT = /^(?:default_bus_layout\.tres|default_env\.tres|export_presets\.cfg|\.gutconfig\.json)$/i;
+const GODOT_EXEMPT = /^(?:addons|tests?)\//i;
+
+/** Folders (repo-relative, '' for the top) holding a project.godot. */
+export function godotProjects(files: ScannedFile[]): string[] {
+  return files.filter((f) => baseName(f.path) === 'project.godot').map((f) => dirName(f.path));
+}
+
+export function findUnusedGodotFiles(files: ScannedFile[]): string[] {
+  const out: string[] = [];
+  const dirs = godotProjects(files).sort((a, b) => b.length - a.length);
+  const claimed = new Set<string>();
+  for (const dir of dirs) {
+    const prefix = dir ? `${dir}/` : '';
+    // A project nested in another belongs to itself only.
+    const inside = files.filter((f) => f.path.startsWith(prefix) && !claimed.has(f.path));
+    for (const f of inside) claimed.add(f.path);
+    const local = (path: string) => path.slice(prefix.length);
+    const byPath = new Map(inside.map((f) => [local(f.path).toLowerCase(), f]));
+
+    // uid:// ids: from .import and .uid files, and the uid in a scene's or resource's header.
+    const uids = new Map<string, string>();
+    for (const f of inside) {
+      if (f.text === null) continue;
+      const rel = local(f.path);
+      if (rel.endsWith('.import')) {
+        const uid = /^uid="(uid:\/\/[a-z0-9]+)"/m.exec(f.text)?.[1];
+        if (uid) uids.set(uid, rel.slice(0, -'.import'.length).toLowerCase());
+      } else if (rel.endsWith('.uid')) {
+        const uid = /uid:\/\/[a-z0-9]+/.exec(f.text)?.[0];
+        if (uid) uids.set(uid, rel.slice(0, -'.uid'.length).toLowerCase());
+      } else if (/\.(?:tscn|tres)$/i.test(rel)) {
+        const uid = /^\[gd_(?:scene|resource)[^\]]*\buid="(uid:\/\/[a-z0-9]+)"/m.exec(f.text)?.[1];
+        if (uid) uids.set(uid, rel.toLowerCase());
+      }
+    }
+    const classes = new Map<string, string>();
+    for (const f of inside) {
+      if (f.text === null || !/\.(?:gd|cs)$/i.test(f.path)) continue;
+      const name = /^\s*class_name\s+([A-Za-z_]\w*)/m.exec(f.text)?.[1] ?? /\[GlobalClass\][\s\S]{0,200}?class\s+([A-Za-z_]\w*)/.exec(f.text)?.[1];
+      if (name) classes.set(name, local(f.path).toLowerCase());
+    }
+    const classPattern = classes.size ? new RegExp(`\\b(${[...classes.keys()].join('|')})\\b`, 'g') : null;
+
+    const reached = new Set<string>();
+    const queue: string[] = [];
+    const reach = (rel: string) => {
+      const key = rel.toLowerCase().replace(/^\.\//, '');
+      if (reached.has(key) || !byPath.has(key)) return;
+      reached.add(key);
+      queue.push(key);
+    };
+    for (const f of inside) {
+      const rel = local(f.path);
+      if (rel === 'project.godot' || GODOT_IMPLICIT.test(rel) || GODOT_EXEMPT.test(rel)) reach(rel);
+    }
+    while (queue.length) {
+      const file = byPath.get(queue.shift()!)!;
+      if (file.text === null || !GODOT_TEXT.test(file.path)) continue;
+      for (const m of file.text.matchAll(/res:\/\/([^"'\s)\]>]+)/g)) reach(m[1]!);
+      for (const m of file.text.matchAll(/uid:\/\/[a-z0-9]+/g)) {
+        const target = uids.get(m[0]);
+        if (target) reach(target);
+      }
+      if (classPattern) {
+        for (const m of file.text.matchAll(classPattern)) {
+          const target = classes.get(m[1]!);
+          if (target && target !== local(file.path).toLowerCase()) reach(target);
+        }
+      }
+      // A script's own folder is where relative loads ("enemy.tscn") point.
+      const folder = dirName(local(file.path));
+      for (const m of file.text.matchAll(/\b(?:pre)?load\(\s*"([^":]+)"\s*\)/g)) reach(folder ? `${folder}/${m[1]}` : m[1]!);
+    }
+    for (const f of inside) {
+      const rel = local(f.path);
+      const ext = extensionOf(rel);
+      if (!GODOT_GAME_FILES.has(ext) && !ASSET_EXTENSIONS.includes(ext)) continue;
+      if (!reached.has(rel.toLowerCase())) out.push(f.path);
+    }
+  }
+  return out;
 }
 
 /** Commands a package installs under another name. */
@@ -244,6 +352,9 @@ export function analyzeBloat(
     truncated: info.truncated,
     duplicates: findDuplicates(files).slice(0, BLOAT_LIST_LIMIT),
     unusedAssets: findUnusedAssets(files).slice(0, BLOAT_LIST_LIMIT),
+    unusedGameFiles: findUnusedGodotFiles(files)
+      .filter((path) => GODOT_GAME_FILES.has(extensionOf(path)))
+      .slice(0, BLOAT_LIST_LIMIT),
     unusedDependencies: findUnusedDependencies(files).slice(0, BLOAT_LIST_LIMIT),
     folderNotes: folderNotes.slice(0, BLOAT_LIST_LIMIT),
   };

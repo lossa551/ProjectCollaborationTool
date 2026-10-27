@@ -31,6 +31,19 @@ export interface ContextInput {
   worktree: { branch: string; base: string | null } | null;
   /** The agent has the record_test_result tool (our own loop); CLI agents report results in the chat instead. */
   recordsResults: boolean;
+  /** A Godot (or Summer Engine) project, when the agent uses the engine on this PC (issue #10). */
+  engine?: {
+    /** The engine server's name, when the agent has its tools. */
+    bridge: string | null;
+    /** The tools drive an editor that has the project open (Summer), rather than a headless Godot. */
+    liveEditor: boolean;
+    /** The project.godot folder, repo-relative ('' for the top). */
+    godotDir: string;
+    /** The same folder on disk. */
+    projectDir: string;
+    /** How to run the tests: 'tool' for run_tests, else the command; null when they cannot run. */
+    tests: string | null;
+  } | null;
 }
 
 interface Piece {
@@ -39,7 +52,7 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults, worktree }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults, worktree, engine }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
@@ -82,6 +95,30 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
       );
     }
     out.push({ label: 'Task', detail: `${task.title} · ${STAGE_LABELS[task.stage]}`, text: lines.join('\n') });
+  }
+  if (engine) {
+    const where = engine.godotDir ? `in ${engine.godotDir}/ (res:// is that folder)` : 'in the top folder (res:// is the repository root)';
+    const lines = [`This is a Godot project ${where}. It may be opened in Godot or in Summer Engine, which is built on Godot.`];
+    if (engine.bridge) {
+      lines.push(
+        engine.liveEditor
+          ? `You have ${engine.bridge}'s tools: they work in the editor that has the project open. Prefer them for scene changes ` +
+              '(adding nodes, setting properties, saving scenes): Summer checks each write against the latest version and refuses stale ones. ' +
+              'If it refuses because a file changed, read it again before retrying.'
+          : `You have the ${engine.bridge}'s tools (their names start with godot_). They run Godot on your folder; ` +
+              `projectPath is always ${engine.projectDir}. Prefer them for creating scenes and adding nodes.`,
+        'Engine tools that change scenes or resources are checked like file edits (locks, allowed paths, approvals), and ' +
+          'running the game or editor scripts follows the rule for commands.',
+      );
+    }
+    if (engine.tests) {
+      lines.push(
+        engine.tests === 'tool'
+          ? 'Run the game’s tests with run_tests, and use the result as evidence for the acceptance criteria.'
+          : `Run the game’s tests with this command, and use the result as evidence for the acceptance criteria:\n${engine.tests}`,
+      );
+    }
+    out.push({ label: 'Game engine', detail: engine.bridge ?? 'Godot project', text: lines.join('\n') });
   }
   const remembered = renderMemory(memory);
   if (remembered) {

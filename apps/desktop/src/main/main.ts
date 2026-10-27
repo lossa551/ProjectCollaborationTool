@@ -88,11 +88,16 @@ import {
   saveBackupFolder,
   saveGitHubToken,
   saveMemoryAutoExport,
+  saveEngineAgent,
+  saveEngineBridge,
+  saveGodotPath,
   saveNotesAgent,
   saveWorkspaceFolder,
   notesAgent,
   workspaceFolder,
 } from './settings';
+import { engineSettingsFor, engineState, findGodotOnPath } from './engine';
+import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, commitPaths, hasCommit, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
@@ -156,10 +161,17 @@ const appState = (): AppState => ({
   setupProgress,
   noteDrafts,
   notesAgent: currentNotesAgent(),
+  engine: engineState(client.getState().session?.id ?? null, workspace?.folder ?? null),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
 client.subscribe(pushState);
+// The Godot editor plugin's Locks dock reads the session's locks from your project folder.
+const godotEditor = new GodotEditorLink({
+  lock: (path) => client.acquireLock(path, { reason: 'From the Godot editor' }),
+  release: (lockId) => client.releaseLock(lockId),
+});
+client.subscribe((state) => void godotEditor.update(workspace?.folder ?? null, state));
 client.subscribe(() => notifier.update(client.getState(), !hosted));
 
 // Your workspace: the project folder you picked for this session. Its branch
@@ -896,6 +908,8 @@ async function startAgent(agentId: unknown): Promise<Result> {
     startedBy: state.you.name,
     startedById: state.you.id,
     root: workspace.folder,
+    // Read each turn, so engine settings changed here apply from the agent's next turn.
+    engine: (agent) => engineSettingsFor(client.getState().session?.id ?? null, agent),
   });
   return { ok: true };
 }
@@ -1504,6 +1518,38 @@ ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
 ipcMain.handle(Channel.readSetup, (_event, engine: unknown) => readSetup(engine));
 ipcMain.handle(Channel.runSetup, (_event, request: unknown) => runSetup(request));
 ipcMain.on(Channel.cancelSetup, () => setupAbort?.abort());
+ipcMain.on(Channel.setEngineBridge, (_event, bridge: unknown) => {
+  if (bridge !== 'off' && bridge !== 'godot' && bridge !== 'summer') return;
+  saveEngineBridge(bridge);
+  pushState();
+});
+
+ipcMain.on(Channel.setEngineAgent, (_event, agentId: unknown, on: unknown) => {
+  const sessionId = client.getState().session?.id;
+  if (!sessionId || typeof agentId !== 'string' || typeof on !== 'boolean') return;
+  saveEngineAgent(sessionId, agentId, on);
+  pushState();
+});
+
+ipcMain.handle(Channel.setGodotPath, async (_event, choose: unknown): Promise<Result> => {
+  if (choose !== true) {
+    saveGodotPath(null);
+    await findGodotOnPath();
+    pushState();
+    return { ok: true };
+  }
+  const picked = await openDialog({
+    title: 'Choose the Godot (or Summer Engine) program',
+    properties: ['openFile'],
+    filters: process.platform === 'win32' ? [{ name: 'Programs', extensions: ['exe'] }] : [],
+  });
+  const path = picked.filePaths[0];
+  if (picked.canceled || !path) return { ok: false, error: 'cancelled' };
+  saveGodotPath(path);
+  pushState();
+  return { ok: true };
+});
+
 ipcMain.on(Channel.setNotesAgent, (_event, agentId: unknown) => {
   const sessionId = client.getState().session?.id;
   if (!sessionId || (agentId !== null && typeof agentId !== 'string')) return;
@@ -1718,6 +1764,7 @@ void app.whenReady().then(() => {
     cliTools = found;
     pushState();
   });
+  void findGodotOnPath().then(pushState);
   startUpdater(
     () => window?.webContents.send(Channel.updateState, updateInfo()),
     (version) => {

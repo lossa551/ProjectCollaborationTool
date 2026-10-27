@@ -19,6 +19,12 @@ import {
   withConfig,
   withPresetLocks,
   withRules,
+  GODOT_PLUGIN_CFG_PATH,
+  GODOT_PLUGIN_SCRIPT,
+  GODOT_PLUGIN_SCRIPT_PATH,
+  parseEditorRequests,
+  pluginEnabled,
+  withPluginEnabled,
   type MemoryEntry,
   type ProjectFacts,
 } from '../src/index.js';
@@ -189,5 +195,47 @@ describe('withPresetLocks', () => {
     const once = withPresetLocks(DEFAULT_LOCK_RULES, 'godot');
     expect(once.exclusivePatterns.slice(-4)).toEqual(['*.tscn', '*.tres', '*.scn', '*.res']);
     expect(withPresetLocks(once, 'godot')).toEqual(once);
+  });
+});
+
+describe('the Godot editor plugin', () => {
+  const godot = '; Engine configuration file.\nconfig_version=5\n\n[application]\n\nconfig/name="Jumper"\n';
+
+  it('is offered for a Godot project, and writes the plugin and turns it on', () => {
+    const project = facts({ topFiles: ['project.godot'], godotProject: godot });
+    const item = planSetup('godot', detectProject(project), project, session).find((i) => i.id === 'plugin');
+    expect(item).toMatchObject({ state: 'missing', file: GODOT_PLUGIN_SCRIPT_PATH });
+    const files = setupFiles('godot', project, ['plugin']);
+    expect(Object.keys(files).sort()).toEqual([GODOT_PLUGIN_CFG_PATH, GODOT_PLUGIN_SCRIPT_PATH, 'project.godot']);
+    expect(files['project.godot']).toBe(`${godot}\n[editor_plugins]\n\nenabled=PackedStringArray("res://addons/collab_tool/plugin.cfg")\n`);
+    expect(files[GODOT_PLUGIN_SCRIPT_PATH]).toContain('extends EditorPlugin');
+    // GDScript's own escapes come through as written.
+    expect(GODOT_PLUGIN_SCRIPT).toContain('(" for \\"%s\\"" % lock.get("reason"))');
+
+    const after = facts({ topFiles: ['project.godot'], godotProject: files['project.godot']!, godotPlugin: GODOT_PLUGIN_SCRIPT });
+    expect(planSetup('godot', detectProject(after), after, session).find((i) => i.id === 'plugin')?.state).toBe('done');
+    const old = facts({ topFiles: ['project.godot'], godotProject: files['project.godot']!, godotPlugin: '@tool\nextends EditorPlugin\n' });
+    expect(planSetup('godot', detectProject(old), old, session).find((i) => i.id === 'plugin')?.state).toBe('drifted');
+    expect(planSetup('unreal', detectProject(project), project, session).some((i) => i.id === 'plugin')).toBe(false);
+  });
+
+  it('joins plugins that are already on, and leaves other sections alone', () => {
+    const withOther = `${godot}\n[editor_plugins]\n\nenabled=PackedStringArray("res://addons/gut/plugin.cfg")\n\n[rendering]\n\nenabled=PackedStringArray()\n`;
+    const on = withPluginEnabled(withOther);
+    expect(on).toContain('enabled=PackedStringArray("res://addons/gut/plugin.cfg", "res://addons/collab_tool/plugin.cfg")');
+    expect(on).toContain('[rendering]\n\nenabled=PackedStringArray()\n');
+    expect(pluginEnabled(on)).toBe(true);
+    expect(withPluginEnabled(on)).toBe(on);
+    const empty = withPluginEnabled(`${godot}\n[editor_plugins]\n\n[rendering]\n`);
+    expect(empty).toContain('[editor_plugins]\n\nenabled=PackedStringArray("res://addons/collab_tool/plugin.cfg")\n\n[rendering]');
+  });
+
+  it('reads the plugin’s requests, skipping half-written lines', () => {
+    expect(
+      parseEditorRequests('{"action":"lock","path":"res://levels/one.tscn"}\n{"action":"release","path":"res://a.tres"}\n{"action":"lock","path":"/etc/x"}\n{"action":"lo'),
+    ).toEqual([
+      { action: 'lock', path: 'res://levels/one.tscn' },
+      { action: 'release', path: 'res://a.tres' },
+    ]);
   });
 });

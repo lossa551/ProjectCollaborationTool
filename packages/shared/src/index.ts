@@ -18,3 +18,4 @@ export * from './usage.js';
 export * from './board.js';
 export * from './commit-message.js';
 export * from './setup.js';
+export * from './godot-plugin.js';

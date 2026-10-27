@@ -11,6 +11,7 @@ import { IssuesScreen } from './Issues';
 import { LocksScreen } from './Locks';
 import { MemoryScreen } from './Memory';
 import { NotificationSettings } from './Notifications';
+import { EngineSettings } from './Engine';
 import { PriceSettings } from './Cost';
 import { PlanningScreen } from './Planning';
 import { SetupScreen } from './Setup';
@@ -277,6 +278,7 @@ export function SessionScreen({ state }: { state: AppState }) {
                 setView('agents');
               }}
             />
+            <EngineSettings state={state} />
             <PriceSettings state={state} />
             <NotificationSettings state={state} />
             <VersionSettings />

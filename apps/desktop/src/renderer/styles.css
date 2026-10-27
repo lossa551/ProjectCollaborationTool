@@ -2932,3 +2932,63 @@ input.milestone-date {
 .fn-drafts .check {
   white-space: normal;
 }
+
+/* Game engine settings (issue #10) */
+
+.engine-settings h2 {
+  margin: 0 0 4px;
+}
+
+.engine-settings h3 {
+  margin: 16px 0 8px;
+  font-size: 0.95em;
+}
+
+.engine-bridges {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.engine-bridge {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.engine-bridge.active {
+  border-color: var(--accent);
+}
+
+.engine-bridge input {
+  width: auto;
+  flex: none;
+  margin-top: 3px;
+}
+
+.engine-agents {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.engine-agents .check {
+  white-space: normal;
+  align-items: flex-start;
+}
+
+.engine-godot {
+  align-items: flex-start;
+  margin-top: 0;
+}
+
+.engine-godot p {
+  margin: 4px 0 0;
+}

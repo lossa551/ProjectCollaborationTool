@@ -7,9 +7,10 @@ import {
   CLI_TOOLS,
   SessionClient,
   newIdentity,
+  type AgentProfile,
   type CliTool,
 } from '@pct/shared';
-import { AgentRunner, createModel } from '@pct/agents';
+import { AgentRunner, createModel, type EngineSettings } from '@pct/agents';
 import type { LocalAgent } from '../common/api';
 import { agentIdentity, loadApiKey, savedApiKeyNames } from './settings';
 
@@ -36,6 +37,8 @@ export interface StartRequest {
   /** Participant id of the person starting it, who owns its chats' copies. */
   startedById: string;
   root: string;
+  /** The game engine for an agent of this session, read at each turn. */
+  engine?: (agent: AgentProfile) => EngineSettings | null;
 }
 
 /** A key saved in the app, else the provider's usual environment variable. */
@@ -97,6 +100,7 @@ export class LocalAgents {
       startedById: request.startedById,
       root: request.root,
       createModel: (agent) => createModel(agent, apiKey),
+      engine: request.engine,
       cli: {
         hookScript: hookScript(),
         // Electron's own binary runs the hook as plain Node.

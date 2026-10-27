@@ -78,6 +78,9 @@ const api: PctApi = {
   cancelSetup: () => ipcRenderer.send(Channel.cancelSetup),
   setNotesAgent: (agentId) => ipcRenderer.send(Channel.setNotesAgent, agentId),
   acceptNoteDraft: (notePath) => ipcRenderer.invoke(Channel.acceptNoteDraft, notePath),
+  setEngineBridge: (bridge) => ipcRenderer.send(Channel.setEngineBridge, bridge),
+  setEngineAgent: (agentId, on) => ipcRenderer.send(Channel.setEngineAgent, agentId, on),
+  setGodotPath: (choose) => ipcRenderer.invoke(Channel.setGodotPath, choose),
   discardNoteDraft: (notePath) => ipcRenderer.send(Channel.discardNoteDraft, notePath),
   onState(listener) {
     const handler = (_event: IpcRendererEvent, state: AppState) => listener(state);

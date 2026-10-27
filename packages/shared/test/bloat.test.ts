@@ -75,4 +75,37 @@ describe('bloat check', () => {
       { manifest: 'shared/package.json', name: 'yaml', dev: false },
     ]);
   });
+
+  it('in a Godot project, reports what the game never loads: from project.godot through res://, uid:// and class_name', () => {
+    const report = analyzeBloat(
+      [
+        file('README.md', 'See game/art/logo.png'),
+        file('promo/banner.png', null),
+        file('game/project.godot', '[application]\nrun/main_scene="res://scenes/main.tscn"\nconfig/icon="res://icon.svg"\n[autoload]\nScore="*res://autoload/score.gd"\n'),
+        file('game/icon.svg', '<svg/>'),
+        file('game/autoload/score.gd', 'extends Node\nvar sfx = preload("uid://bcoin")\n'),
+        file('game/sfx/coin.wav', null),
+        file('game/sfx/coin.wav.import', '[remap]\nimporter="wav"\nuid="uid://bcoin"\n'),
+        file('game/scenes/main.tscn', '[gd_scene format=3 uid="uid://main"]\n[ext_resource type="Script" path="res://scenes/main.gd" id="1"]\n'),
+        file('game/scenes/main.gd', 'extends Node2D\nvar enemy := Enemy.new()\nvar boss = load("boss.tscn")\n'),
+        file('game/scenes/boss.tscn', '[gd_scene format=3]\n[ext_resource path="res://art/boss.png"]\n'),
+        file('game/art/boss.png', null),
+        file('game/enemies/enemy.gd', 'class_name Enemy\nextends Node2D\n'),
+        // Never reached: an old level, its script and art, and a resource.
+        file('game/scenes/old_level.tscn', '[gd_scene format=3]\n[ext_resource path="res://scenes/old_level.gd"]\n[ext_resource path="res://art/old_bg.png"]\n'),
+        file('game/scenes/old_level.gd', 'extends Node\n'),
+        file('game/art/old_bg.png', null),
+        file('game/art/logo.png', null),
+        file('game/themes/unused.tres', '[gd_resource type="Theme" format=3]\n'),
+        // Add-ons and tests are the editor's and the test runner's.
+        file('game/addons/gut/gut.gd', 'extends Node\n'),
+        file('game/test/test_score.gd', 'extends GutTest\n'),
+      ],
+      { ranBy: 'Martin', branch: 'main', truncated: false },
+    );
+    expect(report.unusedGameFiles).toEqual(['game/scenes/old_level.tscn', 'game/scenes/old_level.gd', 'game/themes/unused.tres']);
+    // Inside the project only what the game loads counts (the README naming logo.png does not); outside it, names do.
+    expect(report.unusedAssets).toEqual(['game/art/old_bg.png', 'game/art/logo.png', 'promo/banner.png']);
+  });
 });
+

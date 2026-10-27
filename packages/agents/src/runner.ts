@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { resolve as resolvePath } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join as joinPath, resolve as resolvePath } from 'node:path';
 import {
   CLI_TOOLS,
   WORKSPACE_FILE_LIMIT,
@@ -35,6 +37,22 @@ import {
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { describeContext, systemPrompt, type ContextInput } from './context.js';
+import {
+  ENGINE_BRIDGES,
+  EngineBridge,
+  claudeEngineTool,
+  classifyEngineCall,
+  describeTests,
+  findGodotProject,
+  findTestFramework,
+  godotTestCommand,
+  parseTestOutput,
+  readEngineAnswer,
+  seedGodotCache,
+  type EngineCall,
+  type EngineServer,
+  type EngineSettings,
+} from './engine.js';
 import { ProjectFiles } from './files.js';
 import { checkCommand, checkEdit, othersLocks, type GuardContext } from './guard.js';
 import { parseInput, type LoopMessage, type ModelAdapter, type ToolCall, type ToolResult } from './models/types.js';
@@ -43,11 +61,14 @@ import {
   EditFileInput,
   ListFilesInput,
   ReadFileInput,
+  RUN_TESTS_TOOL,
   RecordTestResultInput,
   RunCommandInput,
+  RunTestsInput,
   SearchInput,
   WriteFileInput,
 } from './tools.js';
+import type { ToolSpec } from './models/types.js';
 import {
   agentBranchName,
   canMakeWorktrees,
@@ -109,6 +130,12 @@ export interface AgentRunnerOptions {
   answerBacklogMs?: number;
   /** Most model round trips in one turn. Default 40. */
   maxSteps?: number;
+  /**
+   * The game engine on this PC for this agent: its MCP server and Godot's
+   * executable (issue #10). Read at the start of each turn, so a change in
+   * settings applies from the next turn. Leave out for no engine.
+   */
+  engine?: (agent: AgentProfile) => EngineSettings | null;
   log?: (line: string) => void;
 }
 
@@ -147,7 +174,31 @@ interface ChatRun {
   live: Map<string, { model: string | null; usage: TokenUsage }>;
   /** Said in the chat instead of "Stopped." when the run was stopped for a reason. */
   stopNotice: string | null;
+  /** The game engine for this turn; null when the project has none or this agent does not use it. */
+  engine: ChatEngine | null;
+  /** Said in the chat that the engine could not be reached, so it is not said every turn. */
+  engineProblem: string | null;
 }
+
+/** A Godot (or Summer Engine) project, as one chat sees it. */
+interface ChatEngine {
+  server: EngineServer | null;
+  /** The project.godot folder, repo-relative. */
+  godotDir: string;
+  /** The same folder on disk, in the folder the chat works in. */
+  projectDir: string;
+  /** The engine's tools for our own loop; empty for CLI agents (they get the server themselves). */
+  tools: ToolSpec[];
+  /** Runs the tests headless; null without Godot's path or a test add-on. */
+  testCommand: ((target?: string) => Promise<string>) | null;
+  /** How the tests are run, for the agent's instructions. */
+  testHint: string | null;
+  /** The test add-on, as people know it. */
+  testLabel: string;
+}
+
+/** The Godot MCP server's tools that take no project folder. */
+const GODOT_NO_PROJECT = new Set(['get_debug_output', 'stop_project', 'get_godot_version', 'list_projects']);
 
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
@@ -165,6 +216,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   edit_file: 'Editing',
   run_command: 'Running',
   record_test_result: 'Recording a test result:',
+  run_tests: 'Running the tests',
 };
 
 const TOOL_LABEL: Record<string, string> = {
@@ -175,6 +227,7 @@ const TOOL_LABEL: Record<string, string> = {
   edit_file: 'Edit',
   run_command: 'Run',
   record_test_result: 'Test result',
+  run_tests: 'Tests',
 };
 
 export class AgentRunner {
@@ -184,6 +237,10 @@ export class AgentRunner {
   private readonly unsubscribe: (() => void)[] = [];
   private hook: HookServer | null = null;
   private stopped = false;
+  /** The engine's MCP server, started on first use and shared by the agent's chats. */
+  private bridge: EngineBridge | null = null;
+  /** Claude Code's --mcp-config file for the engine server. */
+  private mcpConfig: { file: string; text: string } | null = null;
 
   constructor(private readonly options: AgentRunnerOptions) {
     this.files = new ProjectFiles(options.root);
@@ -213,6 +270,10 @@ export class AgentRunner {
     this.waiters.clear();
     await this.hook?.stop();
     this.hook = null;
+    this.bridge?.close();
+    this.bridge = null;
+    if (this.mcpConfig) rmSync(this.mcpConfig.file, { force: true });
+    this.mcpConfig = null;
   }
 
   /**
@@ -318,6 +379,8 @@ export class AgentRunner {
         budgetOk: new Map(),
         live: new Map(),
         stopNotice: null,
+        engine: null,
+        engineProblem: null,
       };
       this.runs.set(chatId, run);
     }
@@ -427,6 +490,7 @@ export class AgentRunner {
           // Edits made in the copy by hand since the last turn are not part of this one.
           await this.saveCopy(run, 'Changes made in the copy between agent turns');
           run.folderNotes = await this.loadFolderNotes(chat);
+          run.engine = await this.engineFor(chat, agent, run);
           this.setState(chatId, 'working', 'Thinking');
           if (agent.connection.type === 'api') await this.runApi(chat, agent, run, prompt);
           else await this.runCliAgent(chat, agent, run, prompt, messages, fresh);
@@ -508,6 +572,12 @@ export class AgentRunner {
   private async workspaceFor(chat: ChatInfo, run: ChatRun): Promise<ProjectFiles> {
     const setting = this.options.worktrees;
     if (setting === false) return (run.files ??= this.files);
+    // Summer Engine edits the project its editor has open, which is the project folder: chats that
+    // use it work there too. A chat that already has a copy keeps it (and is told Summer cannot reach it).
+    const agent = this.profile();
+    if (!run.worktree && !chat.worktree && agent && this.options.engine?.(agent)?.server?.kind === 'summer') {
+      return (run.files = this.files);
+    }
     const known = run.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
     if (known && run.files && (await worktreeReady(known.folder, known.branch))) return run.files;
     if (!(await canMakeWorktrees(this.options.root))) {
@@ -536,6 +606,10 @@ export class AgentRunner {
       head: known?.head ?? null,
       updatedAt: Date.now(),
     };
+    if (!reused) {
+      // A Godot project's import cache comes along, so the engine does not import every asset again.
+      await seedGodotCache(root, folder).catch((error: unknown) => this.log(`could not copy the Godot cache: ${String(error)}`));
+    }
     if (!known) {
       const from = base.base ? `${base.base} at ${baseCommit.slice(0, 7)}` : baseCommit.slice(0, 7);
       this.notice(
@@ -848,6 +922,18 @@ export class AgentRunner {
       folderNotes: this.runs.get(chat.id)?.folderNotes ?? [],
       worktree: this.runs.get(chat.id)?.worktree ?? null,
       recordsResults: agent.connection.type === 'api',
+      engine: this.engineContext(this.runs.get(chat.id)?.engine ?? null, agent),
+    };
+  }
+
+  private engineContext(engine: ChatEngine | null, agent: AgentProfile): ContextInput['engine'] {
+    if (!engine) return null;
+    return {
+      bridge: engine.server ? ENGINE_BRIDGES[engine.server.kind].label : null,
+      liveEditor: engine.server?.kind === 'summer',
+      godotDir: engine.godotDir,
+      projectDir: engine.projectDir,
+      tests: engine.testHint ? (agent.connection.type === 'api' ? 'tool' : engine.testHint) : null,
     };
   }
 
@@ -1057,12 +1143,13 @@ export class AgentRunner {
     }
   }
 
-  private async gateCommand(chat: ChatInfo, agent: AgentProfile, command: string, signal: AbortSignal): Promise<string | null> {
+  /** action: what the approval card says, when the app made the command itself (e.g. the tests). */
+  private async gateCommand(chat: ChatInfo, agent: AgentProfile, command: string, signal: AbortSignal, action?: string): Promise<string | null> {
     const decision = checkCommand({ agent }, command);
     if (decision.verdict === 'deny') return decision.reasons.join('; ');
     if (decision.verdict === 'ask') {
       const shown = command.length > 300 ? `${command.slice(0, 300)}…` : command;
-      const approved = await this.askApproval(chat.id, `Run ${shown}`, decision.reasons.join('; '), signal);
+      const approved = await this.askApproval(chat.id, action ?? `Run ${shown}`, decision.reasons.join('; '), signal);
       if (!approved) return signal.aborted ? 'stopped' : 'a person did not approve running this command';
     }
     return null;
@@ -1139,7 +1226,7 @@ export class AgentRunner {
       const turn = await model.complete({
         system: systemPrompt(this.contextInput(agent, current, task)),
         messages: history,
-        tools: AGENT_TOOLS,
+        tools: this.toolsFor(run),
         signal,
         onText: writer.append,
       });
@@ -1173,9 +1260,10 @@ export class AgentRunner {
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
     const id = randomUUID();
     const files = this.filesOf(chat.id);
-    const label = TOOL_LABEL[call.name] ?? call.name;
+    const engineLabel = this.bridge?.serverName(call.name) ? (this.bridge.server.kind === 'godot' ? 'Godot' : 'Summer') : null;
+    const label = TOOL_LABEL[call.name] ?? engineLabel ?? call.name;
     const show = (summary: string, status: ToolStatus, output = '') => {
-      if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? label} ${summary}`);
+      if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? (engineLabel ? `${engineLabel}:` : label)} ${summary}`);
       this.postTool(chat.id, id, { name: label, summary, status, output });
     };
     const ok = (content: string): ToolResult => ({ id: call.id, content, isError: false });
@@ -1250,9 +1338,161 @@ export class AgentRunner {
         this.client.verifyCriterion(task.id, criterion.id, input.value.result, input.value.evidence);
         return ok(`Recorded "${criterion.text}" as ${input.value.result}.`);
       }
-      default:
+      case 'run_tests': {
+        const input = parseInput(RunTestsInput, call.input);
+        if (!input.ok) return error(input.error);
+        const tests = run.engine?.testCommand;
+        if (!tests) return error('This project has no tests the app can run (it needs Godot’s path in Settings and the GUT or gdUnit4 add-on).');
+        const command = await tests(input.value.target);
+        const what = `Run the game’s tests (${run.engine!.testLabel}${input.value.target ? `, ${input.value.target}` : ''})`;
+        const problem = await this.gateCommand(chat, agent, command, signal, what);
+        if (problem) return blocked('tests', problem);
+        const before = await files.changedFiles();
+        const summary = input.value.target ?? 'all tests';
+        show(summary, 'running');
+        const result = await files.run(command, signal, 10 * 60_000);
+        const tested = parseTestOutput(result.output, result.exitCode);
+        const output = `${describeTests(tested)}\n\n${result.output}\n(exit code ${result.exitCode ?? 'none'})`;
+        show(summary, tested.passed ? 'done' : 'failed', output);
+        await this.reviewChanges(chat, agent, before, 'the tests', signal);
+        return tested.passed ? ok(output) : error(output);
+      }
+      default: {
+        const tool = this.bridge?.serverName(call.name);
+        if (tool && run.engine?.server) return this.engineTool(chat, agent, run, call, tool, signal, show, ok, error, blocked);
         return error(`There is no tool called ${call.name}.`);
+      }
     }
+  }
+
+  /** The tools our own loop offers: the usual ones, the engine's, and the tests when they can run. */
+  private toolsFor(run: ChatRun): ToolSpec[] {
+    const engine = run.engine;
+    if (!engine) return AGENT_TOOLS;
+    return [...AGENT_TOOLS, ...(engine.testCommand ? [RUN_TESTS_TOOL] : []), ...engine.tools];
+  }
+
+  /** The engine server for these settings, started again when they changed. */
+  private bridgeFor(server: EngineServer): EngineBridge {
+    if (this.bridge && this.bridge.sameAs(server)) return this.bridge;
+    this.bridge?.close();
+    this.bridge = new EngineBridge(server, this.options.root);
+    return this.bridge;
+  }
+
+  /**
+   * The chat's engine for this turn: the Godot project in the folder it
+   * works in, the engine server's tools (our own loop), and the test command.
+   * Null when the project has no project.godot or the agent has no engine.
+   */
+  private async engineFor(chat: ChatInfo, agent: AgentProfile, run: ChatRun): Promise<ChatEngine | null> {
+    const settings = this.options.engine?.(agent) ?? null;
+    if (!settings) return null;
+    const files = this.filesOf(chat.id);
+    const godotDir = await findGodotProject(files.root);
+    if (godotDir === null) return null;
+    const projectDir = godotDir ? joinPath(files.root, ...godotDir.split('/')) : files.root;
+    let testCommand: ChatEngine['testCommand'] = null;
+    let testHint: string | null = null;
+    const framework = await findTestFramework(projectDir);
+    if (settings.godotPath && framework) {
+      const godotPath = settings.godotPath;
+      testCommand = (target) => godotTestCommand(godotPath, projectDir, framework, target);
+      testHint = await testCommand();
+    }
+    let tools: ToolSpec[] = [];
+    const server = settings.server;
+    if (server && agent.connection.type === 'api') {
+      try {
+        tools = await this.bridgeFor(server).specs();
+        run.engineProblem = null;
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        if (run.engineProblem !== why) {
+          run.engineProblem = why;
+          this.notice(chat.id, `${ENGINE_BRIDGES[server.kind].label} could not be reached, so the agent works without it this turn: ${why}`);
+        }
+        this.bridge?.close();
+        this.bridge = null;
+      }
+    }
+    const testLabel = framework === 'gdunit4' ? 'gdUnit4' : 'GUT';
+    return { server: tools.length > 0 || agent.connection.type === 'cli' ? server : null, godotDir, projectDir, tools, testCommand, testHint, testLabel };
+  }
+
+  /**
+   * Checks one engine call before it runs: reading is allowed; changing
+   * project files is checked and locked like a file edit; anything else
+   * follows the agent's rule for commands. Returns why not, or null.
+   */
+  private async gateEngine(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: EngineCall, signal: AbortSignal): Promise<string | null> {
+    if (run.engine?.server?.kind === 'summer' && run.worktree && call.kind !== 'read') {
+      return (
+        `Summer Engine changes the project open in its editor, but this chat works in its own copy (${run.worktree.branch}); ` +
+        'start a new chat to work through Summer, or make the change with file edits here'
+      );
+    }
+    if (call.kind === 'read') return null;
+    if (call.kind === 'action') return this.gateCommand(chat, agent, call.what, signal);
+    for (const path of call.paths) {
+      const gate = await this.gateEdit(chat, agent, path, signal);
+      if ('blocked' in gate) return gate.blocked;
+      run.approvedPaths.add(gate.path.toLowerCase());
+    }
+    return null;
+  }
+
+  /** An engine tool call from our own loop: checked, run on the engine's server, and what it changed reviewed. */
+  private async engineTool(
+    chat: ChatInfo,
+    agent: AgentProfile,
+    run: ChatRun,
+    call: ToolCall,
+    tool: string,
+    signal: AbortSignal,
+    show: (summary: string, status: ToolStatus, output?: string) => void,
+    ok: (content: string) => ToolResult,
+    error: (content: string) => ToolResult,
+    blocked: (summary: string, why: string) => ToolResult,
+  ): Promise<ToolResult> {
+    const engine = run.engine!;
+    const files = this.filesOf(chat.id);
+    let input = (call.input && typeof call.input === 'object' ? call.input : {}) as Record<string, unknown>;
+    // The Godot server works on whichever folder it is given: always the one this chat works in.
+    if (engine.server!.kind === 'godot') {
+      if (tool === 'list_projects') input = { ...input, directory: engine.projectDir };
+      else if (!GODOT_NO_PROJECT.has(tool)) input = { ...input, projectPath: engine.projectDir };
+    }
+    const classified = classifyEngineCall(engine.server!.kind, tool, input, engine.godotDir, files.root);
+    // The tool line is labelled with the engine already.
+    const what = classified.what.replace(/^(Godot|Summer) /, '');
+    const summary = classified.kind === 'edit' ? `${what} ${classified.paths.join(', ')}` : what;
+    const problem = await this.gateEngine(chat, agent, run, classified, signal);
+    if (problem) return blocked(summary, problem);
+    const before = classified.kind === 'read' ? null : await files.changedFiles();
+    show(summary, 'running');
+    let result;
+    try {
+      result = await this.bridge!.call(tool, input, signal);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      show(summary, 'failed', message);
+      return error(message);
+    }
+    const answer = readEngineAnswer(result.text);
+    if (answer.conflict) {
+      show(summary, 'failed', `Refused: ${answer.conflict}`);
+      this.notice(chat.id, `Summer Engine did not overwrite a file that changed since the agent read it (${summary}). The agent reads it again first.`);
+      return error(`Summer refused because the file changed since you read it: ${answer.conflict}. Read it again, then retry.`);
+    }
+    if (answer.approvalUrl) this.notice(chat.id, `Summer Engine needs a person to approve this first: ${answer.approvalUrl}`);
+    const receipts = answer.receipts.length ? `\nWrote: ${answer.receipts.join(', ')}` : '';
+    const failed = result.isError || answer.error !== null;
+    const output = `${result.text}${receipts}`;
+    show(summary, failed ? 'failed' : 'done', output.length > 600 ? `${output.slice(0, 600)}…` : output);
+    // Files the engine changed that the call did not name are checked like a command's.
+    if (before) await this.reviewChanges(chat, agent, before, ENGINE_BRIDGES[engine.server!.kind].label, signal);
+    return failed ? error(output) : ok(output);
   }
 
   // CLI agents.
@@ -1304,6 +1544,11 @@ export class AgentRunner {
         case 'tool_result': {
           const entry = toolMessages.get(event.id);
           if (entry) this.postTool(chat.id, entry.id, { name: entry.name, summary: entry.summary, status: event.failed ? 'failed' : 'done', output: event.output });
+          if (entry && claudeEngineTool(entry.name)) {
+            const answer = readEngineAnswer(event.output);
+            if (answer.conflict) this.notice(chat.id, `Summer Engine did not overwrite a file that changed since the agent read it: ${answer.conflict}`);
+            if (answer.approvalUrl) this.notice(chat.id, `Summer Engine needs a person to approve this first: ${answer.approvalUrl}`);
+          }
           break;
         }
         case 'error':
@@ -1325,6 +1570,8 @@ export class AgentRunner {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--settings', hook.claudeSettingsFile(settings.hookScript, settings.nodePath)];
       if (agent.connection.model) args.push('--model', agent.connection.model);
       if (run.cliSession) args.push('--resume', run.cliSession);
+      // The engine's server, as its own MCP server; every call is still asked through the hook.
+      if (run.engine?.server) args.push('--mcp-config', this.mcpConfigFile(run.engine.server));
       // A new session (a branched chat, or after a restart) gets the conversation so far once.
       const earlier = run.cliSession ? '' : transcript(messages.filter((m) => !fresh.includes(m)));
       const fullPrompt = run.cliSession ? prompt : `${context}\n\n---\n\n${earlier ? `Conversation so far:\n${earlier}\n\n---\n\n` : ''}${prompt}`;
@@ -1371,6 +1618,17 @@ export class AgentRunner {
       throw new Error(`${CLI_TOOLS[tool].label}: ${detail}`);
     }
     if (result.exitCode === null && !failure) throw new Error(`${CLI_TOOLS[tool].label} could not be started. Is it installed?`);
+  }
+
+  /** Claude Code's --mcp-config file for the engine server, written once per settings. */
+  private mcpConfigFile(server: EngineServer): string {
+    const text = new EngineBridge(server, this.options.root).claudeConfig();
+    if (this.mcpConfig?.text === text) return this.mcpConfig.file;
+    if (this.mcpConfig) rmSync(this.mcpConfig.file, { force: true });
+    const file = joinPath(tmpdir(), `pct-engine-mcp-${randomBytes(6).toString('hex')}.json`);
+    writeFileSync(file, text, { mode: 0o600 });
+    this.mcpConfig = { file, text };
+    return file;
   }
 
   private async hookServer(): Promise<HookServer> {
@@ -1432,6 +1690,19 @@ export class AgentRunner {
       case 'ExitPlanMode':
         return { allow: true, reason: 'Allowed' };
       default: {
+        const engineTool = claudeEngineTool(request.toolName);
+        const engine = run.engine;
+        const kind = engineTool?.kind ?? engine?.server?.kind;
+        if (engineTool && engine && kind) {
+          // The Godot server works on whichever folder it is given: it must be this chat's.
+          const given = typeof input.projectPath === 'string' ? input.projectPath : null;
+          if (kind === 'godot' && given !== null && !samePath(resolvePath(given), resolvePath(engine.projectDir))) {
+            return deny(`this chat's Godot project is ${engine.projectDir}; call the tool again with projectPath set to that`);
+          }
+          const call = classifyEngineCall(kind, engineTool.tool, input, engine.godotDir, this.filesOf(chat.id).root);
+          const problem = await this.gateEngine(chat, agent, run, call, signal);
+          return problem ? deny(problem) : { allow: true, reason: 'Checked by the collaboration app' };
+        }
         // Other tools (MCP and the like) follow the command rule.
         const problem = await this.gateCommand(chat, agent, `${request.toolName} tool`, signal);
         return problem ? deny(problem) : { allow: true, reason: 'Checked by the collaboration app' };

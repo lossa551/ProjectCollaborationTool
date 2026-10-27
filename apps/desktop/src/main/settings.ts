@@ -123,6 +123,12 @@ interface Preferences {
   mutedNotices?: string[];
   /** By session id: the agent that keeps folder notes up to date (project setup). */
   notesAgents?: Record<string, string>;
+  /** Which engine MCP server agents on this PC use (issue #10). */
+  engineBridge?: string;
+  /** The Godot (or Summer Engine) executable, for tests and the Godot MCP server. */
+  godotPath?: string;
+  /** By session id: the agents that get the engine's tools. */
+  engineAgents?: Record<string, string[]>;
 }
 
 const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
@@ -139,6 +145,16 @@ function readPreferences(): Preferences {
       ...(prefs.notesAgents !== null &&
         typeof prefs.notesAgents === 'object' && {
           notesAgents: Object.fromEntries(Object.entries(prefs.notesAgents).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+        }),
+      ...(typeof prefs.engineBridge === 'string' && { engineBridge: prefs.engineBridge }),
+      ...(typeof prefs.godotPath === 'string' && { godotPath: prefs.godotPath }),
+      ...(prefs.engineAgents !== null &&
+        typeof prefs.engineAgents === 'object' && {
+          engineAgents: Object.fromEntries(
+            Object.entries(prefs.engineAgents)
+              .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
+              .map(([id, agents]) => [id, agents.filter((a): a is string => typeof a === 'string')]),
+          ),
         }),
     };
   } catch {
@@ -190,4 +206,34 @@ export function saveNotesAgent(sessionId: string, agentId: string | null) {
   if (agentId) agents[sessionId] = agentId;
   else delete agents[sessionId];
   savePreferences({ notesAgents: agents });
+}
+
+/** The engine MCP server agents on this PC use: off, godot or summer. */
+export function engineBridge(): string {
+  return readPreferences().engineBridge ?? 'off';
+}
+
+export function saveEngineBridge(bridge: string) {
+  savePreferences({ engineBridge: bridge });
+}
+
+/** The Godot executable you chose; null to look for it. */
+export function savedGodotPath(): string | null {
+  return readPreferences().godotPath ?? null;
+}
+
+export function saveGodotPath(path: string | null) {
+  savePreferences({ godotPath: path ?? undefined });
+}
+
+/** The agents of a session that get the engine's tools on this PC. */
+export function engineAgents(sessionId: string): string[] {
+  return readPreferences().engineAgents?.[sessionId] ?? [];
+}
+
+export function saveEngineAgent(sessionId: string, agentId: string, on: boolean) {
+  const all = { ...readPreferences().engineAgents };
+  const agents = (all[sessionId] ?? []).filter((id) => id !== agentId);
+  all[sessionId] = on ? [...agents, agentId] : agents;
+  savePreferences({ engineAgents: all });
 }

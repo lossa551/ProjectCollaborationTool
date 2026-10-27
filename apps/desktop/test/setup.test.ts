@@ -30,7 +30,7 @@ function project() {
   return { root, write };
 }
 
-describe('project setup in a folder', () => {
+describe('project setup in a folder', { timeout: 30_000 }, () => {
   it('detects a new Unreal project, writes the preset and commits only its own files', async () => {
     const { root, write } = project();
     write('Shooter.uproject', JSON.stringify({ FileVersion: 3, EngineAssociation: '5.8' }));

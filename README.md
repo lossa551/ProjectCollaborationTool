@@ -58,8 +58,19 @@ the source of truth) and a `CLAUDE.md` that imports it. An agent drafts the
 first folder notes, and everything goes into one commit. Running it again only
 shows what is missing or out of date. From then on that agent keeps folder
 notes up to date by itself: stale or missing notes are drafted for people to
-review on the Folder notes tab. Engine bridges come next; see the GitHub
-issues.
+review on the Folder notes tab. For Godot and Summer Engine projects, setup
+can also add the app's editor plugin: a Locks dock in the editor, a warning
+when the scene you open is locked by someone else, and Lock this scene.
+Settings, Game engine: agents can act in the engine through the Godot MCP
+server (headless Godot on their own copy) or Summer Engine's (the editor that
+has your project open). The app runs that server itself and checks every
+call: scene and resource changes take locks and follow task paths and
+approvals like file edits, playing the game asks like a command, and Summer's
+stale overwrite refusals show in the chat. With Godot's path set and GUT or
+gdUnit4 in the project, agents run the tests headless and record the results
+on the task's acceptance criteria. The bloat check follows what a Godot game
+loads (`res://`, `uid://`, `class_name`) and lists scenes, scripts and assets
+nothing reaches. Unreal (#11) is next; see `docs/design/engines.md`.
 
 ## Layout
 
