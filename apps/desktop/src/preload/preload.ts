@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { NeedTarget } from '@pct/shared';
 import { Channel, type AppState, type PctApi, type UpdateInfo } from '../common/api';
 
 const api: PctApi = {
@@ -16,6 +17,13 @@ const api: PctApi = {
   setBackupFolder: (choose) => ipcRenderer.invoke(Channel.setBackupFolder, choose),
   exportMemory: () => ipcRenderer.invoke(Channel.exportMemory),
   setMemoryAutoExport: (on) => ipcRenderer.send(Channel.setMemoryAutoExport, on),
+  setNoticeMuted: (kind, muted) => ipcRenderer.send(Channel.setNoticeMuted, kind, muted),
+  testNotice: () => ipcRenderer.send(Channel.testNotice),
+  onOpenTarget(listener) {
+    const handler = (_event: IpcRendererEvent, target: NeedTarget | null) => listener(target);
+    ipcRenderer.on(Channel.openTarget, handler);
+    return () => ipcRenderer.off(Channel.openTarget, handler);
+  },
   leave: () => ipcRenderer.invoke(Channel.leave),
   setPresence: (status, focus) => ipcRenderer.send(Channel.setPresence, status, focus),
   createTask: (title, stage) => ipcRenderer.send(Channel.createTask, title, stage),

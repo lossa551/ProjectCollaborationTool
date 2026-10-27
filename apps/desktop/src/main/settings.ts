@@ -119,6 +119,8 @@ interface Preferences {
   backupFolder?: string;
   /** Session ids whose memory file is rewritten when an entry changes. */
   memoryExport?: string[];
+  /** Kinds of Windows notifications turned off; see NOTICE_KINDS. */
+  mutedNotices?: string[];
 }
 
 const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
@@ -131,6 +133,7 @@ function readPreferences(): Preferences {
     return {
       ...(typeof prefs.backupFolder === 'string' && { backupFolder: prefs.backupFolder }),
       ...(Array.isArray(prefs.memoryExport) && { memoryExport: prefs.memoryExport.filter((id): id is string => typeof id === 'string') }),
+      ...(Array.isArray(prefs.mutedNotices) && { mutedNotices: prefs.mutedNotices.filter((k): k is string => typeof k === 'string') }),
     };
   } catch {
     return {};
@@ -160,4 +163,13 @@ export function memoryAutoExport(sessionId: string): boolean {
 export function saveMemoryAutoExport(sessionId: string, on: boolean) {
   const ids = (readPreferences().memoryExport ?? []).filter((id) => id !== sessionId);
   savePreferences({ memoryExport: on ? [...ids, sessionId] : ids });
+}
+
+export function mutedNotices(): string[] {
+  return readPreferences().mutedNotices ?? [];
+}
+
+export function saveMutedNotice(kind: string, muted: boolean) {
+  const kinds = mutedNotices().filter((k) => k !== kind);
+  savePreferences({ mutedNotices: muted ? [...kinds, kind] : kinds });
 }

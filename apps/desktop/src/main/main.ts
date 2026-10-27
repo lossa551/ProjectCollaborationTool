@@ -75,6 +75,7 @@ import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
+import { Notifier } from './notifications';
 import { scanFolderNotes } from './folder-notes';
 import type { FolderNotesReport } from '../common/folder-notes';
 
@@ -101,6 +102,15 @@ let history: SessionHistory | null = null;
 const sessions = () => (history ??= new SessionHistory(app.getPath('userData')));
 let currentKey: string | null = null;
 
+// Windows toasts for approvals, agents, your locks and pull requests, and the host's connection.
+const notifier = new Notifier({
+  focused: () => !!window && window.isVisible() && !window.isMinimized() && window.isFocused(),
+  open(target) {
+    focusWindow();
+    window?.webContents.send(Channel.openTarget, target);
+  },
+});
+
 const appState = (): AppState => ({
   session: client.getState(),
   hosting,
@@ -112,10 +122,12 @@ const appState = (): AppState => ({
   cliTools,
   textEdits,
   memoryExport: memoryExportState(),
+  mutedNotices: notifier.muted(),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
 client.subscribe(pushState);
+client.subscribe(() => notifier.update(client.getState(), !hosted));
 
 // Your workspace: the project folder you picked for this session. Its branch
 // and changed files go to the session whenever they change.
@@ -1265,6 +1277,11 @@ ipcMain.on(Channel.editMemory, (_event, op: unknown) => {
 });
 ipcMain.handle(Channel.exportMemory, () => exportMemory());
 ipcMain.on(Channel.setMemoryAutoExport, (_event, on: unknown) => setMemoryAutoExport(on));
+ipcMain.on(Channel.setNoticeMuted, (_event, kind: unknown, muted: unknown) => {
+  notifier.setMuted(kind, muted);
+  pushState();
+});
+ipcMain.on(Channel.testNotice, () => notifier.test());
 ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unknown, state: unknown, evidence: unknown) => {
   const parsed = TaskVerifyMessage.safeParse({ type: 'task.verify', taskId, criterionId, state, evidence });
   if (parsed.success) client.verifyCriterion(parsed.data.taskId, parsed.data.criterionId, parsed.data.state, parsed.data.evidence);

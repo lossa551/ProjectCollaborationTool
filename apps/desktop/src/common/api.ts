@@ -7,6 +7,8 @@ import type {
   CriterionState,
   LockRules,
   MemoryOp,
+  NeedTarget,
+  NoticeKind,
   PlanApproval,
   PlanOp,
   RepoRef,
@@ -105,6 +107,8 @@ export interface AppState {
    */
   textEdits: number;
   memoryExport: MemoryExportState | null;
+  /** Windows notification kinds you turned off on this PC. */
+  mutedNotices: NoticeKind[];
 }
 
 export interface HandoffRequest {
@@ -290,6 +294,12 @@ export interface PctApi {
   exportMemory(): Promise<ResultWith<string>>;
   /** Stops (or starts again) rewriting the file when an entry changes. */
   setMemoryAutoExport(on: boolean): void;
+  /** Turns one kind of Windows notification off or back on. */
+  setNoticeMuted(kind: NoticeKind, muted: boolean): void;
+  /** Shows a sample notification, to check Windows lets the app show them. */
+  testNotice(): void;
+  /** Clicking a notification asks the window to open what it is about. */
+  onOpenTarget(listener: (target: NeedTarget | null) => void): () => void;
   /** Records a test result for one of a task's acceptance criteria. */
   verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
   /** Scans your project folder for bloat and shares the result with the session. */
@@ -322,6 +332,9 @@ export const Channel = {
   setBackupFolder: 'pct:set-backup-folder',
   exportMemory: 'pct:export-memory',
   setMemoryAutoExport: 'pct:set-memory-auto-export',
+  setNoticeMuted: 'pct:set-notice-muted',
+  testNotice: 'pct:test-notice',
+  openTarget: 'pct:open-target',
   leave: 'pct:leave',
   setPresence: 'pct:set-presence',
   createTask: 'pct:create-task',
