@@ -26,7 +26,7 @@ afterEach(async () => {
   }
 });
 
-function waitFor(client: SessionClient, check: (state: SessionState) => boolean, timeoutMs = 15_000) {
+function waitFor(client: SessionClient, check: (state: SessionState) => boolean, timeoutMs = 25_000) {
   return new Promise<SessionState>((resolve, reject) => {
     if (check(client.getState())) return resolve(client.getState());
     const timer = setTimeout(() => {
@@ -270,7 +270,8 @@ describe('agent runner', () => {
     const done = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle' && s.locks.length === 1);
     expect(done.chats.find((c) => c.id === chatId)!.activity).toBeNull();
     expect(done.locks.map((l) => l.path)).toEqual(['src/new.gd']);
-  });
+    // Git starts slowly on Windows, and this turn runs it a few times.
+  }, 30_000);
 
   it('frees an agent’s locks on a task when the task is done, and lets a person free one sooner', async () => {
     const { martin, agentClient } = await setup([]);
@@ -378,7 +379,7 @@ describe('agent runner', () => {
 });
 
 // Git starts slowly on Windows, and every turn here runs it a few times.
-describe('agent copies (worktrees)', { timeout: 30_000 }, () => {
+describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
   const gitIn = (cwd: string) => (...args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe' }).toString().trim();
 
   /** A project folder with one commit on main. */
