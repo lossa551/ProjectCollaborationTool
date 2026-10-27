@@ -193,6 +193,8 @@ interface ChatEngine {
   testCommand: ((target?: string) => Promise<string>) | null;
   /** How the tests are run, for the agent's instructions. */
   testHint: string | null;
+  /** The test add-on, as people know it. */
+  testLabel: string;
 }
 
 /** The Godot MCP server's tools that take no project folder. */
@@ -1141,12 +1143,13 @@ export class AgentRunner {
     }
   }
 
-  private async gateCommand(chat: ChatInfo, agent: AgentProfile, command: string, signal: AbortSignal): Promise<string | null> {
+  /** action: what the approval card says, when the app made the command itself (e.g. the tests). */
+  private async gateCommand(chat: ChatInfo, agent: AgentProfile, command: string, signal: AbortSignal, action?: string): Promise<string | null> {
     const decision = checkCommand({ agent }, command);
     if (decision.verdict === 'deny') return decision.reasons.join('; ');
     if (decision.verdict === 'ask') {
       const shown = command.length > 300 ? `${command.slice(0, 300)}…` : command;
-      const approved = await this.askApproval(chat.id, `Run ${shown}`, decision.reasons.join('; '), signal);
+      const approved = await this.askApproval(chat.id, action ?? `Run ${shown}`, decision.reasons.join('; '), signal);
       if (!approved) return signal.aborted ? 'stopped' : 'a person did not approve running this command';
     }
     return null;
@@ -1257,9 +1260,10 @@ export class AgentRunner {
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
     const id = randomUUID();
     const files = this.filesOf(chat.id);
-    const label = TOOL_LABEL[call.name] ?? call.name;
+    const engineLabel = this.bridge?.serverName(call.name) ? (this.bridge.server.kind === 'godot' ? 'Godot' : 'Summer') : null;
+    const label = TOOL_LABEL[call.name] ?? engineLabel ?? call.name;
     const show = (summary: string, status: ToolStatus, output = '') => {
-      if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? label} ${summary}`);
+      if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? (engineLabel ? `${engineLabel}:` : label)} ${summary}`);
       this.postTool(chat.id, id, { name: label, summary, status, output });
     };
     const ok = (content: string): ToolResult => ({ id: call.id, content, isError: false });
@@ -1340,7 +1344,8 @@ export class AgentRunner {
         const tests = run.engine?.testCommand;
         if (!tests) return error('This project has no tests the app can run (it needs Godot’s path in Settings and the GUT or gdUnit4 add-on).');
         const command = await tests(input.value.target);
-        const problem = await this.gateCommand(chat, agent, command, signal);
+        const what = `Run the game’s tests (${run.engine!.testLabel}${input.value.target ? `, ${input.value.target}` : ''})`;
+        const problem = await this.gateCommand(chat, agent, command, signal, what);
         if (problem) return blocked('tests', problem);
         const before = await files.changedFiles();
         const summary = input.value.target ?? 'all tests';
@@ -1411,7 +1416,8 @@ export class AgentRunner {
         this.bridge = null;
       }
     }
-    return { server: tools.length > 0 || agent.connection.type === 'cli' ? server : null, godotDir, projectDir, tools, testCommand, testHint };
+    const testLabel = framework === 'gdunit4' ? 'gdUnit4' : 'GUT';
+    return { server: tools.length > 0 || agent.connection.type === 'cli' ? server : null, godotDir, projectDir, tools, testCommand, testHint, testLabel };
   }
 
   /**
@@ -1458,7 +1464,9 @@ export class AgentRunner {
       else if (!GODOT_NO_PROJECT.has(tool)) input = { ...input, projectPath: engine.projectDir };
     }
     const classified = classifyEngineCall(engine.server!.kind, tool, input, engine.godotDir, files.root);
-    const summary = classified.kind === 'edit' ? `${classified.what}: ${classified.paths.join(', ')}` : classified.what;
+    // The tool line is labelled with the engine already.
+    const what = classified.what.replace(/^(Godot|Summer) /, '');
+    const summary = classified.kind === 'edit' ? `${what} ${classified.paths.join(', ')}` : what;
     const problem = await this.gateEngine(chat, agent, run, classified, signal);
     if (problem) return blocked(summary, problem);
     const before = classified.kind === 'read' ? null : await files.changedFiles();

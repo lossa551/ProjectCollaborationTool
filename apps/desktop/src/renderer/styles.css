@@ -2965,6 +2965,8 @@ input.milestone-date {
 }
 
 .engine-bridge input {
+  width: auto;
+  flex: none;
   margin-top: 3px;
 }
 

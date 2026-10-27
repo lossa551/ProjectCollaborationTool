@@ -707,7 +707,7 @@ describe('agent runner with a game engine', () => {
     expect(calls(log)).toEqual([{ name: 'create_scene', args: { projectPath: project, scenePath: 'res://src/level.tscn' } }]);
     const state = martin.getState();
     expect(state.locks.find((l) => l.path === 'src/level.tscn')).toMatchObject({ holder: { name: 'Builder' }, chatId });
-    expect(state.messages[chatId]!.find((m) => m.tool)?.tool).toMatchObject({ name: 'godot_create_scene', summary: 'Godot create_scene: src/level.tscn', status: 'done' });
+    expect(state.messages[chatId]!.find((m) => m.tool)?.tool).toMatchObject({ name: 'Godot', summary: 'create_scene src/level.tscn', status: 'done' });
     expect(model.requests[0]!.tools.map((t) => t.name)).toEqual(expect.arrayContaining(['write_file', 'godot_create_scene', 'godot_run_project']));
     expect(model.requests[0]!.tools.map((t) => t.name)).not.toContain('run_tests');
     expect(model.requests[0]!.system).toContain(`projectPath is always ${project}`);
@@ -793,7 +793,7 @@ describe('agent runner with a game engine', () => {
     // Summer edits the project open in its editor: the chat works there, with no copy of its own.
     expect(readFileSync(joinPath(root, 'src/jump.gd'), 'utf8')).toBe('extends Node');
     expect(state.chats.find((c) => c.id === chatId)?.worktree ?? null).toBeNull();
-    expect(messages.filter((m) => m.tool).at(-1)?.tool).toMatchObject({ status: 'done', summary: 'Summer engine.write_file: src/jump.gd' });
+    expect(messages.filter((m) => m.tool).at(-1)?.tool).toMatchObject({ name: 'Summer', status: 'done', summary: 'engine.write_file src/jump.gd' });
     expect(messages.filter((m) => m.tool).at(-1)?.tool?.output).toContain('Wrote: res://src/jump.gd');
   });
 });
