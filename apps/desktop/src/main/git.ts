@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
-import type { FileChange } from '@pct/shared';
+import { open } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { DraftChanges, FileChange } from '@pct/shared';
 import type { GitAction, GitInfo } from '../common/api';
 
 // Runs the git installed on this PC for the everyday actions on the GitHub
@@ -302,3 +304,46 @@ export async function pushBranch(cwd: string, branch: string, token: string | nu
 }
 
 const info = (cwd: string) => readGitInfo(cwd);
+
+/** git's id of the empty tree, to diff against before the first commit. */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+/** Most of a new (untracked) file read for a draft. */
+const NEW_FILE_BYTES = 16 * 1024;
+
+/** A new file as a diff section, from its first bytes; binary files are only named. */
+async function newFileDiff(cwd: string, path: string): Promise<string> {
+  const header = `diff --git a/${path} b/${path}\nnew file\n`;
+  try {
+    const file = await open(join(cwd, path), 'r');
+    try {
+      const { buffer, bytesRead } = await file.read(Buffer.alloc(NEW_FILE_BYTES), 0, NEW_FILE_BYTES, 0);
+      const bytes = buffer.subarray(0, bytesRead);
+      if (bytes.includes(0)) return `${header}Binary file\n`;
+      const lines = bytes.toString('utf8').split('\n');
+      if (bytesRead === NEW_FILE_BYTES) lines.pop();
+      return `${header}${lines.map((line) => `+${line}`).join('\n')}\n${bytesRead === NEW_FILE_BYTES ? '… rest of the file left out\n' : ''}`;
+    } finally {
+      await file.close();
+    }
+  } catch {
+    // A folder (an untracked submodule or nested repository) or a file that went away.
+    return header;
+  }
+}
+
+/** Your uncommitted changes, for an agent drafting the commit message. */
+export async function uncommittedChanges(cwd: string): Promise<Omit<DraftChanges, 'task'>> {
+  const { uncommitted } = await readGitInfo(cwd);
+  const head = await tryRun(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
+  const base = (await hasRef(cwd, 'HEAD')) ? 'HEAD' : EMPTY_TREE;
+  const stat = (await tryRun(['diff', '--stat=100', '--no-color', base], cwd)) ?? '';
+  const tracked = (await tryRun(['diff', '--no-color', '--no-ext-diff', '-U3', base], cwd)) ?? '';
+  const untracked = uncommitted.filter((f) => f.change === 'untracked').slice(0, 100);
+  const added = await Promise.all(untracked.map((f) => newFileDiff(cwd, f.path)));
+  return {
+    branch: head && head !== 'HEAD' ? head : null,
+    files: uncommitted,
+    stat,
+    diff: [tracked.trimEnd(), ...added].filter(Boolean).join('\n'),
+  };
+}

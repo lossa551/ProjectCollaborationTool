@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, DEFAULT_PRICES, SessionClient, newIdentity, type SessionState, type UsageReport } from '@pct/shared';
+import { DEFAULT_APPROVALS, DEFAULT_PRICES, SessionClient, commitDraftUsageId, newIdentity, type SessionState, type UsageReport } from '@pct/shared';
 import { SqliteStorage, startServer, type RunningServer } from '@pct/server';
 
 let server: RunningServer | null = null;
@@ -93,6 +93,17 @@ describe('agent usage', () => {
     martin.recordUsage(call(chatId));
     await waitFor(martin, (s) => s.error?.code === 'not_allowed');
 
+    // A commit message draft counts as the agent's own, for the task it names; nobody else reports under it.
+    const draftId = commitDraftUsageId(agents[0]!.id);
+    agent.recordUsage(call(draftId, { taskId }));
+    await waitFor(friend, (s) => s.usage.some((r) => r.chatId === draftId));
+    expect(friend.getState().usage.find((r) => r.chatId === draftId)).toMatchObject({ agentId: agents[0]!.id, taskId, calls: 1 });
+    other.recordUsage(call(draftId));
+    martin.recordUsage(call(commitDraftUsageId('someone')));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(friend.getState().usage.find((r) => r.chatId === draftId)?.calls).toBe(1);
+    expect(friend.getState().usage).toHaveLength(2);
+
     martin.setPrices([{ model: 'deepseek', input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
     await waitFor(friend, (s) => s.prices.length === 1);
     // An agent cannot raise its own budget.
@@ -110,7 +121,7 @@ describe('agent usage', () => {
     await server.close();
     server = await startServer({ port: 0, host: '127.0.0.1', storage: new SqliteStorage(path) });
     const back = await join('Martin');
-    expect(back.getState().usage[0]).toMatchObject({ calls: 2, cost: 0.75 });
+    expect(back.getState().usage.find((r) => r.chatId === chatId)).toMatchObject({ calls: 2, cost: 0.75 });
     expect(back.getState().prices).toEqual([{ model: 'deepseek', input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
     expect(back.getState().tasks[0]?.budget).toBe(5);
     expect(back.getState().chats[0]?.budget).toBe(1.5);

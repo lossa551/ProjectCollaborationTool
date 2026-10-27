@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, SessionClient, newIdentity, type AgentProfile, type SessionState } from '@pct/shared';
+import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, type AgentProfile, type SessionState } from '@pct/shared';
 import { startServer, type RunningServer } from '@pct/server';
 import { AgentRunner, type AgentRunnerOptions, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
 
@@ -653,5 +653,20 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Done.' && !m.streaming));
     await waitFor(martin, (s) => s.usage.find((r) => r.chatId === chatId)?.calls === 3);
   });
-});
 
+  it('drafts a commit message with no tools, and counts it for the agent and the task', async () => {
+    const usage = { input: 3000, output: 80, cacheRead: 0, cacheWrite: 0 };
+    const { martin, agentClient, profile, model } = await setup([
+      { text: 'Add a double jump\n\n- Second jump while airborne', toolCalls: [], stop: 'end', usage, model: 'claude-opus-5-5' },
+    ]);
+    const taskId = martin.createTask('Double jump');
+    await waitFor(agentClient, (s) => s.tasks.length === 1);
+    const text = await runners[0]!.draft('Write a commit message for: +jump()', taskId, new AbortController().signal);
+    expect(text).toBe('Add a double jump\n\n- Second jump while airborne');
+    expect(model.requests[0]!.tools).toEqual([]);
+    expect(model.requests[0]!.messages).toEqual([{ role: 'user', text: 'Write a commit message for: +jump()' }]);
+    const state = await waitFor(martin, (s) => s.usage.length === 1);
+    expect(state.usage[0]).toMatchObject({ chatId: commitDraftUsageId(profile.id), agentId: profile.id, taskId, calls: 1, input: 3000, output: 80 });
+    expect(state.chats).toHaveLength(0);
+  });
+});

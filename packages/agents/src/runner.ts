@@ -7,6 +7,7 @@ import {
   AGENT_ERROR_PREFIX,
   approvalActivity,
   budgetsFor,
+  commitDraftUsageId,
   formatCost,
   priceFor,
   tokenCost,
@@ -212,6 +213,72 @@ export class AgentRunner {
     this.waiters.clear();
     await this.hook?.stop();
     this.hook = null;
+  }
+
+  /**
+   * Answers one prompt outside any chat, with no tools: used to draft a
+   * commit message. What the call uses counts for this agent and the task.
+   */
+  async draft(prompt: string, taskId: string | null, signal: AbortSignal): Promise<string> {
+    const agent = this.profile();
+    if (!agent) throw new Error('This agent no longer exists.');
+    const usageId = commitDraftUsageId(agent.id);
+    const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null) =>
+      this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId });
+    const connection = agent.connection;
+    if (connection.type === 'api') {
+      const factory = this.options.createModel;
+      if (!factory) throw new Error('This PC cannot run API agents');
+      const turn = await factory(agent).complete({
+        system: `You are ${agent.name}, writing git commit messages for a project you work on with people.`,
+        messages: [{ role: 'user', text: prompt }],
+        tools: [],
+        signal,
+        onText: () => {},
+      });
+      if (turn.usage) record(turn.model ?? connection.model, connection.provider === 'ollama' ? 'free' : 'priced', turn.usage, null);
+      if (turn.stop === 'refusal') throw new Error('The model declined to write a message.');
+      return turn.text;
+    }
+    const settings = this.options.cli;
+    if (!settings) throw new Error('This PC cannot run command-line agents');
+    const tool = connection.tool;
+    const command = settings.commands?.[tool] ?? CLI_TOOLS[tool].command;
+    const fallbackModel = connection.model ?? tool;
+    const texts: string[] = [];
+    const live = new Map<string, { model: string | null; usage: TokenUsage }>();
+    let reported = false;
+    let failure: string | null = null;
+    const onEvent = (event: CliEvent) => {
+      if (event.type === 'text') texts.push(event.text);
+      else if (event.type === 'error') failure = event.message;
+      else if (event.type === 'progress') live.set(event.id, { model: event.model, usage: event.usage });
+      else if (event.type === 'usage') {
+        reported = true;
+        record(event.model ?? fallbackModel, event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
+      }
+    };
+    let result: { exitCode: number | null; stderr: string };
+    if (tool === 'claude-code') {
+      // Through the hook with no chat behind it, so every tool is refused.
+      const hook = await this.hookServer();
+      const args = ['-p', '--output-format', 'stream-json', '--verbose', '--settings', hook.claudeSettingsFile(settings.hookScript, settings.nodePath)];
+      if (connection.model) args.push('--model', connection.model);
+      result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env, ...settings.hookEnv, ...hook.env(usageId) }, prompt, signal, parse: parseClaudeLine, onEvent });
+    } else {
+      const args = ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check'];
+      if (connection.model) args.push('-m', connection.model);
+      args.push('-');
+      result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env }, prompt, signal, parse: parseCodexLine, onEvent });
+    }
+    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null);
+    if (signal.aborted) throw new Error('stopped');
+    if (failure || (result.exitCode !== 0 && result.exitCode !== null)) {
+      const detail = failure ?? (result.stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${result.exitCode}`);
+      throw new Error(`${CLI_TOOLS[tool].label}: ${detail}`);
+    }
+    if (result.exitCode === null) throw new Error(`${CLI_TOOLS[tool].label} could not be started. Is it installed?`);
+    return texts.at(-1) ?? '';
   }
 
   private profile(): AgentProfile | undefined {

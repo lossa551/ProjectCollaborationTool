@@ -10,6 +10,7 @@ import {
   addUsage,
   formatCost,
   usageKey,
+  commitDraftUsageId,
   SOCKET_PATH,
   decodeBytes,
   encodeBytes,
@@ -605,10 +606,13 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
         case 'usage.record': {
-          // Only a chat's own agent reports what it used.
-          const chat = chats.getChat(message.usage.chatId);
+          // Only a chat's own agent reports what it used; drafts (commit messages) count as the agent's own.
+          const profileId = participant.agent?.profileId;
+          const chat =
+            chats.getChat(message.usage.chatId) ??
+            (profileId && message.usage.chatId === commitDraftUsageId(profileId) ? { agentId: profileId, taskId: message.usage.taskId ?? null } : null);
           if (!chat) break;
-          if (participant.agent?.profileId !== chat.agentId) return fail(conn, 'not_allowed', 'Only the chat’s agent reports its usage');
+          if (profileId !== chat.agentId) return fail(conn, 'not_allowed', 'Only the chat’s agent reports its usage');
           const key = usageKey(message.usage);
           const row: UsageRow = addUsage(usage.get(key), message.usage, chat);
           usage.set(key, row);
