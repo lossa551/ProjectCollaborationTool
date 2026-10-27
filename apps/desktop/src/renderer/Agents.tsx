@@ -7,6 +7,9 @@ import {
   DEFAULT_APPROVALS,
   apiKeyName,
   describeConnection,
+  totalUsage,
+  usageDay,
+  weekStart,
   type AgentApprovals,
   type AgentConnection,
   type AgentProfile,
@@ -15,6 +18,7 @@ import {
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
+import { CostShort } from './Cost';
 
 // Screen 5: each agent's connection, responsibilities, allowed paths and what
 // it needs approval for. Profiles are shared with the session; an agent runs
@@ -114,6 +118,7 @@ function AgentCard({ agent, state, onEdit, onChat }: { agent: AgentProfile; stat
         {APPROVAL_FIELDS.map((field) => (
           <FragmentRow key={field.key} label={field.label} value={POLICY_LABEL[agent.approvals[field.key]]} />
         ))}
+        <AgentSpend agent={agent} state={state} />
       </dl>
       <p className="small">
         {runner ? (
@@ -145,6 +150,27 @@ function AgentCard({ agent, state, onEdit, onChat }: { agent: AgentProfile; stat
         </button>
       </div>
     </section>
+  );
+}
+
+/** What the agent cost today and this week (since Monday), over all its chats. */
+function AgentSpend({ agent, state }: { agent: AgentProfile; state: AppState }) {
+  const { usage, prices } = state.session;
+  const rows = usage.filter((r) => r.agentId === agent.id);
+  const now = Date.now();
+  const today = usageDay(now);
+  const monday = weekStart(now);
+  return (
+    <>
+      <dt>Today</dt>
+      <dd>
+        <CostShort total={totalUsage(rows.filter((r) => r.day === today), prices)} />
+      </dd>
+      <dt>This week</dt>
+      <dd>
+        <CostShort total={totalUsage(rows.filter((r) => r.day >= monday), prices)} />
+      </dd>
+    </>
   );
 }
 

@@ -6,6 +6,11 @@ import {
   WORKSPACE_FILE_LIMIT,
   AGENT_ERROR_PREFIX,
   approvalActivity,
+  budgetsFor,
+  formatCost,
+  priceFor,
+  tokenCost,
+  usageDay,
   lockWaitActivity,
   notesForPaths,
   samePath,
@@ -22,7 +27,9 @@ import {
   type ServerMessage,
   type SessionClient,
   type Task,
+  type TokenUsage,
   type ToolStatus,
+  type UsageSource,
   type UndoMode,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
@@ -133,7 +140,15 @@ interface ChatRun {
   lastTurn: number;
   /** Told to the agent with its next prompt, e.g. that a person undid one of its turns. */
   notes: string[];
+  /** Per budget (see budgetsFor), how far a person said the agent may go past it. */
+  budgetOk: Map<string, number>;
+  /** Model calls of the CLI run going on now, by id, until the tool reports the run's usage. */
+  live: Map<string, { model: string | null; usage: TokenUsage }>;
+  /** Said in the chat instead of "Stopped." when the run was stopped for a reason. */
+  stopNotice: string | null;
 }
+
+const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
 /** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
 const NOTE_CHARS = 8000;
@@ -232,6 +247,9 @@ export class AgentRunner {
         doneDuringTurn: false,
         lastTurn: 0,
         notes: [],
+        budgetOk: new Map(),
+        live: new Map(),
+        stopNotice: null,
       };
       this.runs.set(chatId, run);
     }
@@ -334,6 +352,7 @@ export class AgentRunner {
 
         run.abort = new AbortController();
         run.stoppedBy = null;
+        run.stopNotice = null;
         run.approvedPaths.clear();
         try {
           await this.workspaceFor(chat, run);
@@ -345,7 +364,7 @@ export class AgentRunner {
           else await this.runCliAgent(chat, agent, run, prompt, messages, fresh);
         } catch (error) {
           if (run.abort.signal.aborted) {
-            this.notice(chatId, run.stoppedBy ? `Stopped by ${run.stoppedBy}.` : 'Stopped.');
+            this.notice(chatId, run.stopNotice ?? (run.stoppedBy ? `Stopped by ${run.stoppedBy}.` : 'Stopped.'));
           } else {
             this.notice(chatId, `${AGENT_ERROR_PREFIX}${error instanceof Error ? error.message : String(error)}`);
             this.log(`agent ${agent.name} failed: ${String(error)}`);
@@ -764,6 +783,48 @@ export class AgentRunner {
     };
   }
 
+  private recordUsage(chatId: string, model: string, source: UsageSource, usage: TokenUsage, cost: number | null) {
+    this.client.recordUsage({ chatId, model, source, ...usage, cost, day: usageDay(Date.now()) });
+  }
+
+  /** What the CLI run going on now has used, by the price table, before the tool reports it. */
+  private liveCost(run: ChatRun, fallbackModel: string | null): number {
+    const prices = this.client.getState().prices;
+    let cost = 0;
+    for (const call of run.live.values()) cost += tokenCost(call.usage, priceFor(call.model ?? fallbackModel ?? '', prices)) ?? 0;
+    return cost;
+  }
+
+  /**
+   * Checks the chat's and its task's budgets. Over one, the agent shows an
+   * approval card and goes on only if a person approves; it then asks again
+   * after another budget's worth. Resolves false to stop here.
+   */
+  private async withinBudget(chat: ChatInfo, run: ChatRun, signal: AbortSignal): Promise<boolean> {
+    for (;;) {
+      const state = this.client.getState();
+      const current = state.chats.find((c) => c.id === chat.id) ?? chat;
+      const task = state.tasks.find((t) => t.id === current.taskId) ?? null;
+      const agent = this.profile();
+      const extra = this.liveCost(run, agent?.connection.model ?? null);
+      const over = budgetsFor(current, task, state.usage, state.prices, extra).find(
+        (b) => b.spent >= Math.max(b.limit, run.budgetOk.get(b.key) ?? 0),
+      );
+      if (!over) return true;
+      if (signal.aborted) return false;
+      const approved = await this.askApproval(
+        chat.id,
+        `Keep going past the ${formatCost(over.limit)} budget`,
+        `${capitalize(over.label)} has spent ${formatCost(over.spent)} of its ${formatCost(over.limit)} budget. ` +
+          `If you approve, the agent goes on and asks again after another ${formatCost(over.limit)}.`,
+        signal,
+      );
+      if (!approved) return false;
+      run.budgetOk.set(over.key, over.spent + over.limit);
+      // The other budget may be used up too: check again.
+    }
+  }
+
   private notice(chatId: string, text: string) {
     this.client.postChat(chatId, { kind: 'notice', text });
   }
@@ -996,7 +1057,14 @@ export class AgentRunner {
     history.push({ role: 'user', text: prompt });
     const signal = run.abort!.signal;
     const maxSteps = this.options.maxSteps ?? 40;
+    const connection = agent.connection;
+    const source: UsageSource = connection.type === 'api' && connection.provider === 'ollama' ? 'free' : 'priced';
     for (let step = 0; step < maxSteps; step++) {
+      if (!(await this.withinBudget(chat, run, signal))) {
+        if (signal.aborted) throw new Error('stopped');
+        this.notice(chat.id, BUDGET_PAUSED);
+        return;
+      }
       const current = this.chat(chat.id) ?? chat;
       const task = this.client.getState().tasks.find((t) => t.id === current.taskId) ?? null;
       const writer = this.textWriter(chat.id);
@@ -1008,6 +1076,7 @@ export class AgentRunner {
         onText: writer.append,
       });
       writer.finish(turn.text);
+      if (turn.usage) this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null);
       if (turn.stop === 'refusal') {
         history.push({ role: 'assistant', text: turn.text, toolCalls: [] });
         this.notice(chat.id, 'The model declined to continue with this request.');
@@ -1132,6 +1201,17 @@ export class AgentRunner {
     const files = this.filesOf(chat.id);
     const before = await files.changedFiles();
 
+    // A budget used up before the run starts: ask first.
+    if (!(await this.withinBudget(chat, run, signal))) {
+      if (signal.aborted) throw new Error('stopped');
+      this.notice(chat.id, BUDGET_PAUSED);
+      return;
+    }
+    // Usage is recorded under the model the tool names, else the one set for the agent.
+    const fallbackModel = agent.connection.model ?? tool;
+    let reported = false;
+    run.live.clear();
+
     // Tool lines by the CLI's own tool ids.
     const toolMessages = new Map<string, { id: string; name: string; summary: string }>();
     let failure: string | null = null;
@@ -1160,6 +1240,13 @@ export class AgentRunner {
         }
         case 'error':
           failure = event.message;
+          break;
+        case 'progress':
+          run.live.set(event.id, { model: event.model, usage: event.usage });
+          break;
+        case 'usage':
+          reported = true;
+          this.recordUsage(chat.id, event.model ?? fallbackModel, event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
           break;
       }
     };
@@ -1200,6 +1287,11 @@ export class AgentRunner {
         onEvent,
       });
     }
+    // A run stopped before the tool reported its usage still counts what it used so far.
+    if (!reported) {
+      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null);
+    }
+    run.live.clear();
     // Open tool lines of a stopped or failed run stay readable.
     for (const entry of toolMessages.values()) {
       if (signal.aborted) this.postTool(chat.id, entry.id, { name: entry.name, summary: entry.summary, status: 'failed', output: 'stopped' });
@@ -1231,6 +1323,14 @@ export class AgentRunner {
       this.notice(chat.id, `Blocked ${request.toolName}: ${reason}.`);
       return { allow: false, reason: `Blocked by the collaboration app: ${reason}. Do not try another way; tell the people in the chat what you need.` };
     };
+    // The run so far may have used up a budget: ask before it does more.
+    if (!(await this.withinBudget(chat, run, signal))) {
+      if (!signal.aborted) {
+        run.stopNotice = BUDGET_PAUSED;
+        run.abort.abort();
+      }
+      return { allow: false, reason: 'The budget for this work is used up; a person has to raise it first.' };
+    }
     switch (request.toolName) {
       case 'Write':
       case 'Edit':
@@ -1316,3 +1416,5 @@ function repairHistory(history: LoopMessage[] | null) {
     history.push({ role: 'tool', results: last.toolCalls.map((c) => ({ id: c.id, content: 'Stopped before this ran.', isError: true })) });
   }
 }
+
+const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);

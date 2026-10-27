@@ -74,7 +74,13 @@ export class AnthropicAdapter implements ModelAdapter {
       }
       const text = message.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
       const toolCalls = message.content.flatMap((b) => (b.type === 'tool_use' ? [{ id: b.id, name: b.name, input: b.input }] : []));
-      return { text, toolCalls, stop: STOP[message.stop_reason ?? ''] ?? 'other', raw: message.content };
+      const usage = {
+        input: message.usage.input_tokens,
+        output: message.usage.output_tokens,
+        cacheRead: message.usage.cache_read_input_tokens ?? 0,
+        cacheWrite: message.usage.cache_creation_input_tokens ?? 0,
+      };
+      return { text, toolCalls, stop: STOP[message.stop_reason ?? ''] ?? 'other', raw: message.content, usage, model: message.model };
     }
   }
 }

@@ -6,6 +6,7 @@ import type {
   IssueLinkKind,
   CriterionState,
   LockRules,
+  PriceTable,
   MemoryOp,
   NeedTarget,
   NoticeKind,
@@ -245,6 +246,8 @@ export interface PctApi {
   releaseLock(lockId: string): void;
   recoverLock(lockId: string): void;
   setLockRules(rules: LockRules): void;
+  /** The session's model prices, per million tokens. */
+  setPrices(prices: PriceTable): void;
   /** Asks for your project folder and starts sharing its branch and changed files. */
   chooseWorkspace(): Promise<Result>;
   stopWorkspace(): void;
@@ -271,7 +274,7 @@ export interface PctApi {
   createChat(request: { agentId: string; title: string; taskId: string | null }): Promise<ResultWith<string>>;
   /** Starts a new chat with the messages up to and including one message; returns the new chat's id. */
   branchChat(request: { fromChatId: string; fromMessageId: string; title: string; agentId: string }): Promise<ResultWith<string>>;
-  updateChat(chatId: string, changes: { title?: string; taskId?: string | null }): void;
+  updateChat(chatId: string, changes: { title?: string; taskId?: string | null; budget?: number | null }): void;
   /** Asks first (and about the agent's copy, if this PC holds one with unmerged work), then deletes the chat for everyone. */
   deleteChat(chatId: string): Promise<Result>;
   /** Acts on a chat's own copy of the project, which is on this PC; the value says what happened. */
@@ -350,6 +353,7 @@ export const Channel = {
   releaseLock: 'pct:release-lock',
   recoverLock: 'pct:recover-lock',
   setLockRules: 'pct:set-lock-rules',
+  setPrices: 'pct:set-prices',
   chooseWorkspace: 'pct:choose-workspace',
   stopWorkspace: 'pct:stop-workspace',
   cloneRepo: 'pct:clone-repo',

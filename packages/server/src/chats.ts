@@ -107,6 +107,7 @@ export class AgentChats {
       state: 'idle',
       activity: null,
       context: null,
+      budget: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -155,6 +156,7 @@ export class AgentChats {
       state: 'idle',
       activity: null,
       context: null,
+      budget: null,
       createdAt: now,
       updatedAt: now,
     };
@@ -188,13 +190,14 @@ export class AgentChats {
     return { ok: true, value: { chat, messages }, description: `branched "${parent.title}" into "${chat.title}"` };
   }
 
-  updateChat(chatId: string, changes: { title?: string; taskId?: string | null }, now = Date.now()): ChatResult<ChatInfo> {
+  updateChat(chatId: string, changes: { title?: string; taskId?: string | null; budget?: number | null }, now = Date.now()): ChatResult<ChatInfo> {
     const chat = this.chats.get(chatId);
     if (!chat) return { ok: false, code: 'not_found', message: 'That chat no longer exists' };
     const next: ChatInfo = {
       ...chat,
       title: changes.title ?? chat.title,
       taskId: changes.taskId !== undefined ? changes.taskId : chat.taskId,
+      budget: changes.budget !== undefined ? changes.budget : chat.budget,
       updatedAt: now,
     };
     this.chats.set(chatId, next);

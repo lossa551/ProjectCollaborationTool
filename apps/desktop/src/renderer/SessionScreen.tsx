@@ -11,6 +11,7 @@ import { IssuesScreen } from './Issues';
 import { LocksScreen } from './Locks';
 import { MemoryScreen } from './Memory';
 import { NotificationSettings } from './Notifications';
+import { PriceSettings } from './Cost';
 import { PlanningScreen } from './Planning';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
@@ -272,6 +273,7 @@ export function SessionScreen({ state }: { state: AppState }) {
                 setView('agents');
               }}
             />
+            <PriceSettings state={state} />
             <NotificationSettings state={state} />
           </div>
         ) : view === 'agents' ? (
@@ -353,6 +355,8 @@ export function SessionScreen({ state }: { state: AppState }) {
           youId={youId}
           editable={editable}
           online={online}
+          usage={session.usage}
+          prices={session.prices}
           onClose={() => setSelectedId(null)}
         />
       ) : view === 'agents' && openChat ? (

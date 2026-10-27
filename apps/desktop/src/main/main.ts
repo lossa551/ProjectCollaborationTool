@@ -14,6 +14,8 @@ import {
   IssueLinkKind,
   LockAcquireMessage,
   LockRules,
+  Budget,
+  PriceTable,
   MEMORY_EXPORT_PATH,
   MemoryOp,
   PlanApproval,
@@ -1189,6 +1191,10 @@ ipcMain.on(Channel.releaseLock, (_event, lockId: unknown) => {
 ipcMain.on(Channel.recoverLock, (_event, lockId: unknown) => {
   if (typeof lockId === 'string') client.recoverLock(lockId);
 });
+ipcMain.on(Channel.setPrices, (_event, prices: unknown) => {
+  const parsed = PriceTable.safeParse(prices);
+  if (parsed.success) client.setPrices(parsed.data);
+});
 ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
   const parsed = LockRules.safeParse(rules);
   if (parsed.success) client.setLockRules(parsed.data);
@@ -1291,12 +1297,18 @@ ipcMain.handle(
     };
   },
 );
-ipcMain.on(Channel.updateChat, (_event, chatId: unknown, changes: { title?: unknown; taskId?: unknown }) => {
+ipcMain.on(Channel.updateChat, (_event, chatId: unknown, changes: { title?: unknown; taskId?: unknown; budget?: unknown }) => {
   if (typeof chatId !== 'string' || !changes) return;
   const title = changes.title === undefined ? undefined : ChatTitle.safeParse(changes.title);
   if (title && !title.success) return;
   const taskId = changes.taskId === undefined ? undefined : typeof changes.taskId === 'string' ? changes.taskId : null;
-  client.updateChat(chatId, { ...(title && { title: title.data }), ...(taskId !== undefined && { taskId }) });
+  const budget = changes.budget === undefined ? undefined : Budget.nullable().safeParse(changes.budget);
+  if (budget && !budget.success) return;
+  client.updateChat(chatId, {
+    ...(title && { title: title.data }),
+    ...(taskId !== undefined && { taskId }),
+    ...(budget && { budget: budget.data }),
+  });
 });
 ipcMain.handle(Channel.deleteChat, (_event, chatId: unknown) => deleteChat(chatId));
 ipcMain.handle(Channel.worktreeAction, (_event, chatId: unknown, action: unknown) => worktreeAction(chatId, action));

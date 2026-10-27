@@ -7,6 +7,7 @@ import {
   AgentProfile,
   ApprovalState,
   BranchName,
+  Budget,
   ChatActivity,
   ChatAgentState,
   ChatContext,
@@ -44,9 +45,10 @@ import { BloatReport } from './bloat.js';
 import { ISSUE_BODY_LIMIT, ISSUE_COMMENT_LIMIT, ISSUE_TITLE_LIMIT } from './issues.js';
 import { IssueNumber } from './planning.js';
 import { DocId, EncodedUpdate } from './docs.js';
+import { PriceTable, UsageReport, UsageRow } from './usage.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -111,6 +113,8 @@ const TaskFields = z.object({
   /** A branch name, or null to unlink. */
   branch: BranchName.nullable().optional(),
   criteria: CriteriaTexts.optional(),
+  /** Dollars all the task's agent chats may spend, or null for no limit. */
+  budget: Budget.nullable().optional(),
 });
 
 export const TaskUpdateMessage = z.object({
@@ -259,6 +263,8 @@ export const ChatUpdateMessage = z.object({
   chatId: z.string(),
   title: ChatTitle.optional(),
   taskId: z.string().nullable().optional(),
+  /** Dollars the chat's agent may spend, or null for no limit. */
+  budget: Budget.nullable().optional(),
 });
 
 export const ChatDeleteMessage = z.object({
@@ -339,6 +345,18 @@ export const ChatUndoMessage = z.object({
   mode: UndoMode,
 });
 
+/** An agent's runner reports what a model call used. */
+export const UsageRecordMessage = z.object({
+  type: z.literal('usage.record'),
+  usage: UsageReport,
+});
+
+/** Changes the session's model prices. */
+export const PricesUpdateMessage = z.object({
+  type: z.literal('prices.update'),
+  prices: PriceTable,
+});
+
 export const ClientMessage = z.discriminatedUnion('type', [
   HelloMessage,
   PresenceUpdateMessage,
@@ -371,6 +389,8 @@ export const ClientMessage = z.discriminatedUnion('type', [
   ChatWorktreeMessage,
   ChatStopMessage,
   ChatUndoMessage,
+  UsageRecordMessage,
+  PricesUpdateMessage,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -392,6 +412,9 @@ export const WelcomeMessage = z.object({
   agents: z.array(AgentProfile),
   chats: z.array(ChatInfo),
   bloat: BloatReport.nullable(),
+  /** What agents used, per chat, day and model. */
+  usage: z.array(UsageRow),
+  prices: PriceTable,
 });
 
 export const ParticipantJoinedMessage = z.object({
@@ -542,6 +565,16 @@ export const SessionSecretMessage = z.object({
   secret: z.string().min(1),
 });
 
+export const UsageChangedMessage = z.object({
+  type: z.literal('usage.changed'),
+  row: UsageRow,
+});
+
+export const PricesChangedMessage = z.object({
+  type: z.literal('prices.changed'),
+  prices: PriceTable,
+});
+
 export const PongMessage = z.object({
   type: z.literal('pong'),
   t: z.number(),
@@ -596,6 +629,8 @@ export const ServerMessage = z.discriminatedUnion('type', [
   DocChangedMessage,
   BloatChangedMessage,
   SessionSecretMessage,
+  UsageChangedMessage,
+  PricesChangedMessage,
   PongMessage,
   ErrorMessage,
 ]);
@@ -640,6 +675,8 @@ export const SessionSnapshot = z.object({
   agents: z.array(AgentProfile).default([]),
   chats: z.array(ChatInfo).default([]),
   bloat: BloatReport.nullable().default(null),
+  usage: z.array(UsageRow).default([]),
+  prices: PriceTable.optional(),
   /** Each shared document's full Yjs state, including edits not synced yet. */
   docs: z.partialRecord(DocId, z.string()).default({}),
   queue: z.array(z.discriminatedUnion('type', [TaskCreateMessage, TaskUpdateMessage, TaskDeleteMessage, TaskVerifyMessage])),

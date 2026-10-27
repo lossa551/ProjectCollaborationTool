@@ -615,5 +615,42 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     const state = await waitFor(martin, (s) => s.error?.code === 'conflict');
     expect(state.error!.message).toMatch(/Builder is not running\. Start it on Martin’s PC/);
   });
+
+  it('records what each model call used, and pauses at a budget until a person says to go on', async () => {
+    const usage = { input: 200_000, output: 10_000, cacheRead: 0, cacheWrite: 0 };
+    // claude-opus-5-5: 200k in at $4 and 10k out at $20 per million = $1.00 a call.
+    const { martin, profile, model } = await setup([
+      { text: 'Looking.', toolCalls: [{ id: 't1', name: 'list_files', input: {} }], stop: 'tool_use', usage, model: 'claude-opus-5-5' },
+      { text: 'Still looking.', toolCalls: [{ id: 't2', name: 'list_files', input: {} }], stop: 'tool_use', usage, model: 'claude-opus-5-5' },
+      { text: 'Done.', toolCalls: [], stop: 'end', usage, model: 'claude-opus-5-5' },
+    ]);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Spend' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.updateChat(chatId, { budget: 1.5 });
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.budget === 1.5);
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Look around' });
+
+    // Two calls ($2.00) go past the $1.50 budget: the third waits for a person.
+    const asking = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.approval?.state === 'pending'));
+    const card = asking.messages[chatId]!.find((m) => m.approval?.state === 'pending')!;
+    expect(card.approval!.action).toBe('Keep going past the $1.50 budget');
+    expect(card.approval!.reason).toContain('This chat has spent $2.00 of its $1.50 budget');
+    expect(model.requests).toHaveLength(2);
+    const rows = asking.usage.filter((r) => r.chatId === chatId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ agentId: profile.id, model: 'claude-opus-5-5', source: 'priced', calls: 2, input: 400_000, output: 20_000 });
+
+    martin.decideApproval(chatId, card.id, false);
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'notice' && m.text.startsWith('Paused: the budget is used up')));
+    expect(model.requests).toHaveLength(2);
+
+    // Asked again with the next message; approved, it finishes.
+    martin.postChat(chatId, { kind: 'text', text: 'Go on' });
+    const again = await waitFor(martin, (s) => (s.messages[chatId] ?? []).filter((m) => m.approval).length === 2 && (s.messages[chatId] ?? []).some((m) => m.approval?.state === 'pending'));
+    martin.decideApproval(chatId, again.messages[chatId]!.find((m) => m.approval?.state === 'pending')!.id, true);
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Done.' && !m.streaming));
+    await waitFor(martin, (s) => s.usage.find((r) => r.chatId === chatId)?.calls === 3);
+  });
 });
 
