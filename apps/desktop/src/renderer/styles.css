@@ -314,6 +314,56 @@ textarea:disabled {
 
 /* Board */
 
+.board-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.board-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.board-search {
+  flex: 0 1 280px;
+  min-width: 160px;
+}
+
+.filter-chip {
+  padding: 4px 12px;
+  border-radius: 99px;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.filter-chip.active {
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  border-color: var(--accent);
+}
+
+.column-empty {
+  margin: 0;
+}
+
+.commit-locks {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.commit-locks p {
+  margin: 0 0 6px;
+}
+
 .board {
   display: grid;
   grid-template-columns: repeat(5, minmax(130px, 1fr));

@@ -1,14 +1,21 @@
-import { useState, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react';
 import {
+  BOARD_FILTERS,
+  BOARD_FILTER_HINTS,
+  BOARD_FILTER_LABELS,
   STAGE_LABELS,
   TaskStage,
+  filterBoard,
   overlapsForTask,
   pullForBranch,
+  type BoardFilter,
   type ChatInfo,
+  type ChatMessage,
   type GitHubStatus,
   type Lock,
   type Overlap,
   type Participant,
+  type PlanItem,
   type PullRequest,
   type Task,
 } from '@pct/shared';
@@ -26,6 +33,9 @@ export function Board({
   github,
   overlaps,
   chats,
+  messages,
+  planning,
+  youId,
   editable,
   selectedId,
   onSelect,
@@ -36,11 +46,36 @@ export function Board({
   github: GitHubStatus;
   overlaps: Overlap[];
   chats: ChatInfo[];
+  messages: Record<string, ChatMessage[]>;
+  planning: PlanItem[];
+  youId: string | null;
   editable: boolean;
   selectedId: string | null;
   onSelect: (taskId: string) => void;
 }) {
   const [dropTarget, setDropTarget] = useState<TaskStage | null>(null);
+  const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<BoardFilter[]>([]);
+  const search = useRef<HTMLInputElement>(null);
+  const shown = useMemo(
+    () => filterBoard({ tasks, chats, messages, github, locks, planning }, youId, query, filters),
+    [tasks, chats, messages, github, locks, planning, youId, query, filters],
+  );
+  const narrowed = query.trim() !== '' || filters.length > 0;
+  const toggle = (filter: BoardFilter) => setFilters((current) => (current.includes(filter) ? current.filter((f) => f !== filter) : [...current, filter]));
+
+  // Ctrl+F searches the board.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        search.current?.focus();
+        search.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const drop = (event: DragEvent, stage: TaskStage) => {
     event.preventDefault();
@@ -50,48 +85,95 @@ export function Board({
     if (task && task.stage !== stage) window.pct.updateTask(taskId, { stage });
   };
 
+  const columns = STAGES.map((stage) => ({ stage, tasks: shown.filter((t) => t.stage === stage), total: tasks.filter((t) => t.stage === stage).length }));
+  // Empty columns shrink so the full ones get the room.
+  const template = columns.map((c) => (c.tasks.length > 0 ? 'minmax(130px, 1fr)' : 'minmax(96px, 0.4fr)')).join(' ');
+
   return (
-    <div className="board">
-      {STAGES.map((stage) => {
-        const column = tasks.filter((t) => t.stage === stage);
-        return (
-          <section
-            key={stage}
-            className={`column${dropTarget === stage ? ' drop-target' : ''}`}
-            onDragOver={(event) => {
-              if (!editable || !event.dataTransfer.types.includes(DRAG_TYPE)) return;
-              event.preventDefault();
-              setDropTarget(stage);
-            }}
-            onDragLeave={() => setDropTarget((current) => (current === stage ? null : current))}
-            onDrop={(event) => drop(event, stage)}
+    <div className="board-screen">
+      <div className="board-toolbar">
+        <input
+          ref={search}
+          type="search"
+          className="board-search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+          placeholder="Search tasks (Ctrl+F)"
+          aria-label="Search tasks"
+        />
+        {BOARD_FILTERS.map((filter) => (
+          <button
+            key={filter}
+            className={`filter-chip${filters.includes(filter) ? ' active' : ''}`}
+            aria-pressed={filters.includes(filter)}
+            title={BOARD_FILTER_HINTS[filter]}
+            onClick={() => toggle(filter)}
           >
-            <header>
-              <h3>{STAGE_LABELS[stage]}</h3>
-              <span className="muted">{column.length}</span>
-            </header>
-            <div className="cards">
-              {column.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  locks={locks.filter((l) => l.taskId === task.id)}
-                  ownerOnline={!!task.owner && participants.some((p) => p.id === task.owner!.id)}
-                  pull={pullForBranch(github, task.branch)}
-                  overlaps={overlapsForTask(overlaps, task)}
-                  working={chats.filter((c) => c.taskId === task.id && c.state !== 'idle')}
-                  copies={chats.filter((c) => c.taskId === task.id && c.worktree && c.worktree.files.length > 0)}
-                  agentName={(chat) => participants.find((p) => p.agent?.profileId === chat.agentId)?.name ?? 'Agent'}
-                  draggable={editable}
-                  selected={task.id === selectedId}
-                  onSelect={() => onSelect(task.id)}
-                />
-              ))}
-            </div>
-            {editable && <AddTask stage={stage} />}
-          </section>
-        );
-      })}
+            {BOARD_FILTER_LABELS[filter]}
+          </button>
+        ))}
+        {narrowed && (
+          <>
+            <span className="muted small">
+              {shown.length} of {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+            </span>
+            <button
+              className="link small"
+              onClick={() => {
+                setQuery('');
+                setFilters([]);
+              }}
+            >
+              Show all
+            </button>
+          </>
+        )}
+      </div>
+      <div className="board" style={{ gridTemplateColumns: template }}>
+        {columns.map(({ stage, tasks: column, total }) => {
+          return (
+            <section
+              key={stage}
+              className={`column${dropTarget === stage ? ' drop-target' : ''}`}
+              onDragOver={(event) => {
+                if (!editable || !event.dataTransfer.types.includes(DRAG_TYPE)) return;
+                event.preventDefault();
+                setDropTarget(stage);
+              }}
+              onDragLeave={() => setDropTarget((current) => (current === stage ? null : current))}
+              onDrop={(event) => drop(event, stage)}
+            >
+              <header>
+                <h3>{STAGE_LABELS[stage]}</h3>
+                <span className="muted" title={narrowed ? `${column.length} of ${total} shown` : undefined}>
+                  {narrowed && column.length !== total ? `${column.length}/${total}` : column.length}
+                </span>
+              </header>
+              <div className="cards">
+                {narrowed && column.length === 0 && total > 0 && <p className="muted small column-empty">None match</p>}
+                {column.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    locks={locks.filter((l) => l.taskId === task.id)}
+                    ownerOnline={!!task.owner && participants.some((p) => p.id === task.owner!.id)}
+                    pull={pullForBranch(github, task.branch)}
+                    overlaps={overlapsForTask(overlaps, task)}
+                    working={chats.filter((c) => c.taskId === task.id && c.state !== 'idle')}
+                    copies={chats.filter((c) => c.taskId === task.id && c.worktree && c.worktree.files.length > 0)}
+                    agentName={(chat) => participants.find((p) => p.agent?.profileId === chat.agentId)?.name ?? 'Agent'}
+                    draggable={editable}
+                    selected={task.id === selectedId}
+                    onSelect={() => onSelect(task.id)}
+                  />
+                ))}
+              </div>
+              {editable && <AddTask stage={stage} />}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }

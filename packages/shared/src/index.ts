@@ -15,3 +15,4 @@ export * from './git.js';
 export * from './issues.js';
 export * from './notify.js';
 export * from './usage.js';
+export * from './board.js';
