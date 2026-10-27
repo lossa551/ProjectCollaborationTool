@@ -93,6 +93,37 @@ covers both; the difference is only which MCP server the agents use.
   `.godot/collab_tool/locks.json` and reads the plugin's requests from
   `.godot/collab_tool/requests.jsonl`.
 
+## What happens on its own (follow-up to #10, 2026-10-27)
+
+Martin asked for most of the engine interaction to be automatic, down to the
+app reacting when someone opens the Godot editor.
+
+- **On by default.** The engine choice is Automatic unless changed in
+  Settings: with a project.godot in your folder, agents get Summer Engine's
+  server while Summer Engine is open (and signed in) and the Godot MCP server
+  otherwise, picked again at each agent turn. Every agent but Codex gets the
+  engine; Settings keeps an opt-out per agent (`engineAgentsOff`).
+- **Noticing the editor.** The Locks plugin (now 1.1) rewrites
+  `.godot/collab_tool/editor.json` every 2 s while the editor has the project
+  open (editor kind, program, version, pid, open scene) and removes it on
+  close; five missed beats or a dead pid count as closed. Without the plugin
+  the app still lists running programs every 5 s (`tasklist`, `ps`; on
+  Windows a CIM query once per new process for path and command line) and
+  ignores headless Godot (agents' MCP server, tests, exports).
+- **Reacting.** Home gets a Game engine panel (editor open or not and on which
+  scene, a red line when someone else holds that scene, what agents get, and
+  one-click fixes). Toasts (kind `engine`, mutable): the editor opened the
+  project while others hold locks in it, you opened a scene someone holds, or
+  an editor started on a project without the plugin (once per folder per run).
+  Add plugin / Update plugin writes setup's plugin item and commits only those
+  files; the editor needs Project → Reload Current Project to load it.
+- **Fewer manual steps.** Godot's program is taken from the editor you run
+  (remembered as `foundGodotPath`), then the PATH, then usual install folders
+  (Downloads, Desktop, Program Files, Steam, WinGet, Scoop). Node.js is
+  checked at start and every minute while missing, with a Get Node.js button.
+- **Still yours to do:** install Node.js, install Summer Engine and sign in
+  once (`npx summer-engine@latest login`). Approvals are unchanged.
+
 ## Open
 
 - Unreal (#11): the same bridge works for any MCP server; Unreal needs its

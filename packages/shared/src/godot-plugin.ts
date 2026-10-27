@@ -4,7 +4,10 @@
 // and asks the app to lock or release the open scene. Project setup writes
 // it into addons/collab_tool/ and turns it on in project.godot. The app
 // keeps .godot/collab_tool/locks.json up to date and reads the requests the
-// plugin writes next to it; .godot/ is never committed.
+// plugin writes next to it. While the editor has the project open, the plugin
+// also keeps .godot/collab_tool/editor.json fresh, so the app knows which
+// editor (Godot or Summer Engine) is open and where its program is. .godot/
+// is never committed.
 
 export const GODOT_PLUGIN_DIR = 'addons/collab_tool';
 export const GODOT_PLUGIN_CFG_PATH = `${GODOT_PLUGIN_DIR}/plugin.cfg`;
@@ -12,13 +15,17 @@ export const GODOT_PLUGIN_SCRIPT_PATH = `${GODOT_PLUGIN_DIR}/plugin.gd`;
 /** Where the app writes the session's locks, and where the plugin writes its requests (in the Godot project folder). */
 export const GODOT_LOCKS_FILE = '.godot/collab_tool/locks.json';
 export const GODOT_REQUESTS_FILE = '.godot/collab_tool/requests.jsonl';
+/** Rewritten every few seconds by the plugin while the editor has the project open; removed when it closes. */
+export const GODOT_EDITOR_FILE = '.godot/collab_tool/editor.json';
+/** The plugin writes the editor file this often; older than a few beats means the editor is gone. */
+export const GODOT_EDITOR_BEAT_S = 2;
 
 export const GODOT_PLUGIN_CFG = `[plugin]
 
 name="Project Collaboration Tool"
 description="Shows the session's file locks in the editor, and locks the open scene."
 author="Project Collaboration Tool"
-version="1.0"
+version="1.1"
 script="plugin.gd"
 `;
 
@@ -29,11 +36,13 @@ extends EditorPlugin
 # editor, warns before you change a scene or resource someone else holds,
 # and lets you lock or release the open scene. The app writes the locks to
 # .godot/collab_tool/locks.json (never committed) and reads requests from
-# .godot/collab_tool/requests.jsonl. Written by the app's project setup.
+# .godot/collab_tool/requests.jsonl. editor.json tells the app the editor
+# has the project open. Written by the app's project setup.
 
 const DIR := "res://.godot/collab_tool/"
 const LOCKS := DIR + "locks.json"
 const REQUESTS := DIR + "requests.jsonl"
+const EDITOR := DIR + "editor.json"
 
 var _dock: VBoxContainer
 var _status: Label
@@ -79,13 +88,32 @@ func _enter_tree() -> void:
 
 
 func _exit_tree() -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(EDITOR))
 	if _dock:
 		remove_control_from_docks(_dock)
 		_dock.queue_free()
 		_dock = null
 
 
+func _beat() -> void:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(DIR))
+	var file := FileAccess.open(ProjectSettings.globalize_path(EDITOR), FileAccess.WRITE)
+	if file == null:
+		return
+	var program := OS.get_executable_path()
+	file.store_string(JSON.stringify({
+		"editor": "summer" if program.get_file().to_lower().contains("summer") else "godot",
+		"program": program,
+		"version": str(Engine.get_version_info().get("string", "")),
+		"pid": OS.get_process_id(),
+		"scene": _current_scene(),
+		"at": int(Time.get_unix_time_from_system()),
+	}))
+	file.close()
+
+
 func _refresh() -> void:
+	_beat()
 	var path := ProjectSettings.globalize_path(LOCKS)
 	if not FileAccess.file_exists(path):
 		_connected = false
@@ -208,6 +236,36 @@ export interface EditorLocks {
   you: string;
   connected: boolean;
   locks: { path: string; holder: string; exclusive: boolean; mine: boolean; reason: string }[];
+}
+
+/** What the plugin writes to GODOT_EDITOR_FILE. */
+export interface EditorHeartbeat {
+  editor: 'godot' | 'summer';
+  /** The editor's program, which can run the game's tests too. */
+  program: string;
+  version: string;
+  pid: number;
+  /** The open scene (res://), or empty. */
+  scene: string;
+  /** Unix seconds. */
+  at: number;
+}
+
+export function parseEditorHeartbeat(text: string): EditorHeartbeat | null {
+  try {
+    const v = JSON.parse(text) as Record<string, unknown>;
+    if ((v.editor !== 'godot' && v.editor !== 'summer') || typeof v.at !== 'number') return null;
+    return {
+      editor: v.editor,
+      program: typeof v.program === 'string' ? v.program : '',
+      version: typeof v.version === 'string' ? v.version : '',
+      pid: typeof v.pid === 'number' ? v.pid : 0,
+      scene: typeof v.scene === 'string' ? v.scene : '',
+      at: v.at,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** One line of GODOT_REQUESTS_FILE. */

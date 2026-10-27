@@ -23,6 +23,7 @@ import {
   GODOT_PLUGIN_SCRIPT,
   GODOT_PLUGIN_SCRIPT_PATH,
   parseEditorRequests,
+  godotPluginState,
   pluginEnabled,
   withPluginEnabled,
   type MemoryEntry,
@@ -217,6 +218,9 @@ describe('the Godot editor plugin', () => {
     const old = facts({ topFiles: ['project.godot'], godotProject: files['project.godot']!, godotPlugin: '@tool\nextends EditorPlugin\n' });
     expect(planSetup('godot', detectProject(old), old, session).find((i) => i.id === 'plugin')?.state).toBe('drifted');
     expect(planSetup('unreal', detectProject(project), project, session).some((i) => i.id === 'plugin')).toBe(false);
+    expect([project, after, old, facts({})].map(godotPluginState)).toEqual(['missing', 'ok', 'old', null]);
+    // The plugin tells the app the editor has the project open.
+    expect(GODOT_PLUGIN_SCRIPT).toContain('const EDITOR := DIR + "editor.json"');
   });
 
   it('joins plugins that are already on, and leaves other sections alone', () => {

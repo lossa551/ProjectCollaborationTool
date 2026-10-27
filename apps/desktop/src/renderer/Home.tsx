@@ -22,6 +22,7 @@ import {
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
+import { NODE_URL, describeEditor } from './Engine';
 import { PullBadge } from './GitHub';
 import { confirmCloseIssue } from './Issues';
 import { RiskBadge } from './Roadmap';
@@ -103,6 +104,7 @@ export function HomeScreen({
         <Digest state={state} since={since} onMarkSeen={onMarkSeen} go={go} />
       </div>
       <div className="home-col">
+        <EnginePanel state={state} onSettings={onSettings} />
         <Features state={state} onFeatures={onFeatures} />
         <div className="home-pair">
           <Pulls state={state} onCode={onCode} />
@@ -491,6 +493,96 @@ function Locks({ state, go, onCode }: { state: AppState; go: (target: NeedTarget
         </p>
       )}
       {session.locks.length === 0 && <p className="muted small">Nobody holds a lock.</p>}
+    </section>
+  );
+}
+
+/** The game engine at a glance: is the editor open, what agents get, and the one click that is missing. */
+function EnginePanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+  const { engine, session } = state;
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
+  if (!engine.godotProject) return null;
+  const { editor } = engine;
+  const name = editor?.kind === 'summer' ? 'Summer Engine' : 'Godot';
+  const youId = session.you?.id ?? null;
+  const sceneLock = editor?.scene ? session.locks.find((l) => samePath(l.path, editor.scene!) && l.holder.id !== youId) : undefined;
+  const installPlugin = async () => {
+    setBusy(true);
+    setNote(null);
+    const result = await window.pct.installGodotPlugin();
+    setBusy(false);
+    if (!result.ok) setNote({ error: true, text: result.error });
+    else if (result.value.reload) setNote({ error: false, text: `Added. In ${name}, choose Project → Reload Current Project to load it.` });
+    else setNote({ error: false, text: 'Added and committed. The editor loads it the next time it opens the project.' });
+  };
+  return (
+    <section className="home-panel engine-panel">
+      <h2>
+        Game engine
+        <span className="muted">{editor?.projectOpen ? `${name} open` : editor ? `${name} running` : 'editor closed'}</span>
+        <button className="link small" onClick={onSettings}>
+          Settings
+        </button>
+      </h2>
+      <ul className="home-rows">
+        <li>
+          <span className={`tone tone-${editor?.projectOpen ? 'good' : 'idle'}`} />
+          <span className="grow">{describeEditor(engine)}</span>
+        </li>
+        {sceneLock && (
+          <li>
+            <span className="tone tone-bad" />
+            <span className="grow">
+              {sceneLock.holder.name} holds {sceneLock.path}, the scene you have open. Changes you save there will clash with theirs.
+            </span>
+          </li>
+        )}
+        <li>
+          <span className={`tone tone-${engine.active ? 'good' : 'idle'}`} />
+          <span className="grow">
+            {engine.active ? (
+              <>
+                Agents act in the engine through {engine.active === 'summer' ? 'Summer Engine' : 'the Godot MCP server'}
+                <span className="muted small"> · {engine.agents.length} of {session.agents.length} agents · {engine.activeWhy}</span>
+              </>
+            ) : (
+              <>
+                Agents have no engine tools<span className="muted small"> · {engine.activeWhy}</span>
+              </>
+            )}
+          </span>
+          {engine.node === false && engine.bridge !== 'off' && (
+            <button className="secondary small" onClick={() => window.open(NODE_URL)}>
+              Get Node.js
+            </button>
+          )}
+        </li>
+        {(engine.plugin === 'missing' || engine.plugin === 'old') && (
+          <li>
+            <span className="tone tone-warn" />
+            <span className="grow">
+              {engine.plugin === 'missing' ? 'Show the session’s locks inside the editor' : 'The Locks plugin in your project is older than this app’s'}
+              <span className="muted small"> · adds addons/collab_tool/ and turns it on in project.godot, in one commit</span>
+            </span>
+            <button className="secondary small" disabled={busy} onClick={() => void installPlugin()}>
+              {engine.plugin === 'missing' ? 'Add plugin' : 'Update plugin'}
+            </button>
+          </li>
+        )}
+        {!engine.godotPath && (
+          <li>
+            <span className="tone tone-idle" />
+            <span className="grow">
+              Godot not found yet<span className="muted small"> · open your project in Godot once, or choose it, so agents can run the tests</span>
+            </span>
+            <button className="secondary small" onClick={onSettings}>
+              Choose
+            </button>
+          </li>
+        )}
+      </ul>
+      {note && <p className={note.error ? 'error small' : 'muted small'}>{note.text}</p>}
     </section>
   );
 }

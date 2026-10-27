@@ -45,6 +45,12 @@ export class Notifier {
     }
   }
 
+  /** A notice the app makes itself (the game engine), not from the session. */
+  notify(notice: Notice) {
+    if (this.hooks.focused() || !Notification.isSupported() || this.muted().includes(notice.kind)) return;
+    this.show(notice);
+  }
+
   test() {
     this.show({ key: 'test', kind: 'approval', title: 'Notifications work', body: 'This is how the app tells you when something needs you.', target: null });
   }

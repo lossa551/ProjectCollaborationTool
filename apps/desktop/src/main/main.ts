@@ -38,7 +38,9 @@ import {
   commitDraftPrompt,
   branchTask,
   Engine,
+  GODOT_PLUGIN_COMMIT_MESSAGE,
   SETUP_COMMIT_MESSAGE,
+  samePath,
   PRESETS,
   PROTOCOL_VERSION,
   SetupItemId,
@@ -96,7 +98,7 @@ import {
   notesAgent,
   workspaceFolder,
 } from './settings';
-import { engineSettingsFor, engineState, findGodotOnPath } from './engine';
+import { EngineWatch, engineSettingsFor, findGodotOnPath } from './engine';
 import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, commitPaths, hasCommit, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
@@ -161,7 +163,7 @@ const appState = (): AppState => ({
   setupProgress,
   noteDrafts,
   notesAgent: currentNotesAgent(),
-  engine: engineState(client.getState().session?.id ?? null, workspace?.folder ?? null),
+  engine: engineNow(),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
 const localAgents = new LocalAgents(pushState);
@@ -170,8 +172,66 @@ client.subscribe(pushState);
 const godotEditor = new GodotEditorLink({
   lock: (path) => client.acquireLock(path, { reason: 'From the Godot editor' }),
   release: (lockId) => client.releaseLock(lockId),
+  editorChanged: () => engineWatch.editorChanged(),
 });
 client.subscribe((state) => void godotEditor.update(workspace?.folder ?? null, state));
+
+// The engine programs on this PC: the app reacts when Godot or Summer Engine opens your project.
+const editorName = (kind: 'godot' | 'summer') => (kind === 'godot' ? 'Godot' : 'Summer Engine');
+const pluginOffered = new Set<string>();
+const engineWatch = new EngineWatch({
+  link: godotEditor,
+  folder: () => workspace?.folder ?? null,
+  changed: () => pushState(),
+  event(event) {
+    const state = client.getState();
+    const youId = state.you?.id;
+    const dir = godotEditor.projectDir();
+    const inProject = (path: string) => !dir || path.toLowerCase().startsWith(`${dir.toLowerCase()}/`);
+    const others = state.locks.filter((l) => l.holder.id !== youId && inProject(l.path));
+    const name = editorName(event.editor.kind);
+    if (event.kind === 'opened' && others.length) {
+      const first = others[0]!;
+      notifier.notify({
+        key: `engine-open-${Date.now()}`,
+        kind: 'engine',
+        title: `${name} opened your project`,
+        body: `${first.holder.name} holds ${first.path}${others.length > 1 ? ` and ${others.length - 1} more` : ''}. Lock what you change first (Locks dock).`,
+        target: null,
+      });
+    }
+    const scene = event.editor.scene;
+    const held = scene && event.kind !== 'closed' ? others.find((l) => samePath(l.path, scene)) : undefined;
+    if (held) {
+      notifier.notify({
+        key: `engine-scene-${scene}-${Date.now()}`,
+        kind: 'engine',
+        title: `${held.holder.name} holds the scene you opened`,
+        body: `${scene} is locked${held.reason ? ` for "${held.reason}"` : ''}. Changes you save will clash with theirs.`,
+        target: null,
+      });
+    }
+  },
+  pluginMissing(editor, plugin) {
+    const folder = workspace?.folder;
+    if (!folder || pluginOffered.has(folder)) return;
+    pluginOffered.add(folder);
+    notifier.notify({
+      key: `engine-plugin-${folder}`,
+      kind: 'engine',
+      title: plugin === 'missing' ? `Show locks inside ${editorName(editor.kind)}?` : 'Update the Locks plugin?',
+      body:
+        plugin === 'missing'
+          ? 'Your project has no Locks plugin yet. One click on Home adds it, so the editor shows who holds what.'
+          : 'Your project has an older Locks plugin. One click on Home updates it, so the app sees when the editor has your project open.',
+      target: null,
+    });
+  },
+});
+function engineNow() {
+  const state = client.getState();
+  return engineWatch.state(state.session?.id ?? null, state.agents);
+}
 client.subscribe(() => notifier.update(client.getState(), !hosted));
 
 // Your workspace: the project folder you picked for this session. Its branch
@@ -909,7 +969,7 @@ async function startAgent(agentId: unknown): Promise<Result> {
     startedById: state.you.id,
     root: workspace.folder,
     // Read each turn, so engine settings changed here apply from the agent's next turn.
-    engine: (agent) => engineSettingsFor(client.getState().session?.id ?? null, agent),
+    engine: (agent) => engineSettingsFor(engineNow(), agent),
   });
   return { ok: true };
 }
@@ -1365,6 +1425,26 @@ async function runSetup(input: unknown): Promise<ResultWith<SetupOutcome>> {
   }
 }
 
+/** Adds or updates the Locks plugin (project setup's plugin item) and commits only its files. */
+async function installGodotPlugin(): Promise<ResultWith<{ reload: boolean }>> {
+  const root = workspace?.folder;
+  if (!root) return { ok: false, error: 'Choose your project folder first (bottom left).' };
+  try {
+    const facts = await readProjectFacts(root);
+    if (facts.godotProject === null) return { ok: false, error: 'Your project folder has no project.godot at the top.' };
+    const written = writeProjectFiles(root, setupFiles('godot', facts, ['plugin']));
+    if (written.length && (await hasCommit(root))) await commitPaths(root, written, GODOT_PLUGIN_COMMIT_MESSAGE);
+    void watcher?.poll();
+    // The editor loads plugins when it opens the project.
+    const editor = engineNow().editor;
+    return { ok: true, value: { reload: !!editor } };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    pushState();
+  }
+}
+
 /** Drafts this many notes at most per scan, so a big drift does not run up a bill at once. */
 const UPKEEP_PER_SCAN = 2;
 const UPKEEP_CHECK_MS = 15 * 60_000;
@@ -1519,7 +1599,7 @@ ipcMain.handle(Channel.readSetup, (_event, engine: unknown) => readSetup(engine)
 ipcMain.handle(Channel.runSetup, (_event, request: unknown) => runSetup(request));
 ipcMain.on(Channel.cancelSetup, () => setupAbort?.abort());
 ipcMain.on(Channel.setEngineBridge, (_event, bridge: unknown) => {
-  if (bridge !== 'off' && bridge !== 'godot' && bridge !== 'summer') return;
+  if (bridge !== 'auto' && bridge !== 'off' && bridge !== 'godot' && bridge !== 'summer') return;
   saveEngineBridge(bridge);
   pushState();
 });
@@ -1531,6 +1611,7 @@ ipcMain.on(Channel.setEngineAgent, (_event, agentId: unknown, on: unknown) => {
   pushState();
 });
 
+ipcMain.handle(Channel.installGodotPlugin, () => installGodotPlugin());
 ipcMain.handle(Channel.setGodotPath, async (_event, choose: unknown): Promise<Result> => {
   if (choose !== true) {
     saveGodotPath(null);
@@ -1765,6 +1846,7 @@ void app.whenReady().then(() => {
     pushState();
   });
   void findGodotOnPath().then(pushState);
+  engineWatch.start();
   startUpdater(
     () => window?.webContents.send(Channel.updateState, updateInfo()),
     (version) => {
