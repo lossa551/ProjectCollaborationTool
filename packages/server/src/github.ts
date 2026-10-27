@@ -338,7 +338,7 @@ export class GitHubWatcher {
         headers: {
           accept: 'application/vnd.github+json',
           'x-github-api-version': '2022-11-28',
-          'user-agent': 'ProjectCollaborationTool',
+          'user-agent': 'Foreus',
           'content-type': 'application/json',
           authorization: `Bearer ${this.token}`,
         },
@@ -434,7 +434,7 @@ export class GitHubWatcher {
     const headers: Record<string, string> = {
       accept: 'application/vnd.github+json',
       'x-github-api-version': '2022-11-28',
-      'user-agent': 'ProjectCollaborationTool',
+      'user-agent': 'Foreus',
     };
     if (this.token) headers.authorization = `Bearer ${this.token}`;
     if (cached) headers['if-none-match'] = cached.etag;

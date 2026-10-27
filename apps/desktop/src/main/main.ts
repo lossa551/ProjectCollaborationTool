@@ -112,6 +112,12 @@ import { scanFolderNotes } from './folder-notes';
 import { cleanNote, noteDraftPrompt, type FolderInfo, type FolderNotesReport, type NoteDraft } from '../common/folder-notes';
 import { noteCandidates, noteDraftInput, readProjectFacts, writeProjectFiles } from './setup';
 
+// The app was called Project Collaboration Tool before it became Foreus.
+// Electron names the data folder after the app, so installs from before the
+// rename keep using the old folder: their sessions, tokens and settings stay.
+const LEGACY_DATA = join(app.getPath('appData'), 'Project Collaboration Tool');
+if (existsSync(LEGACY_DATA)) app.setPath('userData', LEGACY_DATA);
+
 // The main process owns the session connection (and, when hosting, the
 // session server itself) so it survives window reloads. It also runs the
 // agents started on this PC and keeps the offline cache.
@@ -1600,7 +1606,7 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
-    title: 'Project Collaboration Tool',
+    title: 'Foreus',
     backgroundColor: '#16181d',
     autoHideMenuBar: true,
     webPreferences: {
@@ -1678,7 +1684,7 @@ function showTray() {
     tray.on('click', focusWindow);
   }
   const session = client.getState().session?.name;
-  tray.setToolTip(hosted && session ? `Project Collaboration Tool: hosting ${session}` : 'Project Collaboration Tool');
+  tray.setToolTip(hosted && session ? `Foreus: hosting ${session}` : 'Foreus');
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: 'Open', click: focusWindow },
@@ -1983,7 +1989,8 @@ function focusWindow() {
   window.focus();
 }
 app.on('second-instance', focusWindow);
-// Windows shows notifications under this id; it matches the installer's appId.
+// Windows shows notifications under this id; it matches the installer's appId,
+// which stays the same after the rename so installs keep updating in place.
 app.setAppUserModelId('com.lossa551.projectcollaborationtool');
 
 void app.whenReady().then(() => {

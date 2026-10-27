@@ -1,7 +1,8 @@
-# Project Collaboration Tool
+# Foreus
 
-A Windows desktop app where two developers and their AI agents work on the same
-project in one live session: shared task board, locks, presence, GitHub status
+Foreus (called Project Collaboration Tool before) is a Windows desktop app
+where two developers and their AI agents work on the same project in one live
+session: shared task board, locks, presence, GitHub status
 and agent chat. Design notes live in [docs/design](docs/design).
 
 Working so far: hosting a session on your PC or joining one by invite code,
@@ -87,7 +88,7 @@ nothing reaches. Unreal (#11) is next; see `docs/design/engines.md`.
 
 ## Install
 
-Download `ProjectCollaborationTool-Setup-<version>.exe` from the latest
+Download `Foreus-Setup-<version>.exe` from the latest
 [release](https://github.com/lossa551/ProjectCollaborationTool/releases/latest)
 and run it. It installs for your Windows user (no admin rights needed) and
 opens the app. The installer is not code-signed yet, so Windows SmartScreen
@@ -150,8 +151,9 @@ signed in to `gh`); without a token it still works for public repositories but
 only checks every 10 minutes.
 
 When you host from the app instead, each session is saved in its own file in
-the app's data folder (`%APPDATA%\Project Collaboration Tool\hosted\` on
-Windows; a session hosted before the list existed stays in
+the app's data folder (`%APPDATA%\Foreus\hosted\` on
+Windows, or `%APPDATA%\Project Collaboration Tool\hosted\` for an install
+from before the rename, which keeps its old data folder; a session hosted before the list existed stays in
 `hosted-session.sqlite`), so resuming it brings back the same board and invite
 code. The list itself is `sessions.json` in the same folder. The host's GitHub token is
 set under **Locks and GitHub** and stored encrypted on that PC; the friend

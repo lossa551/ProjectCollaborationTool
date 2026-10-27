@@ -1,6 +1,6 @@
 {
   "name": "@pct/desktop",
-  "productName": "Project Collaboration Tool",
+  "productName": "Foreus",
   "version": "0.1.0",
   "private": true,
   "description": "Windows desktop app (Electron). Always a client of a session server, and can host one on this PC.",

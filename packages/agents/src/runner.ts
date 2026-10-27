@@ -722,7 +722,7 @@ export class AgentRunner {
       if (mode === 'undo') {
         this.notice(chatId, `${by} undid turn ${checkpoint.turn}. Back to how they were before it: ${list}.`);
         run.notes.push(
-          `Note from the collaboration app: ${by} undid your turn ${checkpoint.turn}. These files are back to how they were before it: ${list}. ` +
+          `Note from Foreus: ${by} undid your turn ${checkpoint.turn}. These files are back to how they were before it: ${list}. ` +
             'Read them again before you build on anything from that turn.',
         );
       } else {
@@ -732,7 +732,7 @@ export class AgentRunner {
             'Later turns can be brought back with "Go back to here" on them.',
         );
         run.notes.push(
-          `Note from the collaboration app: ${by} took your copy back to how it was at the end of your turn ${checkpoint.turn}; ` +
+          `Note from Foreus: ${by} took your copy back to how it was at the end of your turn ${checkpoint.turn}; ` +
             `everything you changed after that is gone${restored.length > 0 ? ` (${list})` : ''}. Read files again before you build on later work.`,
         );
       }
@@ -1647,7 +1647,7 @@ export class AgentRunner {
     const input = request.toolInput;
     const deny = (reason: string) => {
       this.notice(chat.id, `Blocked ${request.toolName}: ${reason}.`);
-      return { allow: false, reason: `Blocked by the collaboration app: ${reason}. Do not try another way; tell the people in the chat what you need.` };
+      return { allow: false, reason: `Blocked by Foreus: ${reason}. Do not try another way; tell the people in the chat what you need.` };
     };
     // The run so far may have used up a budget: ask before it does more.
     if (!(await this.withinBudget(chat, run, signal))) {
@@ -1668,11 +1668,11 @@ export class AgentRunner {
         const gate = await this.gateEdit(chat, agent, rel, signal);
         if ('blocked' in gate) return deny(gate.blocked);
         run.approvedPaths.add(gate.path.toLowerCase());
-        return { allow: true, reason: 'Checked by the collaboration app' };
+        return { allow: true, reason: 'Checked by Foreus' };
       }
       case 'Bash': {
         const problem = await this.gateCommand(chat, agent, String(input.command ?? ''), signal);
-        return problem ? deny(problem) : { allow: true, reason: 'Checked by the collaboration app' };
+        return problem ? deny(problem) : { allow: true, reason: 'Checked by Foreus' };
       }
       case 'Read':
       case 'NotebookRead': {
@@ -1701,11 +1701,11 @@ export class AgentRunner {
           }
           const call = classifyEngineCall(kind, engineTool.tool, input, engine.godotDir, this.filesOf(chat.id).root);
           const problem = await this.gateEngine(chat, agent, run, call, signal);
-          return problem ? deny(problem) : { allow: true, reason: 'Checked by the collaboration app' };
+          return problem ? deny(problem) : { allow: true, reason: 'Checked by Foreus' };
         }
         // Other tools (MCP and the like) follow the command rule.
         const problem = await this.gateCommand(chat, agent, `${request.toolName} tool`, signal);
-        return problem ? deny(problem) : { allow: true, reason: 'Checked by the collaboration app' };
+        return problem ? deny(problem) : { allow: true, reason: 'Checked by Foreus' };
       }
     }
   }

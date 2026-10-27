@@ -263,7 +263,7 @@ export class HookServer {
       });
       req.on('end', () => {
         void (async () => {
-          let answer = { allow: false, reason: 'The collaboration app could not read the request' };
+          let answer = { allow: false, reason: 'Foreus could not read the request' };
           try {
             const data = JSON.parse(body) as { chatId?: unknown; event?: { tool_name?: unknown; tool_input?: unknown } };
             if (typeof data.chatId === 'string' && typeof data.event?.tool_name === 'string') {

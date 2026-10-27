@@ -95,7 +95,7 @@ export class McpClient {
     await Promise.race([
       this.request(
         'initialize',
-        { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'project-collaboration-tool', version: '1' } },
+        { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'foreus', version: '1' } },
         this.options.startTimeoutMs ?? 60_000,
       ),
       exited,

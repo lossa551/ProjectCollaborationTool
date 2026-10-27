@@ -55,7 +55,7 @@ export function ConnectScreen({ error }: { error: string | null }) {
   return (
     <main className="connect">
       <header>
-        <h1>Project Collaboration Tool</h1>
+        <h1>Foreus</h1>
         <p className="muted">Start a live session on this PC, or join one with an invite code.</p>
         <UpdateButton hosting={false} />
       </header>

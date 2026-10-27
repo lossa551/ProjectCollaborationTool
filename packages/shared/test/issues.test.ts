@@ -145,7 +145,7 @@ describe('features and issues', () => {
 
   it('writes an issue from a plan', () => {
     const [item] = setup([create('Wall jump'), { op: 'text', id: FEATURE, field: 'body', value: 'Jump off walls' }]).planning;
-    expect(issueFromPlan(item!)).toEqual({ title: 'Wall jump', body: 'Description:\nJump off walls\n\n_Planned in Project Collaboration Tool._' });
+    expect(issueFromPlan(item!)).toEqual({ title: 'Wall jump', body: 'Description:\nJump off walls\n\n_Planned in Foreus._' });
   });
 
   it('offers to close the issues of a finished feature, with its pull requests', () => {
@@ -161,7 +161,7 @@ describe('features and issues', () => {
     expect(offer).toMatchObject({ issue: { number: 5 }, feature: { id: FEATURE } });
     expect(offer!.pulls.map((p) => p.number)).toEqual([30, 31]);
     expect(offer!.comment).toBe(
-      'Done: the feature "Wall jump #5" is finished.\n\nPull requests:\n- #30 PR 30\n- #31 PR 31 (open)\n\n_Closed from Project Collaboration Tool._',
+      'Done: the feature "Wall jump #5" is finished.\n\nPull requests:\n- #30 PR 30\n- #31 PR 31 (open)\n\n_Closed from Foreus._',
     );
     expect(closeComment(input.planning[0]!, [])).toContain('No pull request is linked');
 
