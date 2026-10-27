@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clone, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit } from '../src/main/git';
+import { clone, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, uncommittedChanges } from '../src/main/git';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -74,6 +74,23 @@ describe('parseStatus', () => {
 
 // Each test runs dozens of git commands, which take a while on Windows.
 describe('git actions', { timeout: 30_000 }, () => {
+  it('collects uncommitted changes, new files included, for a commit message draft', async () => {
+    const { mine } = await setup();
+    sh(mine, 'switch', '-q', '-c', 'jump');
+    writeFileSync(join(mine, 'game.gd'), 'v2\n');
+    writeFileSync(join(mine, 'jump.gd'), 'func jump():\n\tpass\n');
+    writeFileSync(join(mine, 'icon.png'), Buffer.from([0x89, 0x50, 0x00, 0x01]));
+    const changes = await uncommittedChanges(mine);
+    expect(changes.branch).toBe('jump');
+    expect(changes.files.map((f) => f.path).sort()).toEqual(['game.gd', 'icon.png', 'jump.gd']);
+    expect(changes.stat).toContain('game.gd');
+    expect(changes.diff).toContain('-v1\n+v2');
+    expect(changes.diff).toContain('diff --git a/jump.gd b/jump.gd\nnew file\n+func jump():\n+\tpass');
+    expect(changes.diff).toContain('diff --git a/icon.png b/icon.png\nnew file\nBinary file');
+    // Nothing was staged or committed.
+    expect(sh(mine, 'diff', '--cached', '--name-only')).toBe('');
+  });
+
   it('says plainly when a folder is not a repository', async () => {
     await expect(repositoryRoot(temp())).rejects.toMatchObject({ code: 'not-a-repo', message: 'That folder is not inside a git repository.' });
   });

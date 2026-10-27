@@ -129,6 +129,27 @@ export class LocalAgents {
     this.onChange();
   }
 
+  /** Has a running agent answer one prompt (a commit message draft), once it is connected. */
+  async draft(profileId: string, prompt: string, taskId: string | null, signal: AbortSignal): Promise<string> {
+    const entry = this.running.get(profileId);
+    if (!entry) throw new Error('That agent is not running on this PC.');
+    const ready = (state: ReturnType<SessionClient['getState']>) => state.status === 'connected' && state.you !== null;
+    const connected = ready(entry.client.getState()) || (await new Promise<boolean>((resolve) => {
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        off();
+        resolve(ok);
+      };
+      const timer = setTimeout(() => done(false), 15_000);
+      const off = entry.client.subscribe((state) => {
+        if (ready(state)) done(true);
+        else if (state.status === 'closed') done(false);
+      });
+    }));
+    if (!connected) throw new Error(entry.state.error ?? 'The agent could not connect to the session.');
+    return entry.runner.draft(prompt, taskId, signal);
+  }
+
   /** Stops an agent. Unless forget is set, one that failed stays listed for a while so its error shows. */
   async stop(profileId: string, forget = true): Promise<void> {
     const entry = this.running.get(profileId);

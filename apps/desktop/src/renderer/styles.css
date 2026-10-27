@@ -352,6 +352,20 @@ textarea:disabled {
   margin: 0;
 }
 
+.commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.commit-form p {
+  margin: 0;
+}
+
+.commit-form .spacer {
+  flex: 1;
+}
+
 .commit-locks {
   margin-top: 8px;
   padding: 10px;

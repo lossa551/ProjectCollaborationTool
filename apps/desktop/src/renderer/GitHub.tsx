@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import {
+  describeConnection,
   describeSource,
   filesOutsideScope,
   locksAfterCommit,
   pullForBranch,
+  type AgentProfile,
   type GitHubStatus,
   type Overlap,
   type Participant,
@@ -12,6 +14,8 @@ import {
   type Workspace,
 } from '@pct/shared';
 import type { AppState, GitAction, LocalWorkspace } from '../common/api';
+import { keyProblem, runnerOf } from './Agents';
+import { recall, remember } from './storage';
 
 export const taskForBranch = (tasks: Task[], branch: string | null) => (branch ? tasks.find((t) => t.branch === branch) : undefined);
 
@@ -220,6 +224,99 @@ function RepoCard({ state }: { state: AppState }) {
   );
 }
 
+/** The agent picked to draft commit messages, remembered on this PC; else one meant for it, else the first that can run here. */
+function draftAgentFor(usable: AgentProfile[]): AgentProfile | undefined {
+  const saved = recall('commitAgent');
+  return (
+    usable.find((a) => a.id === saved) ??
+    usable.find((a) => /commit/i.test(a.name) || /commit message/i.test(a.responsibilities)) ??
+    usable[0]
+  );
+}
+
+/** Why this agent cannot draft from this PC, if it cannot. */
+function draftProblem(agent: AgentProfile, state: AppState): string | null {
+  const runner = runnerOf(agent, state.session.participants);
+  if (runner && !state.localAgents[agent.id]) return `runs on ${runner.agent?.startedBy ?? 'another'} PC`;
+  return keyProblem(agent.connection, state) ? 'cannot run on this PC' : null;
+}
+
+/**
+ * "Draft it": an agent reads your uncommitted changes and the branch's task
+ * and fills in the message box. You edit it and commit it yourself.
+ */
+function DraftButton({
+  state,
+  disabled,
+  drafting,
+  hasMessage,
+  onStart,
+  onDone,
+}: {
+  state: AppState;
+  disabled: boolean;
+  drafting: string | null;
+  hasMessage: boolean;
+  onStart: (name: string) => void;
+  onDone: (name: string, outcome: { ok: true; value: string } | { ok: false; error: string }) => void;
+}) {
+  const agents = state.session.agents;
+  const usable = agents.filter((a) => draftProblem(a, state) === null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const agent = usable.find((a) => a.id === picked) ?? draftAgentFor(usable);
+  if (drafting) {
+    return (
+      <button type="button" className="secondary" onClick={() => window.pct.cancelCommitDraft()}>
+        Stop drafting
+      </button>
+    );
+  }
+  if (!agent) {
+    return (
+      <span className="muted small" title="Add an agent on the Agents screen that can run on this PC">
+        {agents.length === 0 ? 'Add an agent to draft messages for you.' : 'None of the agents can run on this PC to draft a message.'}
+      </span>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="secondary"
+        disabled={disabled}
+        title="An agent reads your uncommitted changes and the branch's task and writes a message for you to edit"
+        onClick={() => {
+          if (hasMessage && !confirm('Replace your message with a draft?')) return;
+          onStart(agent.name);
+          void window.pct.draftCommitMessage(agent.id).then((outcome) => onDone(agent.name, outcome));
+        }}
+      >
+        Draft it
+      </button>
+      <label className="small muted">
+        with{' '}
+        <select
+          value={agent.id}
+          disabled={disabled}
+          onChange={(e) => {
+            setPicked(e.target.value);
+            remember('commitAgent', e.target.value);
+          }}
+        >
+          {agents.map((a) => {
+            const problem = draftProblem(a, state);
+            return (
+              <option key={a.id} value={a.id} disabled={problem !== null}>
+                {a.name} ({problem ?? describeConnection(a.connection)})
+              </option>
+            );
+          })}
+        </select>
+      </label>
+    </>
+  );
+}
+
 /** Your own checkout: clone, pull, commit, push and branches, using the git on this PC. */
 function GitCard({ state }: { state: AppState }) {
   const local = state.workspace;
@@ -228,6 +325,9 @@ function GitCard({ state }: { state: AppState }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [message, setMessage] = useState('');
+  // Name of the agent drafting the message now, and what came of the last draft.
+  const [drafting, setDrafting] = useState<string | null>(null);
+  const [drafted, setDrafted] = useState<{ ok: boolean; text: string } | null>(null);
   const [newBranch, setNewBranch] = useState('');
   const [fromLatest, setFromLatest] = useState(true);
   // After a commit: offer to free the locks you held then on files with nothing left to commit.
@@ -372,10 +472,11 @@ function GitCard({ state }: { state: AppState }) {
         </details>
       )}
       <form
-        className="lock-form"
+        className="commit-form"
         onSubmit={(e) => {
           e.preventDefault();
           setCommittedAt(null);
+          setDrafted(null);
           void git('Committing', { type: 'commit', message }).then((ok) => {
             if (!ok) return;
             setMessage('');
@@ -383,10 +484,46 @@ function GitCard({ state }: { state: AppState }) {
           });
         }}
       >
-        <input value={message} onChange={(e) => setMessage(e.target.value)} placeholder="What did you change?" disabled={disabled} />
-        <button type="submit" disabled={disabled || !message.trim() || (changed.length === 0 && !info.merging)}>
-          Commit all
-        </button>
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="What did you change?"
+          rows={message.includes('\n') ? 6 : 2}
+          disabled={disabled || drafting !== null}
+          onKeyDown={(e) => {
+            // Ctrl+Enter commits, as in most git tools; Enter alone starts a new line.
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
+        <div className="lock-form">
+          <DraftButton
+            state={state}
+            disabled={disabled || changed.length === 0}
+            drafting={drafting}
+            onStart={(name) => {
+              setDrafting(name);
+              setDrafted(null);
+              setResult(null);
+            }}
+            onDone={(name, outcome) => {
+              setDrafting(null);
+              if (outcome.ok) {
+                setMessage(outcome.value);
+                setDrafted({ ok: true, text: `Drafted by ${name}. Read it and change what is wrong; nothing is committed until you press Commit all.` });
+              } else setDrafted({ ok: false, text: outcome.error });
+            }}
+            hasMessage={message.trim() !== ''}
+          />
+          <span className="spacer" />
+          <button type="submit" disabled={disabled || drafting !== null || !message.trim() || (changed.length === 0 && !info.merging)}>
+            Commit all
+          </button>
+        </div>
+        {drafting && <p className="muted small">{drafting} is reading your changes and writing a draft…</p>}
+        {drafted && <p className={drafted.ok ? 'muted small' : 'error small'}>{drafted.text}</p>}
       </form>
       {freeable.length > 0 && (
         <div className="commit-locks">

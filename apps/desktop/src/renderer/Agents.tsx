@@ -184,7 +184,7 @@ function FragmentRow({ label, value }: { label: string; value: string }) {
 }
 
 /** Why this PC cannot run the agent, if it cannot. */
-function keyProblem(connection: AgentConnection, state: AppState): string | null {
+export function keyProblem(connection: AgentConnection, state: AppState): string | null {
   if (connection.type === 'cli') {
     return state.cliTools[connection.tool] ? null : `${CLI_TOOLS[connection.tool].label} is not installed on this PC.`;
   }

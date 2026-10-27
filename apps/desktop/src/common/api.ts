@@ -255,6 +255,14 @@ export interface PctApi {
   cloneRepo(): Promise<Result>;
   /** Runs a git action in your project folder; the value says what happened. */
   gitAction(action: GitAction): Promise<ResultWith<string>>;
+  /**
+   * Has an agent (started on this PC if it is not running) draft a commit
+   * message from your uncommitted changes and the branch's task. Only returns
+   * the text; nothing is committed.
+   */
+  draftCommitMessage(agentId: string): Promise<ResultWith<string>>;
+  /** Stops the draft being written now. */
+  cancelCommitDraft(): void;
   /** "owner/name" or a GitHub URL; null unlinks. */
   linkRepo(repo: string | null): Promise<Result>;
   /** Opens an issue on GitHub (through the host's token) and links it to a feature or task. Returns its number. */
@@ -358,6 +366,8 @@ export const Channel = {
   stopWorkspace: 'pct:stop-workspace',
   cloneRepo: 'pct:clone-repo',
   gitAction: 'pct:git-action',
+  draftCommitMessage: 'pct:draft-commit-message',
+  cancelCommitDraft: 'pct:cancel-commit-draft',
   linkRepo: 'pct:link-repo',
   setGitHubToken: 'pct:set-github-token',
   createIssue: 'pct:create-issue',

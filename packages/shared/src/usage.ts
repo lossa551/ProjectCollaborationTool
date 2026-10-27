@@ -71,6 +71,8 @@ export const UsageReport = TokenUsage.extend({
   /** Dollars, when the tool reported its own cost. */
   cost: z.number().min(0).max(1e6).nullable(),
   day: UsageDay,
+  /** For work outside a chat (a commit message draft): the task it was for. */
+  taskId: z.string().max(100).nullable().optional(),
 });
 export type UsageReport = z.infer<typeof UsageReport>;
 

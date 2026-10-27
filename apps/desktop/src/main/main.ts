@@ -34,6 +34,9 @@ import {
   normalizePath,
   parseRepoRef,
   renderHandoff,
+  cleanDraft,
+  commitDraftPrompt,
+  branchTask,
   type CliTool,
 } from '@pct/shared';
 import { SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
@@ -75,7 +78,7 @@ import {
   workspaceFolder,
 } from './settings';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder } from './git';
+import { GitError, clone, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { Notifier } from './notifications';
@@ -385,6 +388,42 @@ async function commitAndFreeLocks(folder: string, message: string): Promise<stri
   if (agents.length === 0) return result;
   const names = [...new Set(agents.map((l) => l.holder.name))].join(', ');
   return `Committed, and freed ${names}'s ${plural(agents.length, 'lock')} on the committed files.`;
+}
+
+/** The commit message draft being written now, so it can be stopped. */
+let drafting: AbortController | null = null;
+
+/**
+ * Has an agent draft a commit message from the uncommitted changes and the
+ * branch's task. It starts the agent on this PC if it is not running. The
+ * draft only goes back to the message box: the person commits it.
+ */
+async function draftCommitMessage(agentId: unknown): Promise<ResultWith<string>> {
+  const state = client.getState();
+  const profile = state.agents.find((a) => a.id === agentId);
+  if (!profile) return { ok: false, error: 'Pick an agent to draft the message.' };
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
+  if (drafting) return { ok: false, error: 'A draft is already being written.' };
+  const abort = new AbortController();
+  drafting = abort;
+  try {
+    const changes = await uncommittedChanges(folder);
+    if (changes.files.length === 0) return { ok: false, error: 'There are no uncommitted changes to describe.' };
+    const task = branchTask(state.tasks, changes.branch);
+    if (!localAgents.isRunning(profile.id)) {
+      const started = await startAgent(profile.id);
+      if (!started.ok) return started;
+    }
+    const answer = cleanDraft(await localAgents.draft(profile.id, commitDraftPrompt({ ...changes, task }), task?.id ?? null, abort.signal));
+    if (!answer) return { ok: false, error: `${profile.name} answered with an empty message. Try again, or write it yourself.` };
+    return { ok: true, value: answer };
+  } catch (error) {
+    if (abort.signal.aborted) return { ok: false, error: 'Stopped.' };
+    return failure(error);
+  } finally {
+    drafting = null;
+  }
 }
 
 // Backups of the hosted session: on host start, then checked every hour so
@@ -1227,6 +1266,8 @@ ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
 ipcMain.on(Channel.stopWorkspace, () => stopWorkspace());
 ipcMain.handle(Channel.cloneRepo, () => cloneRepo());
 ipcMain.handle(Channel.gitAction, (_event, action: unknown) => gitAction(action));
+ipcMain.handle(Channel.draftCommitMessage, (_event, agentId: unknown) => draftCommitMessage(agentId));
+ipcMain.on(Channel.cancelCommitDraft, () => drafting?.abort());
 ipcMain.handle(Channel.linkRepo, (_event, input: unknown): Result => {
   if (input === null) {
     client.linkRepo(null);

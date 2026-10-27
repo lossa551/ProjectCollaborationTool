@@ -25,6 +25,7 @@ import type {
 import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import type { BloatReport } from './bloat.js';
 import { DEFAULT_PRICES, addUsage, usageKey, type PriceTable, type UsageReport, type UsageRow } from './usage.js';
+import { commitDraftUsageId } from './commit-message.js';
 import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
 import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
 import { DEFAULT_MILESTONES, applyPlanOp, readIssueMarks, readMilestones, readPlanning, type IssueMarks, type Milestone, type PlanItem, type PlanOp } from './planning.js';
@@ -422,7 +423,10 @@ export class SessionClient {
    */
   recordUsage(usage: UsageReport): void {
     if (this.state.status !== 'connected') return;
-    const chat = this.state.chats.find((c) => c.id === usage.chatId);
+    const profileId = this.state.you?.agent?.profileId;
+    const chat =
+      this.state.chats.find((c) => c.id === usage.chatId) ??
+      (profileId && usage.chatId === commitDraftUsageId(profileId) ? { agentId: profileId, taskId: usage.taskId ?? null } : undefined);
     if (chat) {
       const key = usageKey(usage);
       const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat);

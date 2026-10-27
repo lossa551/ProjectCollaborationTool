@@ -20,7 +20,10 @@ everyday git for your own copy with the git on your PC: clone the linked
 repository into a folder (it becomes your project folder), pull, commit, push,
 and switch or create branches. After a commit it offers to release your locks
 on files with nothing left to commit, and frees the committed files' locks of
-idle agents on your PC that work in your project folder. Issues: the repository's open issues show on
+idle agents on your PC that work in your project folder. Draft it next to
+the commit message has an agent you pick write the message from your
+uncommitted diff and the branch's task; you edit it and commit yourself, and
+the call counts in the agent's and the task's cost. Issues: the repository's open issues show on
 the Code screen's Issues tab, filtered by label and assignee; link one to a
 feature or task (or write `#123` in its text), make a feature from an issue, or
 open an issue from a feature. When a linked feature is done the app offers to
