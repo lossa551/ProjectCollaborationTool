@@ -123,6 +123,17 @@ export async function installGitLfs(cwd: string): Promise<void> {
   await run(['lfs', 'install', '--local'], { cwd });
 }
 
+/**
+ * Makes a folder a new git repository on branch main, e.g. a project just
+ * made with its engine (Godot and Unreal do not run git init). Nothing is
+ * committed: project setup makes the first commit.
+ */
+export async function initRepository(folder: string): Promise<void> {
+  await run(['init'], { cwd: folder });
+  // Older git has no init -b; pointing the unborn HEAD at main does the same.
+  await run(['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: folder });
+}
+
 /** Tells git to trust a folder owned by another user (git's safe.directory setting). */
 export async function trustFolder(folder: string): Promise<void> {
   await run(['config', '--global', '--add', 'safe.directory', folder.replace(/\\/g, '/')], { cwd: folder });
@@ -198,7 +209,8 @@ export async function readGitInfo(cwd: string): Promise<GitInfo> {
     else if (ref.startsWith('refs/remotes/origin/') && ref !== 'refs/remotes/origin/HEAD') remoteBranches.push(ref.slice('refs/remotes/origin/'.length));
   }
   const merging = (await tryRun(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], cwd)) !== null;
-  return { ...status, merging, branches, remoteBranches: remoteBranches.filter((b) => !branches.includes(b)) };
+  const hasCommits = await hasCommit(cwd);
+  return { ...status, merging, hasCommits, branches, remoteBranches: remoteBranches.filter((b) => !branches.includes(b)) };
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;

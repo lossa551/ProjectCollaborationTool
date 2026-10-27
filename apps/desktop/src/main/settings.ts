@@ -121,6 +121,8 @@ interface Preferences {
   memoryExport?: string[];
   /** Kinds of Windows notifications turned off; see NOTICE_KINDS. */
   mutedNotices?: string[];
+  /** The "still running in the tray" toast was shown once (issue #60). */
+  trayNoticeShown?: boolean;
   /** By session id: the agent that keeps folder notes up to date (project setup). */
   notesAgents?: Record<string, string>;
   /** Which engine MCP server agents on this PC use (issue #10). */
@@ -144,6 +146,7 @@ function readPreferences(): Preferences {
       ...(typeof prefs.backupFolder === 'string' && { backupFolder: prefs.backupFolder }),
       ...(Array.isArray(prefs.memoryExport) && { memoryExport: prefs.memoryExport.filter((id): id is string => typeof id === 'string') }),
       ...(Array.isArray(prefs.mutedNotices) && { mutedNotices: prefs.mutedNotices.filter((k): k is string => typeof k === 'string') }),
+      ...(prefs.trayNoticeShown === true && { trayNoticeShown: true }),
       ...(prefs.notesAgents !== null &&
         typeof prefs.notesAgents === 'object' && {
           notesAgents: Object.fromEntries(Object.entries(prefs.notesAgents).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
@@ -188,6 +191,13 @@ export function memoryAutoExport(sessionId: string): boolean {
 export function saveMemoryAutoExport(sessionId: string, on: boolean) {
   const ids = (readPreferences().memoryExport ?? []).filter((id) => id !== sessionId);
   savePreferences({ memoryExport: on ? [...ids, sessionId] : ids });
+}
+
+/** True the first time the app goes to the tray, false after. */
+export function firstTimeInTray(): boolean {
+  if (readPreferences().trayNoticeShown) return false;
+  savePreferences({ trayNoticeShown: true });
+  return true;
 }
 
 export function mutedNotices(): string[] {

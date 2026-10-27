@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import {
   describeConnection,
   describeSource,
@@ -15,6 +15,7 @@ import {
 } from '@pct/shared';
 import type { AppState, GitAction, LocalWorkspace } from '../common/api';
 import { keyProblem, runnerOf } from './Agents';
+import { useKept } from './kept';
 import { recall, remember } from './storage';
 
 export const taskForBranch = (tasks: Task[], branch: string | null) => (branch ? tasks.find((t) => t.branch === branch) : undefined);
@@ -251,14 +252,12 @@ function DraftButton({
   drafting,
   hasMessage,
   onStart,
-  onDone,
 }: {
   state: AppState;
   disabled: boolean;
   drafting: string | null;
   hasMessage: boolean;
-  onStart: (name: string) => void;
-  onDone: (name: string, outcome: { ok: true; value: string } | { ok: false; error: string }) => void;
+  onStart: () => void;
 }) {
   const agents = state.session.agents;
   const usable = agents.filter((a) => draftProblem(a, state) === null);
@@ -287,8 +286,9 @@ function DraftButton({
         title="An agent reads your uncommitted changes and the branch's task and writes a message for you to edit"
         onClick={() => {
           if (hasMessage && !confirm('Replace your message with a draft?')) return;
-          onStart(agent.name);
-          void window.pct.draftCommitMessage(agent.id).then((outcome) => onDone(agent.name, outcome));
+          onStart();
+          // The outcome arrives in the app state (commitDraft), also when you left this page meanwhile.
+          void window.pct.draftCommitMessage(agent.id);
         }}
       >
         Draft it
@@ -324,10 +324,22 @@ function GitCard({ state }: { state: AppState }) {
   const defaultBranch = state.session.github.defaultBranch ?? 'main';
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [message, setMessage] = useState('');
-  // Name of the agent drafting the message now, and what came of the last draft.
-  const [drafting, setDrafting] = useState<string | null>(null);
-  const [drafted, setDrafted] = useState<{ ok: boolean; text: string } | null>(null);
+  // Kept while you visit other screens (issue #62), as is the last draft's outcome.
+  const [message, setMessage] = useKept('commit.message', '');
+  const [drafted, setDrafted] = useKept<{ ok: boolean; text: string } | null>('commit.drafted', null);
+  // The last draft already put in the message box, so it is put there once.
+  const [seenDraft, setSeenDraft] = useKept('commit.seenDraft', 0);
+  const draft = state.commitDraft;
+  // Name of the agent drafting the message now.
+  const drafting = draft?.status === 'drafting' ? draft.agent : null;
+  useEffect(() => {
+    if (!draft || draft.status === 'drafting' || draft.id === seenDraft) return;
+    setSeenDraft(draft.id);
+    if (draft.status === 'done') {
+      setMessage(draft.message);
+      setDrafted({ ok: true, text: `Drafted by ${draft.agent}. Read it and change what is wrong; nothing is committed until you press Commit all.` });
+    } else setDrafted({ ok: false, text: draft.error });
+  }, [draft, seenDraft, setSeenDraft, setMessage, setDrafted]);
   const [newBranch, setNewBranch] = useState('');
   const [fromLatest, setFromLatest] = useState(true);
   // After a commit: offer to free the locks you held then on files with nothing left to commit.
@@ -407,7 +419,9 @@ function GitCard({ state }: { state: AppState }) {
         {branch ? <code>{branch}</code> : <span className="warning">no branch checked out</span>}
         {' · '}
         <span className="muted">
-          {info.upstream
+          {!info.hasCommits
+            ? 'no commits yet'
+            : info.upstream
             ? info.ahead === 0 && info.behind === 0
               ? `up to date with ${info.upstream}`
               : [info.ahead > 0 && `${info.ahead} to push`, info.behind > 0 && `${info.behind} to pull`].filter(Boolean).join(', ')
@@ -442,10 +456,10 @@ function GitCard({ state }: { state: AppState }) {
       ) : null}
 
       <div className="lock-form">
-        <button disabled={disabled || !branch} onClick={() => void git('Pulling', { type: 'pull' })}>
+        <button disabled={disabled || !branch || !info.hasCommits} onClick={() => void git('Pulling', { type: 'pull' })}>
           Pull{info.behind > 0 ? ` (${info.behind})` : ''}
         </button>
-        <button disabled={disabled || !branch} onClick={() => void git('Pushing', { type: 'push' })}>
+        <button disabled={disabled || !branch || !info.hasCommits} title={info.hasCommits ? undefined : 'Commit first: there is nothing to push yet'} onClick={() => void git('Pushing', { type: 'push' })}>
           Push{info.ahead > 0 ? ` (${info.ahead})` : !info.upstream ? ' branch' : ''}
         </button>
         <button className="secondary" disabled={disabled} onClick={() => void git('Checking GitHub', { type: 'fetch' })}>
@@ -503,17 +517,9 @@ function GitCard({ state }: { state: AppState }) {
             state={state}
             disabled={disabled || changed.length === 0}
             drafting={drafting}
-            onStart={(name) => {
-              setDrafting(name);
+            onStart={() => {
               setDrafted(null);
               setResult(null);
-            }}
-            onDone={(name, outcome) => {
-              setDrafting(null);
-              if (outcome.ok) {
-                setMessage(outcome.value);
-                setDrafted({ ok: true, text: `Drafted by ${name}. Read it and change what is wrong; nothing is committed until you press Commit all.` });
-              } else setDrafted({ ok: false, text: outcome.error });
             }}
             hasMessage={message.trim() !== ''}
           />

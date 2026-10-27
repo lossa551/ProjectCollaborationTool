@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -57,6 +57,7 @@ import {
   type AppState,
   type BackupFolder,
   type BackupInfo,
+  type CommitDraft,
   type GitAction,
   type HandoffRequest,
   type HostRequest,
@@ -84,6 +85,7 @@ import { SessionHistory } from './sessions';
 import {
   customBackupFolder,
   defaultBackupFolder,
+  firstTimeInTray,
   loadGitHubToken,
   memoryAutoExport,
   saveApiKey,
@@ -101,9 +103,10 @@ import {
 import { EngineWatch, engineSettingsFor, findGodotOnPath } from './engine';
 import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
-import { GitError, clone, commitPaths, hasCommit, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
+import { GitError, clone, commitPaths, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
+import { cutOffSentence, stopConfirmDetail, whoWouldBeCutOff } from '../common/background';
 import { Notifier } from './notifications';
 import { scanFolderNotes } from './folder-notes';
 import { cleanNote, noteDraftPrompt, type FolderInfo, type FolderNotesReport, type NoteDraft } from '../common/folder-notes';
@@ -161,6 +164,7 @@ const appState = (): AppState => ({
   memoryExport: memoryExportState(),
   mutedNotices: notifier.muted(),
   setupProgress,
+  commitDraft,
   noteDrafts,
   notesAgent: currentNotesAgent(),
   engine: engineNow(),
@@ -242,6 +246,7 @@ let knownDefaultBranch: string | null = null;
 
 function watchFolder(folder: string | null) {
   noteDrafts = [];
+  commitDraft = null;
   draftedNotes.clear();
   watcher?.stop();
   watcher = null;
@@ -273,7 +278,8 @@ client.subscribe((state) => {
 });
 
 const openDialog = (options: OpenDialogOptions) => (window ? dialog.showOpenDialog(window, options) : dialog.showOpenDialog(options));
-const messageBox = (options: MessageBoxOptions) => (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
+// Without a visible window (e.g. from the tray) the box stands on its own.
+const messageBox = (options: MessageBoxOptions) => (window?.isVisible() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
 
 function useWorkspace(sessionId: string, root: string) {
   saveWorkspaceFolder(sessionId, root);
@@ -341,7 +347,7 @@ async function chooseWorkspace(): Promise<Result> {
   const sessionId = client.getState().session?.id;
   if (!sessionId) return { ok: false, error: 'Join a session first.' };
   for (;;) {
-    const picked = await openDialog({ title: 'Choose your project folder (where you cloned the project)', properties: ['openDirectory'] });
+    const picked = await openDialog({ title: 'Choose your project folder (your clone of the project, or a new engine project)', properties: ['openDirectory'] });
     const folder = picked.filePaths[0];
     if (picked.canceled || !folder) return { ok: true };
     try {
@@ -372,21 +378,55 @@ async function chooseWorkspace(): Promise<Result> {
       if (error.code !== 'not-a-repo') return failure(error);
       const repo = client.getState().github.repo;
       const target = repo ? cloneTarget(folder, repo.name) : null;
+      // A project just made with Godot or Unreal has no git yet: offer to start it here.
+      const engine = engineProjectIn(folder);
+      const fresh = engine !== null || !repo;
+      const choices = [
+        ...(repo ? [{ label: `Clone ${repo.owner}/${repo.name}`, run: () => cloneInto(folder) }] : []),
+        { label: 'Make this folder a git repository', run: () => initWorkspace(sessionId, folder) },
+      ];
+      if (fresh) choices.reverse();
       const { response } = await messageBox({
         type: 'question',
         message: 'This folder is not a git repository',
-        detail: repo
-          ? `Your project folder must be a clone of the repository. The app can clone ${repo.owner}/${repo.name} from GitHub into ${target} and use that.`
-          : 'Your project folder must be a git clone of the project. Pick the folder you cloned it into, or link the GitHub repository on the GitHub page and the app can clone it for you.',
-        buttons: repo ? [`Clone ${repo.owner}/${repo.name}`, 'Choose another folder', 'Cancel'] : ['Choose another folder', 'Cancel'],
+        detail: [
+          engine ? `It looks like a new ${engine} project.` : null,
+          'The app can make it a git repository (on branch main, nothing committed yet) and set the project up from there.',
+          repo ? `Or, if the project is already on GitHub, clone ${repo.owner}/${repo.name} into ${target} and use that.` : null,
+        ]
+          .filter(Boolean)
+          .join(' '),
+        buttons: [...choices.map((c) => c.label), 'Choose another folder', 'Cancel'],
         defaultId: 0,
-        cancelId: repo ? 2 : 1,
+        cancelId: choices.length + 1,
       });
-      if (repo && response === 0) return cloneInto(folder);
-      if (response === (repo ? 2 : 1)) return { ok: true };
+      if (response < choices.length) return choices[response]!.run();
+      if (response === choices.length + 1) return { ok: true };
     }
   }
 }
+
+/** git init in the folder, then use it as your project folder. */
+async function initWorkspace(sessionId: string, folder: string): Promise<Result> {
+  try {
+    await initRepository(folder);
+    useWorkspace(sessionId, await repositoryRoot(folder));
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+/** The engine that made the project in this folder, from the files at its top. */
+const engineProjectIn = (folder: string): string | null => {
+  try {
+    const names = readdirSync(folder);
+    if (names.some((name) => /\.uproject$/i.test(name))) return 'Unreal';
+    return names.includes('project.godot') ? 'Godot' : null;
+  } catch {
+    return null;
+  }
+};
 
 const isEmptyFolder = (folder: string) => {
   try {
@@ -459,7 +499,12 @@ async function gitAction(input: unknown): Promise<ResultWith<string>> {
   if (gitBusy || cloning) return { ok: false, error: 'Git is still busy with the last action.' };
   gitBusy = true;
   try {
-    if (action.type === 'commit') return { ok: true, value: await commitAndFreeLocks(folder, action.message) };
+    if (action.type === 'commit') {
+      const value = await commitAndFreeLocks(folder, action.message);
+      // Committed: the draft is used up, so a reloaded window does not offer it again.
+      if (value !== 'Nothing to commit.' && commitDraft?.status !== 'drafting') commitDraft = null;
+      return { ok: true, value };
+    }
     return { ok: true, value: await runGitAction(folder, action, await gitToken()) };
   } catch (error) {
     return failure(error);
@@ -493,21 +538,40 @@ async function commitAndFreeLocks(folder: string, message: string): Promise<stri
 
 /** The commit message draft being written now, so it can be stopped. */
 let drafting: AbortController | null = null;
+/** The draft being written or written last, shown on the GitHub page (see AppState.commitDraft). */
+let commitDraft: CommitDraft | null = null;
+let commitDraftId = 0;
 
 /**
  * Has an agent draft a commit message from the uncommitted changes and the
  * branch's task. It starts the agent on this PC if it is not running. The
- * draft only goes back to the message box: the person commits it.
+ * draft only goes back to the message box: the person commits it. It keeps
+ * going while the GitHub page is closed; the page picks up the result.
  */
 async function draftCommitMessage(agentId: unknown): Promise<ResultWith<string>> {
+  if (drafting) return { ok: false, error: 'A draft is already being written.' };
+  const id = ++commitDraftId;
+  const agent = client.getState().agents.find((a) => a.id === agentId)?.name ?? 'The agent';
+  const abort = new AbortController();
+  drafting = abort;
+  commitDraft = { id, agent, status: 'drafting' };
+  pushState();
+  const outcome = await writeCommitDraft(agentId, abort);
+  drafting = null;
+  // A newer draft, or a change of folder, replaced this one meanwhile.
+  if (commitDraft?.id === id) {
+    commitDraft = outcome.ok ? { id, agent, status: 'done', message: outcome.value } : { id, agent, status: 'failed', error: outcome.error };
+    pushState();
+  }
+  return outcome;
+}
+
+async function writeCommitDraft(agentId: unknown, abort: AbortController): Promise<ResultWith<string>> {
   const state = client.getState();
   const profile = state.agents.find((a) => a.id === agentId);
   if (!profile) return { ok: false, error: 'Pick an agent to draft the message.' };
   const folder = workspace?.folder;
   if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
-  if (drafting) return { ok: false, error: 'A draft is already being written.' };
-  const abort = new AbortController();
-  drafting = abort;
   try {
     const changes = await uncommittedChanges(folder);
     if (changes.files.length === 0) return { ok: false, error: 'There are no uncommitted changes to describe.' };
@@ -522,8 +586,6 @@ async function draftCommitMessage(agentId: unknown): Promise<ResultWith<string>>
   } catch (error) {
     if (abort.signal.aborted) return { ok: false, error: 'Stopped.' };
     return failure(error);
-  } finally {
-    drafting = null;
   }
 }
 
@@ -781,7 +843,10 @@ client.subscribe(() => {
   if (cachedUrl && !cacheTimer) cacheTimer = setTimeout(flushCache, 500);
 });
 // Quitting from the tray, an update or the system skips window-all-closed.
-app.on('before-quit', flushCache);
+app.on('before-quit', () => {
+  quitting = true;
+  flushCache();
+});
 
 const failure = (error: unknown): { ok: false; error: string } => ({
   ok: false,
@@ -939,6 +1004,27 @@ async function removeParticipant(id: unknown): Promise<Result> {
     return failure(error);
   }
   return answer.checkboxChecked ? newInvite() : { ok: true };
+}
+
+/**
+ * Asks before stopping when the friend is connected to the session hosted
+ * here or an agent on this PC is mid-turn. True when it is fine to go on.
+ */
+async function confirmStop(action: 'quit' | 'leave'): Promise<boolean> {
+  const cut = whoWouldBeCutOff(client.getState(), Object.keys(localAgents.list()), !!hosted);
+  const sentence = cutOffSentence(cut);
+  if (!sentence) return true;
+  const verb = action === 'quit' ? 'Quit' : hosted ? 'Stop hosting' : 'Leave';
+  const { response } = await messageBox({
+    type: 'warning',
+    title: verb,
+    message: `${sentence} ${verb === 'Quit' ? 'Quit anyway' : `${verb} anyway`}?`,
+    detail: stopConfirmDetail(cut, !!hosted),
+    buttons: [verb, 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  return response === 0;
 }
 
 async function leave() {
@@ -1536,15 +1622,85 @@ function createWindow() {
   if (devUrl) void window.loadURL(devUrl);
   else void window.loadFile(join(__dirname, 'renderer', 'index.html'));
 
+  // While hosting, or while agents run here, closing the window keeps the
+  // app (and the session) running in the tray.
+  window.on('close', (event) => {
+    if (quitting || !keepsRunning()) return;
+    event.preventDefault();
+    window?.hide();
+    showTray();
+    if (firstTimeInTray()) {
+      const notice = new Notification({
+        title: 'Still running in the tray',
+        body: hosted
+          ? 'The session keeps going for the others, and agents keep working. Quit from the tray icon to stop.'
+          : 'Agents on this PC keep working. Quit from the tray icon to stop.',
+      });
+      notice.on('click', focusWindow);
+      notice.show();
+    }
+  });
   window.on('closed', () => {
     window = null;
   });
 }
 
+/** Set once quitting is decided, so closing the window no longer hides it. */
+let quitting = false;
+let tray: Tray | null = null;
+
+/** Closing the window would cut off the friend or stop agents. */
+const keepsRunning = () => !!hosted || Object.keys(localAgents.list()).length > 0;
+
+/** A small rounded square in the app's accent colour, drawn here so no icon file has to ship. */
+function trayIcon() {
+  const size = 32;
+  const pixels = Buffer.alloc(size * size * 4);
+  const radius = 7;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = Math.max(radius - x, x - (size - 1 - radius), 0);
+      const dy = Math.max(radius - y, y - (size - 1 - radius), 0);
+      const inside = dx * dx + dy * dy <= radius * radius;
+      const dot = (x - 15.5) ** 2 + (y - 15.5) ** 2 <= 36;
+      const at = (y * size + x) * 4;
+      // BGRA
+      if (dot) pixels.set([255, 255, 255, 255], at);
+      else if (inside) pixels.set([0xf2, 0x8c, 0x4c, 255], at);
+    }
+  }
+  return nativeImage.createFromBitmap(pixels, { width: size, height: size });
+}
+
+function showTray() {
+  if (!tray) {
+    tray = new Tray(trayIcon());
+    tray.on('click', focusWindow);
+  }
+  const session = client.getState().session?.name;
+  tray.setToolTip(hosted && session ? `Project Collaboration Tool: hosting ${session}` : 'Project Collaboration Tool');
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open', click: focusWindow },
+      { type: 'separator' },
+      { label: hosted ? 'Stop hosting and quit' : 'Quit', click: () => void quitFromTray() },
+    ]),
+  );
+}
+
+async function quitFromTray() {
+  if (!(await confirmStop('quit'))) return;
+  quitting = true;
+  await leave();
+  app.quit();
+}
+
 ipcMain.handle(Channel.getState, () => appState());
 ipcMain.handle(Channel.host, (_event, request: HostRequest) => host(request));
 ipcMain.handle(Channel.join, (_event, request: JoinRequest) => joinSession(request));
-ipcMain.handle(Channel.leave, () => leave());
+ipcMain.handle(Channel.leave, async () => {
+  if (await confirmStop('leave')) await leave();
+});
 ipcMain.handle(Channel.newInvite, () => newInvite());
 ipcMain.handle(Channel.removeParticipant, (_event, id: unknown) => removeParticipant(id));
 ipcMain.handle(Channel.listSessions, () => listSessions());
@@ -1823,6 +1979,7 @@ if (!firstInstance) app.quit();
 function focusWindow() {
   if (!window) return;
   if (window.isMinimized()) window.restore();
+  window.show();
   window.focus();
 }
 app.on('second-instance', focusWindow);
