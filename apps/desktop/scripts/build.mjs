@@ -28,3 +28,7 @@ await Promise.all([
 // ships as a plain file next to main.cjs rather than inside the bundle.
 mkdirSync(`${root}dist`, { recursive: true });
 copyFileSync(`${root}../../packages/agents/bin/pct-hook.cjs`, `${root}dist/pct-hook.cjs`);
+
+// Window and tray icons, loaded from disk at runtime. The installer icon is
+// picked up by electron-builder from build/ directly.
+for (const file of ['icon.png', 'tray.png', 'tray@2x.png']) copyFileSync(`${root}build/${file}`, `${root}dist/${file}`);

@@ -1607,6 +1607,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: 'Foreus',
+    icon: join(__dirname, 'icon.png'),
     backgroundColor: '#16181d',
     autoHideMenuBar: true,
     webPreferences: {
@@ -1658,29 +1659,10 @@ let tray: Tray | null = null;
 /** Closing the window would cut off the friend or stop agents. */
 const keepsRunning = () => !!hosted || Object.keys(localAgents.list()).length > 0;
 
-/** A small rounded square in the app's accent colour, drawn here so no icon file has to ship. */
-function trayIcon() {
-  const size = 32;
-  const pixels = Buffer.alloc(size * size * 4);
-  const radius = 7;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx = Math.max(radius - x, x - (size - 1 - radius), 0);
-      const dy = Math.max(radius - y, y - (size - 1 - radius), 0);
-      const inside = dx * dx + dy * dy <= radius * radius;
-      const dot = (x - 15.5) ** 2 + (y - 15.5) ** 2 <= 36;
-      const at = (y * size + x) * 4;
-      // BGRA
-      if (dot) pixels.set([255, 255, 255, 255], at);
-      else if (inside) pixels.set([0xf2, 0x8c, 0x4c, 255], at);
-    }
-  }
-  return nativeImage.createFromBitmap(pixels, { width: size, height: size });
-}
-
 function showTray() {
   if (!tray) {
-    tray = new Tray(trayIcon());
+    // tray@2x.png next to it is used on high-DPI screens.
+    tray = new Tray(nativeImage.createFromPath(join(__dirname, 'tray.png')));
     tray.on('click', focusWindow);
   }
   const session = client.getState().session?.name;

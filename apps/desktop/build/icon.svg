@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="256" height="256" role="img" aria-label="Foreus">
+  <defs>
+    <linearGradient id="foreus-tile" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262a33"/><stop offset="1" stop-color="#16181d"/></linearGradient>
+    <clipPath id="foreus-sq"><rect x="6" y="6" width="52" height="52" rx="12"/></clipPath>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#foreus-tile)"/>
+  <rect x=".5" y=".5" width="63" height="63" rx="13.5" fill="none" stroke="rgba(255,255,255,.08)"/>
+  <svg x="11" y="11" width="42" height="42" viewBox="0 0 64 64">
+    <g clip-path="url(#foreus-sq)">
+      <path d="M6 6 H24 V26 H36 V38 H24 V58 H6 Z" fill="#f0a948"/>
+      <path d="M28 6 H58 V58 H28 V42 H40 V22 H28 Z" fill="#6c9bf2"/>
+    </g>
+  </svg>
+</svg>
