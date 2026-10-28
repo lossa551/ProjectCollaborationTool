@@ -210,7 +210,29 @@ export async function readGitInfo(cwd: string): Promise<GitInfo> {
   }
   const merging = (await tryRun(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], cwd)) !== null;
   const hasCommits = await hasCommit(cwd);
-  return { ...status, merging, hasCommits, branches, remoteBranches: remoteBranches.filter((b) => !branches.includes(b)) };
+  const inUse = await branchesInOtherFolders(cwd);
+  return {
+    ...status,
+    merging,
+    hasCommits,
+    branches: branches.filter((b) => !inUse.includes(b)),
+    inUse: inUse.filter((b) => branches.includes(b)),
+    remoteBranches: remoteBranches.filter((b) => !branches.includes(b)),
+  };
+}
+
+/**
+ * Branches checked out in another worktree of this repository, such as an
+ * agent chat's copy. A branch can be checked out in one folder only, so the
+ * branch checked out here is never among them.
+ */
+async function branchesInOtherFolders(cwd: string): Promise<string[]> {
+  const list = (await tryRun(['worktree', 'list', '--porcelain'], cwd)) ?? '';
+  const head = await tryRun(['symbolic-ref', '-q', 'HEAD'], cwd);
+  return list
+    .split('\n')
+    .filter((line) => line.startsWith('branch refs/heads/') && line.slice('branch '.length) !== head)
+    .map((line) => line.slice('branch refs/heads/'.length));
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -223,6 +245,7 @@ function explain(error: unknown): Error {
     return new Error('Git does not know your name yet. Run once in a terminal: git config --global user.name "Your Name" and git config --global user.email you@example.com');
   }
   if (/\[rejected\]|non-fast-forward|fetch first/i.test(text)) return new Error('GitHub has commits on this branch that you do not have. Pull first, then push.');
+  if (/is already (checked out|used by worktree) at/i.test(text)) return new Error('That branch is checked out in another folder, usually an agent chat\'s own copy. Merge or discard that work from the agent chat first.');
   if (/would be overwritten/i.test(text)) return new Error('You have uncommitted changes to files this would change. Commit them first.');
   if (refused(error)) return new Error('GitHub refused the sign-in. Use a token with write access to contents, or sign in to git on this PC.');
   return new Error(text.split('\n').filter((line) => !line.startsWith('hint:')).slice(-4).join('\n'));
