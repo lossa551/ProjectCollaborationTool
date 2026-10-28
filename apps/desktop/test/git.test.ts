@@ -190,6 +190,18 @@ describe("merging an agent's copy", { timeout: 30_000 }, () => {
     expect(await worktreeStatus(folder, { branch: 'main', commit: baseCommit })).toMatchObject({ commits: 0, files: [] });
   });
 
+  it("leaves a branch checked out in an agent's copy out of the switchable branches", async () => {
+    const { root, mine } = await setup();
+    const { createWorktree } = await import('@pct/agents');
+    await createWorktree({ root: mine, folder: join(root, 'mine-agents', 'jump'), branch: 'agent/jump', from: 'HEAD' });
+    const info = await readGitInfo(mine);
+    expect(info.branches).toEqual(['main']);
+    expect(info.inUse).toEqual(['agent/jump']);
+    await expect(runGitAction(mine, { type: 'switch', branch: 'agent/jump' }, null)).rejects.toThrow(
+      "That branch is checked out in another folder, usually an agent chat's own copy. Merge or discard that work from the agent chat first.",
+    );
+  });
+
   it('leaves a conflict for you to fix, like a pull', async () => {
     const { root, mine } = await setup();
     const { createWorktree, commitAll } = await import('@pct/agents');

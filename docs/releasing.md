@@ -16,18 +16,33 @@ that passes includes everything merged since the last published one.
 
 Versions look like `0.MINOR.PATCH`.
 
-- **PATCH is automatic.** It is the Release workflow's run number, so it always
-  goes up and nobody edits it. Failed runs use up a number, so gaps are normal.
+- **PATCH is automatic and restarts at 0 with each MINOR.** The first release
+  of a minor is `0.3.0`, then `0.3.1`, `0.3.2`, ... one per published release,
+  with no gaps (a run that fails publishes nothing and uses up no number).
+  The Release workflow works it out from the release tags already on GitHub
+  (`.github/scripts/release-version.mjs`): the highest patch of the current
+  minor plus one, or 0 if the minor has none yet. Nobody edits it.
 - **MINOR is bumped by hand, once per finished Roadmap milestone.** Change the
   `version` in `apps/desktop/package.json` (only major and minor count there) in
   the PR that finishes the milestone.
 - **1.0 is kept for the first real game project made with the app.** Until
   then we stay on 0.x.
 
-**0.2.0 is game engine support**: Godot and Summer Engine (#10) plus Unreal
-(#11). It is set on `beta` and reaches `main` with the beta-to-main promotion
-(PR #79), so the first stable 0.2.x ships once Unreal has been tested. The
-next bump after that is 0.3.0.
+**0.2 is game engine support**: Godot and Summer Engine (#10) plus Unreal
+(#11), promoted from `beta` in PR #79. The next bump is 0.3.0.
+
+### Why 0.2 starts at 0.2.39
+
+Until 2026-10-28 the patch was the Release workflow's run number, which only
+ever went up across minors (0.1.36, then 0.2.39). 0.2.39 is already out, so
+0.2 carries on from it: the next stable release is 0.2.40, then 0.2.41, and so
+on. Restarting at 0.2.1 would sort below 0.2.39, so apps on 0.2.39 would never
+update. Published releases are never deleted or renumbered. The clean scheme
+shows from the next minor: 0.3.0, 0.3.1, ...
+
+The version can never go backwards: the workflow refuses to publish a
+version at or below the newest stable release already out (say, if
+`package.json` names an older minor by mistake), and fails instead.
 
 ## Beta branch
 
@@ -37,6 +52,10 @@ requests target `beta`.
 
 - **Every push to `beta` publishes a beta release**, a GitHub prerelease that
   is never marked as GitHub's latest release, so apps on Stable never see it.
+  Betas preview the next minor and count from 1: with stable at 0.2.x they are
+  0.3.0-beta.1, 0.3.0-beta.2, ... They sort above every 0.2.x and below
+  0.3.0. (The two betas before this scheme were 0.2.0-beta.37 and -beta.38;
+  0.3.0-beta.1 still sorts above them.)
   If its tests fail, nothing is published. Starting the Release workflow by
   hand on `beta` publishes a beta too.
 - **Keep it current.** Merge `main` into `beta` (a merge, not a rebase) when
@@ -45,10 +64,10 @@ requests target `beta`.
   beta, so they only see it once it is merged into `beta` and a new beta ships.
 - **Promote** once the beta work has been tested: open a pull request from
   `beta` to `main` and merge it. That push to `main` ships it as a normal
-  release. **Bump MINOR in that PR** to the minor the betas previewed (0.2
-  for 0.2.0-beta.N): then the release (say 0.2.40) outranks every beta of it,
-  beta testers get it too, and the next betas move on to 0.3.0-beta.N.
-  Without the bump the release would be 0.1.x, below the betas, and beta
+  release. **Bump MINOR in that PR** to the minor the betas previewed (0.3
+  for 0.3.0-beta.N): then the release (0.3.0) outranks every beta of it,
+  beta testers get it too, and the next betas move on to 0.4.0-beta.1.
+  Without the bump the release would be 0.2.x, below the betas, and beta
   testers would stay on the last beta.
 
 ## Update channels
@@ -78,7 +97,9 @@ Stable.
 the run, and download `windows-installer` under Artifacts (you must be signed
 in). Unzip it and run it. It installs over Foreus and uses the same data
 folder, so your sessions and settings carry over. Its version reads
-`0.x.0-ci.N` in Settings → Versions. A test build does not update itself;
+`0.x.0-ci.N` in Settings → Versions, where x is the minor in `package.json`
+and N the CI run number; it sorts below every release of that minor, so
+Update always moves it on to a real release. A test build does not update itself;
 press Update when you want the newest version of your update channel back.
 
 **From the clone (for quick changes).** Quit Foreus first (tray icon → Quit):

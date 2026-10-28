@@ -45,7 +45,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 
 ### GitHub
 - **Status on the cards**: branches, pull requests, checks, reviews and merge conflicts.
-- **Everyday git in the app**: clone, pull, commit, push and switch branches, with locks freed after a commit.
+- **Everyday git in the app**: clone, pull, commit, push and switch branches, with locks freed after a commit. Switching asks first when you have uncommitted changes or hold locks, and branches an agent chat is working on are left out.
 - **Commit message drafts** written by an agent from your diff and the task.
 - **Issues** in the app: link them to features and tasks, make features from them, and close them when the work is done.
 
@@ -182,9 +182,10 @@ notification and turn the button into **Restart to update**. Every push to
 `beta` publishes a prerelease (`0.NEXT.0-beta.N`) that only apps on the Beta
 channel take; see [docs/releasing.md](docs/releasing.md).
 
-The version is the major.minor from `apps/desktop/package.json` plus the
-workflow's run number, for example `0.1.12`. Change major or minor there when
-you want a bigger step; the last number counts up on its own.
+The version is the major.minor from `apps/desktop/package.json` plus a patch
+that starts at 0 for each new minor and counts up by one per release, for
+example `0.3.0`, `0.3.1`. Change major or minor there when you want a bigger
+step; the last number counts up on its own.
 
 Every PR also builds the installer; download it from the CI run's artifacts to
 try a change before merging. To build one locally on Windows:

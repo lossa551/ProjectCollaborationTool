@@ -61,8 +61,13 @@ export interface GitInfo {
   merging: boolean;
   /** False in a new repository with nothing committed yet. */
   hasCommits: boolean;
-  /** Local branches. */
+  /** Local branches you can switch to here. */
   branches: string[];
+  /**
+   * Local branches checked out in another folder, usually an agent chat's own
+   * copy. Git cannot switch to them here, so they are left out of branches.
+   */
+  inUse: string[];
   /** Branches on GitHub (as of the last fetch) that you do not have locally. */
   remoteBranches: string[];
 }

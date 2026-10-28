@@ -406,6 +406,7 @@ function GitCard({ state }: { state: AppState }) {
   const changed = info.uncommitted;
   const disabled = busy !== null;
   const youId = state.session.you?.id ?? null;
+  const heldLocks = youId ? state.session.locks.filter((l) => l.holder.id === youId) : [];
   const freeable =
     committedAt === null
       ? []
@@ -566,7 +567,13 @@ function GitCard({ state }: { state: AppState }) {
         <select
           value={branch ?? ''}
           disabled={disabled}
-          onChange={(e) => e.target.value && e.target.value !== branch && void git('Switching', { type: 'switch', branch: e.target.value })}
+          onChange={async (e) => {
+            const to = e.target.value;
+            if (!to || to === branch) return;
+            const warning = switchWarning(changed.length, heldLocks.length);
+            if (warning && !(await ask(`Switch to ${to}?`, { detail: warning, confirm: 'Switch' }))) return;
+            void git('Switching', { type: 'switch', branch: to });
+          }}
         >
           {!branch && <option value="">(no branch)</option>}
           <optgroup label="On this PC">
@@ -587,6 +594,17 @@ function GitCard({ state }: { state: AppState }) {
           )}
         </select>
       </div>
+      {info.inUse.length > 0 && (
+        <p className="muted small">
+          Not listed: {info.inUse.map((name, i) => (
+            <span key={name}>
+              {i > 0 && ', '}
+              <code>{name}</code>
+            </span>
+          ))}{' '}
+          ({info.inUse.length === 1 ? 'it is' : 'they are'} checked out in an agent chat's own copy; merge or discard that work from the chat).
+        </p>
+      )}
       <form
         className="lock-form"
         onSubmit={(e) => {
@@ -612,6 +630,24 @@ function GitCard({ state }: { state: AppState }) {
       </details>
     </section>
   );
+}
+
+/** What to warn about before switching branches, or null when nothing is at stake. */
+function switchWarning(uncommitted: number, locks: number): string | null {
+  const parts: string[] = [];
+  if (uncommitted > 0) {
+    parts.push(
+      `You have ${uncommitted} uncommitted ${uncommitted === 1 ? 'change' : 'changes'}. Git brings ${uncommitted === 1 ? 'it' : 'them'} along to the other branch, ` +
+        'or refuses to switch if that branch changes the same files. Commit first to keep them on this branch.',
+    );
+  }
+  if (locks > 0) {
+    parts.push(
+      `You hold ${locks} ${locks === 1 ? 'lock' : 'locks'}. ${locks === 1 ? 'It stays' : 'They stay'} held after the switch, ` +
+        'but the files on the other branch may be different from the ones you locked.',
+    );
+  }
+  return parts.length ? parts.join('\n\n') : null;
 }
 
 function GitHubStatusLine({ github }: { github: GitHubStatus }) {
