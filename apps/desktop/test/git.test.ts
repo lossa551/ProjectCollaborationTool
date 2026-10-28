@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clone, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, uncommittedChanges } from '../src/main/git';
+import { clone, firstCommit, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, uncommittedChanges } from '../src/main/git';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -190,6 +190,18 @@ describe("merging an agent's copy", { timeout: 30_000 }, () => {
     expect(await worktreeStatus(folder, { branch: 'main', commit: baseCommit })).toMatchObject({ commits: 0, files: [] });
   });
 
+  it("leaves a branch checked out in an agent's copy out of the switchable branches", async () => {
+    const { root, mine } = await setup();
+    const { createWorktree } = await import('@pct/agents');
+    await createWorktree({ root: mine, folder: join(root, 'mine-agents', 'jump'), branch: 'agent/jump', from: 'HEAD' });
+    const info = await readGitInfo(mine);
+    expect(info.branches).toEqual(['main']);
+    expect(info.inUse).toEqual(['agent/jump']);
+    await expect(runGitAction(mine, { type: 'switch', branch: 'agent/jump' }, null)).rejects.toThrow(
+      "That branch is checked out in another folder, usually an agent chat's own copy. Merge or discard that work from the agent chat first.",
+    );
+  });
+
   it('leaves a conflict for you to fix, like a pull', async () => {
     const { root, mine } = await setup();
     const { createWorktree, commitAll } = await import('@pct/agents');
@@ -202,5 +214,55 @@ describe("merging an agent's copy", { timeout: 30_000 }, () => {
     sh(mine, 'commit', '-qam', 'person');
     expect(await mergeBranch(mine, 'agent/clash', 'merge')).toMatch(/1 file has conflicts/);
     expect((await readGitInfo(mine)).conflicted).toEqual(['game.gd']);
+  });
+});
+
+describe('firstCommit', () => {
+  /** An empty "GitHub" repository, and a clone of it with no commits, the way git leaves one. */
+  async function empty() {
+    const root = temp();
+    const origin = join(root, 'origin.git');
+    sh(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    const mine = join(root, 'mine');
+    await clone(origin, mine, root, null);
+    configure(mine);
+    // Git's own default branch may be master.
+    sh(mine, 'symbolic-ref', 'HEAD', 'refs/heads/master');
+    return { origin, mine };
+  }
+
+  it('commits only the given files on the branch asked for, and pushes it', async () => {
+    const { origin, mine } = await empty();
+    writeFileSync(join(mine, 'README.md'), '# Game\n');
+    writeFileSync(join(mine, '.gitignore'), 'Thumbs.db\n');
+    writeFileSync(join(mine, 'notes.txt'), 'not yet\n');
+    expect((await readGitInfo(mine)).hasCommits).toBe(false);
+
+    const said = await firstCommit(mine, { paths: ['README.md', '.gitignore'], message: 'First commit', branch: 'main', push: { remoteUrl: null, token: null } });
+    expect(said).toMatch(/^Made the first commit \([0-9a-f]+\) on main and pushed it to GitHub\.$/);
+    expect(sh(mine, 'ls-tree', '--name-only', 'HEAD').split('\n').sort()).toEqual(['.gitignore', 'README.md']);
+    expect(sh(origin, 'log', '--format=%s', 'main')).toBe('First commit');
+    const info = await readGitInfo(mine);
+    expect(info).toMatchObject({ hasCommits: true, upstream: 'origin/main', ahead: 0 });
+    expect(info.uncommitted).toEqual([{ path: 'notes.txt', change: 'untracked' }]);
+    await expect(firstCommit(mine, { paths: ['notes.txt'], message: 'Again', branch: 'main', push: null })).rejects.toThrow('already has a commit');
+  });
+
+  it('adds origin for the linked repository when the folder has no remote', async () => {
+    const { origin } = await empty();
+    const folder = temp();
+    sh(folder, 'init', '-q');
+    configure(folder);
+    writeFileSync(join(folder, 'README.md'), '# Tool\n');
+    expect(await firstCommit(folder, { paths: ['README.md'], message: 'First commit', branch: 'main', push: null })).toContain('Push it to share it');
+
+    const other = temp();
+    sh(other, 'init', '-q');
+    configure(other);
+    writeFileSync(join(other, 'README.md'), '# Tool\n');
+    const said = await firstCommit(other, { paths: ['README.md'], message: 'First commit', branch: 'trunk', push: { remoteUrl: origin, token: null } });
+    expect(said).toContain('pushed it to GitHub');
+    expect(sh(other, 'remote', 'get-url', 'origin')).toBe(origin);
+    expect(sh(origin, 'log', '--format=%s', 'trunk')).toBe('First commit');
   });
 });

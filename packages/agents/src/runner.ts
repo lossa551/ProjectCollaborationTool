@@ -88,6 +88,7 @@ import type { ToolSpec } from './models/types.js';
 import {
   agentBranchName,
   canMakeWorktrees,
+  isRepository,
   changedBetween,
   commitAll,
   createWorktree,
@@ -610,7 +611,16 @@ export class AgentRunner {
     if (known && run.files && (await worktreeReady(known.folder, known.branch))) return run.files;
     if (!(await canMakeWorktrees(this.options.root))) {
       // The chat header shows no copy, and the agent is told it works in the project folder.
-      if (!run.files) this.log(`${this.options.root} has no git history yet: chat ${chat.id} works in the project folder`);
+      if (!run.files) {
+        this.log(`${this.options.root} has no git history yet: chat ${chat.id} works in the project folder`);
+        if (await isRepository(this.options.root)) {
+          this.notice(
+            chat.id,
+            `${this.options.startedBy}'s project has no commit yet, so ${this.profile()?.name ?? 'the agent'} works directly in the project folder instead of a copy of its own. ` +
+              'Make the first commit (offered at the top of this chat and on the GitHub page) and the next turn starts in its own copy.',
+          );
+        }
+      }
       return (run.files = this.files);
     }
     const root = this.options.root;

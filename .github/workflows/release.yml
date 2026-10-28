@@ -2,13 +2,14 @@ name: Release
 
 # Every push to main builds the Windows installer and publishes it as a GitHub
 # Release. Installed apps find it there, download it and offer the update.
-# The version is apps/desktop's major.minor plus this workflow's run number,
-# so it always goes up: bump major or minor in package.json by hand when you
-# want to, the patch takes care of itself.
+# The version is apps/desktop's major.minor plus a patch that starts at 0 when
+# the minor is bumped and counts up by one per published release (0.3.0,
+# 0.3.1, ...): bump major or minor in package.json by hand when you want to,
+# the patch takes care of itself.
 # Every push to beta publishes a prerelease instead, versioned as a preview of
-# the next minor (0.2.0-beta.N while stable is 0.1.x), which only apps on the
-# Beta update channel take. It never becomes GitHub's latest release, so the
-# stable channel never sees it. The rules are in docs/releasing.md.
+# the next minor (0.3.0-beta.1, 0.3.0-beta.2, ... while stable is 0.2.x),
+# which only apps on the Beta update channel take. It never becomes GitHub's
+# latest release, so the stable channel never sees it. The rules are in docs/releasing.md.
 on:
   push:
     branches: [main, beta]
@@ -39,18 +40,20 @@ jobs:
       - name: Set the version
         shell: bash
         run: |
+          # Every published release has a tag; the next version counts on from them.
+          git ls-remote --tags origin 'v*' > "$RUNNER_TEMP/tags.txt"
+          pkg=$(node -p "require('./apps/desktop/package.json').version")
+          stable=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
           if [ "$GITHUB_REF_NAME" = beta ]; then
-            stable=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
-            version=$(node .github/scripts/beta-version.mjs "$(node -p "require('./apps/desktop/package.json').version")" "$stable" "$GITHUB_RUN_NUMBER")
+            version=$(node .github/scripts/release-version.mjs beta "$pkg" < "$RUNNER_TEMP/tags.txt")
             # Notes and size are against the previous beta (else the stable one).
             prev=$(gh release list --limit 50 --json tagName,isPrerelease,isDraft -q '[.[] | select(.isPrerelease and (.isDraft | not))][0].tagName' 2>/dev/null || true)
             echo "PREV=${prev:-$stable}" >> "$GITHUB_ENV"
             echo "KIND=--prerelease" >> "$GITHUB_ENV"
             echo "LATEST=--latest=false" >> "$GITHUB_ENV"
           else
-            base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
-            version="$base.$GITHUB_RUN_NUMBER"
-            echo "PREV=$(gh release view --json tagName -q .tagName 2>/dev/null || true)" >> "$GITHUB_ENV"
+            version=$(node .github/scripts/release-version.mjs stable "$pkg" < "$RUNNER_TEMP/tags.txt")
+            echo "PREV=$stable" >> "$GITHUB_ENV"
             echo "KIND=" >> "$GITHUB_ENV"
             echo "LATEST=--latest" >> "$GITHUB_ENV"
           fi
@@ -74,13 +77,19 @@ jobs:
       # The release is created here as a draft, on this exact commit, so that
       # electron-builder's parallel uploads all find it instead of racing to
       # create it, and installed apps only see it once every file is there.
-      # Beta and stable tags never collide (v0.2.0-beta.N against v0.1.N).
+      # Beta and stable tags never collide (v0.3.0-beta.N against v0.2.N).
+      # A draft has no tag yet, so a run that failed after this step leaves its
+      # draft behind and the next run picks the same version: that stale draft
+      # (and its half-uploaded files) is removed and made again on this commit.
       - name: Create a draft release
         shell: bash
         run: |
           start=()
           if [ -n "$PREV" ]; then start=(--notes-start-tag "$PREV"); fi
-          gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft $KIND --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${start[@]}"
+          if [ "$(gh release view "v$VERSION" --json isDraft -q .isDraft 2>/dev/null)" = true ]; then
+            gh release delete "v$VERSION" --yes
+          fi
+          gh release create "v$VERSION" --draft $KIND --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${start[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release -w @pct/desktop

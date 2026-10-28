@@ -18,6 +18,7 @@ import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
 import { BudgetField, BudgetMeter, CostLine } from './Cost';
 import { ask } from './Dialog';
+import { FirstCommitPrompt } from './FirstCommit';
 
 // Screen 7: shared agent chats. Everyone in the session sees every chat live
 // and can post in it; the agent answers from the PC that runs it. Edits and
@@ -260,6 +261,12 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
           </button>
         )}
       </header>
+      {!chat.worktree && agent && (state.localAgents[agent.id] || !runner) && (
+        <FirstCommitPrompt
+          state={state}
+          why={`Until there is one, ${agent.name} works directly in your project folder instead of its own copy. Make it, and the next turn starts in a copy of its own.`}
+        />
+      )}
       {chat.worktree && (
         <WorktreeBar
           state={state}

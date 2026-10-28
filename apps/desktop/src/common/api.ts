@@ -7,6 +7,7 @@ import type {
   CriterionState,
   DetectedProject,
   Engine,
+  FirstCommitFile,
   LockRules,
   PriceTable,
   MemoryOp,
@@ -61,8 +62,13 @@ export interface GitInfo {
   merging: boolean;
   /** False in a new repository with nothing committed yet. */
   hasCommits: boolean;
-  /** Local branches. */
+  /** Local branches you can switch to here. */
   branches: string[];
+  /**
+   * Local branches checked out in another folder, usually an agent chat's own
+   * copy. Git cannot switch to them here, so they are left out of branches.
+   */
+  inUse: string[];
   /** Branches on GitHub (as of the last fetch) that you do not have locally. */
   remoteBranches: string[];
 }
@@ -205,6 +211,19 @@ export interface SetupPlan {
   noteFolders: { path: string; tokens: number; files: number }[];
   /** The folder is not on a branch with a commit yet; setup makes the first commit. */
   firstCommit: boolean;
+}
+
+/** The first commit the app offers for a repository with no commits yet. */
+export interface FirstCommitPlan {
+  files: FirstCommitFile[];
+  /** The branch it goes on: the GitHub repository's default branch, else main. */
+  branch: string;
+  /** Where it is pushed ("owner/name"); null when the folder has no GitHub remote and no repository is linked. */
+  pushTo: string | null;
+  /** GitHub already has commits, so the first commit is pulled rather than made. */
+  onGitHub: boolean;
+  /** Files in the folder that stay out of the first commit. */
+  leftOut: number;
 }
 
 export interface SetupRequest {
@@ -456,6 +475,10 @@ export interface PctApi {
   folderNotePaths(): Promise<string[]>;
   /** What project setup would do in your project folder; engine picks another preset than the detected one. */
   readSetup(engine: Engine | null): Promise<ResultWith<SetupPlan>>;
+  /** What the first commit would hold, for a project folder whose repository has no commit yet. */
+  readFirstCommit(): Promise<ResultWith<FirstCommitPlan>>;
+  /** Makes the first commit (see readFirstCommit) and pushes it to GitHub when push is set. */
+  makeFirstCommit(push: boolean): Promise<ResultWith<string>>;
   /** Writes the chosen setup, has an agent draft the first folder notes, and commits it all as one commit. */
   runSetup(request: SetupRequest): Promise<ResultWith<SetupOutcome>>;
   /** Stops setup between steps (notes drafted so far are kept). */
@@ -552,6 +575,8 @@ export const Channel = {
   folderNoteTask: 'pct:folder-note-task',
   folderNotePaths: 'pct:folder-note-paths',
   readSetup: 'pct:read-setup',
+  readFirstCommit: 'pct:read-first-commit',
+  makeFirstCommit: 'pct:make-first-commit',
   runSetup: 'pct:run-setup',
   cancelSetup: 'pct:cancel-setup',
   setNotesAgent: 'pct:set-notes-agent',
