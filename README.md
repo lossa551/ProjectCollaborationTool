@@ -82,7 +82,11 @@ your PC and shows the invite code to send; **Join session** takes a code.
 Sessions you hosted or joined are listed under **Resume a session** on the
 start screen: **Resume** hosts one again with its board, invite code, GitHub
 link and project folder as you left them, and **Rejoin** uses the saved
-invite code.
+invite code. Each project is its own entry, even when one PC hosts several,
+and a hosted session keeps its port (7420, or the next free one) so its
+invite code stays the same. Only one session is open at a time. The app warns
+you when you pick a project folder another session already uses, since the
+two sessions' locks don't see each other.
 
 Sessions you host are backed up when you host them and once a day while
 hosting; the last 7 daily backups are kept in the app's data folder (or a

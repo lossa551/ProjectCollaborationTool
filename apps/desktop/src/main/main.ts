@@ -99,6 +99,7 @@ import {
   saveWorkspaceFolder,
   notesAgent,
   workspaceFolder,
+  sessionsUsingFolder,
 } from './settings';
 import { EngineWatch, engineSettingsFor, findGodotOnPath } from './engine';
 import { GodotEditorLink } from './godot-editor';
@@ -123,6 +124,8 @@ if (existsSync(LEGACY_DATA)) app.setPath('userData', LEGACY_DATA);
 // agents started on this PC and keeps the offline cache.
 
 const DEFAULT_PORT = 7420;
+/** Ports tried from DEFAULT_PORT up before any free one, so a busy port still gives a stable invite. */
+const PORT_TRIES = 10;
 
 // Node 22 has a global WebSocket; ws is the fallback with the same API.
 const client = new SessionClient({ createSocket });
@@ -287,9 +290,32 @@ const openDialog = (options: OpenDialogOptions) => (window ? dialog.showOpenDial
 // Without a visible window (e.g. from the tray) the box stands on its own.
 const messageBox = (options: MessageBoxOptions) => (window?.isVisible() ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options));
 
-function useWorkspace(sessionId: string, root: string) {
+async function useWorkspace(sessionId: string, root: string) {
+  if (!(await confirmSharedFolder(sessionId, root))) return;
   saveWorkspaceFolder(sessionId, root);
   watchFolder(root);
+}
+
+/**
+ * Another session on this PC already uses the folder: its locks and this
+ * session's don't see each other, so say so before using it twice.
+ */
+async function confirmSharedFolder(sessionId: string, root: string): Promise<boolean> {
+  const others = sessionsUsingFolder(root, sessionId);
+  if (others.length === 0) return true;
+  const saved = sessions().list();
+  const names = others.map((id) => saved.find((s) => s.sessionId === id)?.name ?? 'another session');
+  const { response } = await messageBox({
+    type: 'warning',
+    message: 'This folder is already used by another session',
+    detail:
+      `${root} is your project folder in ${[...new Set(names)].map((n) => `"${n}"`).join(', ')} too. ` +
+      'Each session has its own locks, so people and agents in one session will not see what is locked in the other, and their changes can collide.',
+    buttons: ['Use it anyway', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+  });
+  return response === 0;
 }
 
 // Keep the saved entry of the session in use up to date: its id (which ties
@@ -357,7 +383,7 @@ async function chooseWorkspace(): Promise<Result> {
     const folder = picked.filePaths[0];
     if (picked.canceled || !folder) return { ok: true };
     try {
-      useWorkspace(sessionId, await repositoryRoot(folder));
+      await useWorkspace(sessionId, await repositoryRoot(folder));
       return { ok: true };
     } catch (error) {
       if (!(error instanceof GitError)) return failure(error);
@@ -375,7 +401,7 @@ async function chooseWorkspace(): Promise<Result> {
         if (response === 1) continue;
         try {
           await trustFolder(repoFolder);
-          useWorkspace(sessionId, await repositoryRoot(folder));
+          await useWorkspace(sessionId, await repositoryRoot(folder));
           return { ok: true };
         } catch (again) {
           return failure(again);
@@ -416,7 +442,7 @@ async function chooseWorkspace(): Promise<Result> {
 async function initWorkspace(sessionId: string, folder: string): Promise<Result> {
   try {
     await initRepository(folder);
-    useWorkspace(sessionId, await repositoryRoot(folder));
+    await useWorkspace(sessionId, await repositoryRoot(folder));
     return { ok: true };
   } catch (error) {
     return failure(error);
@@ -467,7 +493,7 @@ async function cloneInto(folder: string): Promise<Result> {
     // Already cloned there before? Then just use it.
     const root = await repositoryRoot(target).catch(() => null);
     if (root) {
-      useWorkspace(sessionId, root);
+      await useWorkspace(sessionId, root);
       return { ok: true };
     }
     return { ok: false, error: `${target} already exists and is not empty. Choose another folder.` };
@@ -475,7 +501,7 @@ async function cloneInto(folder: string): Promise<Result> {
   cloning = true;
   try {
     await clone(`https://github.com/${repo.owner}/${repo.name}.git`, target, existsSync(target) ? target : dirname(target), await gitToken());
-    useWorkspace(sessionId, await repositoryRoot(target));
+    await useWorkspace(sessionId, await repositoryRoot(target));
     return { ok: true };
   } catch (error) {
     return failure(error);
@@ -832,21 +858,21 @@ function stopWorkspace() {
 
 // Keep the cache of a joined session up to date (hosted sessions are saved by
 // the server itself). Writes are batched, and flushed when the app quits.
-let cachedUrl: string | null = null;
+let cachingJoined = false;
 let cacheTimer: ReturnType<typeof setTimeout> | null = null;
 const flushCache = () => {
   if (cacheTimer) clearTimeout(cacheTimer);
   cacheTimer = null;
   const snapshot = client.getSnapshot();
-  if (!cachedUrl || !snapshot) return;
+  if (!cachingJoined || !snapshot) return;
   try {
-    saveSnapshot(cachedUrl, snapshot);
+    saveSnapshot(snapshot);
   } catch (error) {
     console.error('Could not save the session cache', error);
   }
 };
 client.subscribe(() => {
-  if (cachedUrl && !cacheTimer) cacheTimer = setTimeout(flushCache, 500);
+  if (cachingJoined && !cacheTimer) cacheTimer = setTimeout(flushCache, 500);
 });
 // Quitting from the tray, an update or the system skips window-all-closed.
 app.on('before-quit', () => {
@@ -880,7 +906,7 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
   const key = savedKey ?? sessions().newHostKey();
   try {
     flushCache();
-    cachedUrl = null;
+    cachingJoined = false;
     client.disconnect();
     await stopHosting();
     // Each hosted session is saved in its own file on this PC.
@@ -889,13 +915,9 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
     const saved = loadGitHubToken();
     const token = saved ?? (await tokenFromGitHubCli());
     const options = { sessionName: sessionName || undefined, storage, github: { token }, log: console.log };
+    const previous = sessions().get(key);
     try {
-      try {
-        hosted = await startServer({ ...options, port: DEFAULT_PORT });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
-        hosted = await startServer({ ...options, port: 0 });
-      }
+      hosted = await startOnFreePort(options, previous?.port);
     } catch (error) {
       await storage.close();
       throw error;
@@ -904,13 +926,12 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
     const shareable = findShareableAddress();
     const url = `ws://${shareable.address}:${hosted.port}${SOCKET_PATH}`;
     hosting = {
-      invite: encodeInvite({ url, secret: hosted.secret, sessionName: hosted.session.name }),
+      invite: encodeInvite({ url, secret: hosted.secret, sessionName: hosted.session.name, sessionId: hosted.session.id }),
       address: shareable.address,
       addressSource: shareable.source,
       port: hosted.port,
     };
     joined = { url: hosted.localUrl, secret: hosted.secret };
-    const previous = sessions().get(key);
     sessions().save({
       key,
       role: 'host',
@@ -918,6 +939,7 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
       name: hosted.session.name,
       invite: hosting.invite,
       repo: previous?.repo ?? null,
+      port: hosted.port,
     });
     currentKey = key;
     startBackups(key, storage);
@@ -931,25 +953,45 @@ async function host({ name, sessionName }: HostRequest, savedKey?: string): Prom
   }
 }
 
+/**
+ * Starts the server on the port this session used last, so friends' saved
+ * invite codes keep working, else the usual port or the next few after it,
+ * and only then any free port (which changes the invite code).
+ */
+async function startOnFreePort(options: Omit<Parameters<typeof startServer>[0], 'port'>, lastPort?: number): Promise<RunningServer> {
+  const ports = [...new Set([lastPort ?? DEFAULT_PORT, ...Array.from({ length: PORT_TRIES }, (_, i) => DEFAULT_PORT + i)])];
+  for (const port of ports) {
+    try {
+      return await startServer({ ...options, port });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
+    }
+  }
+  return startServer({ ...options, port: 0 });
+}
+
 async function joinSession({ name, invite }: JoinRequest): Promise<Result> {
   const decoded = decodeInvite(invite);
   if (!decoded) return { ok: false, error: 'That is not a valid invite code.' };
   await stopHosting();
   flushCache();
-  cachedUrl = decoded.url;
+  cachingJoined = true;
   joined = { url: decoded.url, secret: decoded.secret };
-  const key = sessions().joinKey(decoded.url);
-  const saved = sessions().get(key);
+  // Matched by session id, so two sessions hosted on one PC stay apart.
+  const saved = sessions().findJoined(decoded);
+  const key = saved?.key ?? sessions().newJoinKey();
+  const sessionId = decoded.sessionId ?? saved?.sessionId ?? null;
   sessions().save({
     key,
     role: 'join',
-    sessionId: saved?.sessionId ?? null,
+    sessionId,
     name: decoded.sessionName ?? saved?.name ?? 'Session',
     invite: invite.trim(),
     repo: saved?.repo ?? null,
   });
   currentKey = key;
-  client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() }, loadSnapshot(decoded.url));
+  const cached = sessionId ? loadSnapshot(sessionId, decoded.url) : undefined;
+  client.connect({ url: decoded.url, secret: decoded.secret, name, identity: loadIdentity() }, cached);
   return { ok: true };
 }
 
@@ -1036,7 +1078,7 @@ async function confirmStop(action: 'quit' | 'leave'): Promise<boolean> {
 async function leave() {
   // Keep the cache: changes not sent yet go out the next time you join.
   flushCache();
-  cachedUrl = null;
+  cachingJoined = false;
   client.disconnect();
   await stopHosting();
   pushState();

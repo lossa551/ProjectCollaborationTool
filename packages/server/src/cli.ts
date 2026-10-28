@@ -47,7 +47,7 @@ const url = `${tls ? 'wss' : 'ws'}://${shareable.address}:${server.port}${SOCKET
 console.log(`Session "${server.session.name}" listening on port ${server.port}`);
 console.log(`Saved in ${dbPath === ':memory:' ? 'memory only (nothing is kept)' : dbPath}`);
 console.log(`Address for invites: ${url} (${shareable.source})`);
-console.log(`Invite code:\n\n  ${encodeInvite({ url, secret: server.secret, sessionName: server.session.name })}\n`);
+console.log(`Invite code:\n\n  ${encodeInvite({ url, secret: server.secret, sessionName: server.session.name, sessionId: server.session.id })}\n`);
 console.log(
   githubToken
     ? 'GitHub: using a token.'
