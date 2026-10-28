@@ -429,7 +429,7 @@ export class SessionClient {
       (profileId && usage.chatId === commitDraftUsageId(profileId) ? { agentId: profileId, taskId: usage.taskId ?? null } : undefined);
     if (chat) {
       const key = usageKey(usage);
-      const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat);
+      const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat, Date.now(), this.state.prices);
       this.setState({ ...this.state, usage: upsertUsage(this.state.usage, row) });
     }
     this.send({ type: 'usage.record', usage });

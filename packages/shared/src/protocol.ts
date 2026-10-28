@@ -48,7 +48,7 @@ import { DocId, EncodedUpdate } from './docs.js';
 import { PriceTable, UsageReport, UsageRow } from './usage.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 16;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';

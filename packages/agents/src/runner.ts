@@ -327,8 +327,8 @@ export class AgentRunner {
     if (!agent) throw new Error('This agent no longer exists.');
     // Every draft (commit messages, folder notes) counts as the agent's own usage.
     const usageId = commitDraftUsageId(agent.id);
-    const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null) =>
-      this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId });
+    const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null, single = false) =>
+      this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId, single });
     const connection = agent.connection;
     if (connection.type === 'api') {
       const factory = this.options.createModel;
@@ -340,7 +340,7 @@ export class AgentRunner {
         signal,
         onText: () => {},
       });
-      if (turn.usage) record(turn.model ?? connection.model, connection.provider === 'ollama' ? 'free' : 'priced', turn.usage, null);
+      if (turn.usage) record(turn.model ?? connection.model, connection.provider === 'ollama' ? 'free' : 'priced', turn.usage, null, true);
       if (turn.stop === 'refusal') throw new Error('The model declined to write a message.');
       return turn.text;
     }
@@ -375,7 +375,7 @@ export class AgentRunner {
       args.push('-');
       result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env }, prompt, signal, parse: parseCodexLine, onEvent });
     }
-    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null);
+    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null, true);
     if (signal.aborted) throw new Error('stopped');
     if (failure || (result.exitCode !== 0 && result.exitCode !== null)) {
       const detail = failure ?? (result.stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${result.exitCode}`);
@@ -1083,8 +1083,9 @@ export class AgentRunner {
     };
   }
 
-  private recordUsage(chatId: string, model: string, source: UsageSource, usage: TokenUsage, cost: number | null) {
-    this.client.recordUsage({ chatId, model, source, ...usage, cost, day: usageDay(Date.now()) });
+  /** `single`: the usage is one model call's, not a CLI run's totals. */
+  private recordUsage(chatId: string, model: string, source: UsageSource, usage: TokenUsage, cost: number | null, single = false) {
+    this.client.recordUsage({ chatId, model, source, ...usage, cost, day: usageDay(Date.now()), single });
   }
 
   /** What the CLI run going on now has used, by the price table, before the tool reports it. */
@@ -1403,7 +1404,7 @@ export class AgentRunner {
       });
       writer.finish(turn.text);
       if (turn.usage) {
-        this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null);
+        this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null, true);
         run.promptTokens = turn.usage.input + turn.usage.cacheRead + turn.usage.cacheWrite;
         this.warnIfContextLarge(chat.id, run);
       }
@@ -1917,7 +1918,7 @@ export class AgentRunner {
     }
     // A run stopped before the tool reported its usage still counts what it used so far.
     if (!reported) {
-      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null);
+      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null, true);
     }
     run.live.clear();
     // Open tool lines of a stopped or failed run stay readable.
