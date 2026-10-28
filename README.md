@@ -45,7 +45,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 
 ### GitHub
 - **Status on the cards**: branches, pull requests, checks, reviews and merge conflicts.
-- **Everyday git in the app**: clone, pull, commit, push and switch branches, with locks freed after a commit.
+- **Everyday git in the app**: clone, pull, commit, push and switch branches, with locks freed after a commit. Switching asks first when you have uncommitted changes or hold locks, and branches an agent chat is working on are left out.
 - **Commit message drafts** written by an agent from your diff and the task.
 - **Issues** in the app: link them to features and tasks, make features from them, and close them when the work is done.
 
