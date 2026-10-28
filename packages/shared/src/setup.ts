@@ -554,3 +554,42 @@ export function withPresetLocks(rules: LockRules, engine: Engine): LockRules {
   const have = new Set(rules.exclusivePatterns.map((p) => p.toLowerCase()));
   return { exclusivePatterns: [...rules.exclusivePatterns, ...PRESETS[engine].locks.filter((p) => !have.has(p.toLowerCase()))] };
 }
+
+// First commit: agent chats work in their own git worktree, which needs a
+// commit to start from, so a repository with none (a new, empty GitHub repo,
+// or a folder just made a repository) is offered one. It holds a README, a
+// .gitignore and the files project setup wrote, if it ran; everything else
+// in the folder stays uncommitted for the person to commit when ready.
+
+export const FIRST_COMMIT_MESSAGE = 'First commit';
+
+/** What any project's .gitignore starts with: files the OS and editors leave around. */
+export const BASE_GITIGNORE = ['.DS_Store', 'Thumbs.db', 'desktop.ini', '*.tmp', '*.swp', '.vs/', '.idea/'];
+
+/** Setup's own files, taken into the first commit when they are there. */
+export const FIRST_COMMIT_SETUP_FILES = [NOTE_FILE, CLAUDE_FILE, SETUP_CONFIG_PATH, '.gitattributes', MEMORY_EXPORT_PATH];
+
+export interface FirstCommitFile {
+  path: string;
+  /** Written by the first commit; otherwise it is already in the folder and only committed. */
+  isNew: boolean;
+}
+
+/**
+ * The first commit for a folder: a README named after the project and a
+ * .gitignore (with the engine's lines) when they are missing, and whichever of
+ * those and setup's files are there already. `present` lists the paths that exist.
+ */
+export function planFirstCommit(name: string, engine: Engine, present: string[]): { files: FirstCommitFile[]; write: Record<string, string> } {
+  const has = (path: string) => present.some((p) => p.toLowerCase() === path.toLowerCase());
+  const write: Record<string, string> = {};
+  if (!has('README.md')) write['README.md'] = `# ${name}\n`;
+  if (!has('.gitignore')) {
+    const engineLines = PRESETS[engine].gitignore;
+    write['.gitignore'] = appendSection(engineLines.length ? appendSection(null, sectionHeader(engine), engineLines) : null, '# Files the OS and editors make', BASE_GITIGNORE);
+  }
+  const files: FirstCommitFile[] = ['README.md', '.gitignore', ...FIRST_COMMIT_SETUP_FILES]
+    .filter((path) => write[path] !== undefined || has(path))
+    .map((path) => ({ path: present.find((p) => p.toLowerCase() === path.toLowerCase()) ?? path, isNew: write[path] !== undefined }));
+  return { files, write };
+}

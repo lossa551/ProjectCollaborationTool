@@ -22,7 +22,8 @@ const init = (dir: string) => {
   git(dir, 'config', 'user.name', 'Test');
 };
 
-describe('adding EngineWire', () => {
+// Git starts slowly on Windows, and the first test runs it a dozen times.
+describe('adding EngineWire', { timeout: 30_000 }, () => {
   it('copies the pinned plugin into Plugins/ and keeps it out of git', async () => {
     // A stand-in for ChiR24/Unreal_mcp with the release tag.
     const upstream = temp();

@@ -113,6 +113,45 @@ export async function hasCommit(cwd: string): Promise<boolean> {
   return (await tryRun(['rev-parse', '--verify', '--quiet', 'HEAD'], cwd)) !== null;
 }
 
+export interface FirstCommitOptions {
+  /** Files to commit, already written. */
+  paths: string[];
+  message: string;
+  /** The branch the commit goes on, e.g. the GitHub repository's default branch. */
+  branch: string;
+  /** Pushes the branch to origin, adding origin as this address when the repository has none. */
+  push: { remoteUrl: string | null; token: string | null } | null;
+}
+
+/**
+ * Makes the first commit of a repository that has none, with just these
+ * files, on the given branch; then pushes it when asked. Says what happened.
+ */
+export async function firstCommit(cwd: string, { paths, message, branch, push }: FirstCommitOptions): Promise<string> {
+  try {
+    if (await hasCommit(cwd)) throw new Error('This repository already has a commit.');
+    if ((await tryRun(['check-ref-format', '--branch', branch], cwd)) === null) throw new Error(`${branch} is not a valid branch name.`);
+    // Nothing is on the unborn branch yet, so it is simply renamed (git's default may be master).
+    await run(['symbolic-ref', 'HEAD', `refs/heads/${branch}`], { cwd });
+    const commit = await commitPaths(cwd, paths, message);
+    if (!commit) throw new Error('There was nothing to commit.');
+    const made = `Made the first commit (${commit}) on ${branch}`;
+    if (!push) return `${made}. Push it to share it.`;
+    if ((await tryRun(['remote', 'get-url', 'origin'], cwd)) === null) {
+      if (!push.remoteUrl) return `${made}. This repository has no GitHub remote yet: link the repository on the GitHub page, then push.`;
+      await run(['remote', 'add', 'origin', push.remoteUrl], { cwd });
+    }
+    try {
+      await remote(['push', '-u', 'origin', branch], { cwd, token: push.token });
+    } catch (error) {
+      throw new Error(`${made}, but pushing it failed: ${explain(error).message}`);
+    }
+    return `${made} and pushed it to GitHub.`;
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
 /** Git LFS is installed on this PC. */
 export async function hasGitLfs(cwd: string): Promise<boolean> {
   return (await tryRun(['lfs', 'version'], cwd)) !== null;
@@ -210,7 +249,29 @@ export async function readGitInfo(cwd: string): Promise<GitInfo> {
   }
   const merging = (await tryRun(['rev-parse', '-q', '--verify', 'MERGE_HEAD'], cwd)) !== null;
   const hasCommits = await hasCommit(cwd);
-  return { ...status, merging, hasCommits, branches, remoteBranches: remoteBranches.filter((b) => !branches.includes(b)) };
+  const inUse = await branchesInOtherFolders(cwd);
+  return {
+    ...status,
+    merging,
+    hasCommits,
+    branches: branches.filter((b) => !inUse.includes(b)),
+    inUse: inUse.filter((b) => branches.includes(b)),
+    remoteBranches: remoteBranches.filter((b) => !branches.includes(b)),
+  };
+}
+
+/**
+ * Branches checked out in another worktree of this repository, such as an
+ * agent chat's copy. A branch can be checked out in one folder only, so the
+ * branch checked out here is never among them.
+ */
+async function branchesInOtherFolders(cwd: string): Promise<string[]> {
+  const list = (await tryRun(['worktree', 'list', '--porcelain'], cwd)) ?? '';
+  const head = await tryRun(['symbolic-ref', '-q', 'HEAD'], cwd);
+  return list
+    .split('\n')
+    .filter((line) => line.startsWith('branch refs/heads/') && line.slice('branch '.length) !== head)
+    .map((line) => line.slice('branch refs/heads/'.length));
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -223,6 +284,7 @@ function explain(error: unknown): Error {
     return new Error('Git does not know your name yet. Run once in a terminal: git config --global user.name "Your Name" and git config --global user.email you@example.com');
   }
   if (/\[rejected\]|non-fast-forward|fetch first/i.test(text)) return new Error('GitHub has commits on this branch that you do not have. Pull first, then push.');
+  if (/is already (checked out|used by worktree) at/i.test(text)) return new Error('That branch is checked out in another folder, usually an agent chat\'s own copy. Merge or discard that work from the agent chat first.');
   if (/would be overwritten/i.test(text)) return new Error('You have uncommitted changes to files this would change. Commit them first.');
   if (refused(error)) return new Error('GitHub refused the sign-in. Use a token with write access to contents, or sign in to git on this PC.');
   return new Error(text.split('\n').filter((line) => !line.startsWith('hint:')).slice(-4).join('\n'));

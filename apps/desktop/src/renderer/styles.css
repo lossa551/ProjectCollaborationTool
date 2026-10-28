@@ -3186,3 +3186,19 @@ button.secondary.active {
 .settings-screen > .tabs {
   margin-bottom: 4px;
 }
+
+/* The first commit offer for a repository with no commits (GitHub page, agent chats, setup). */
+.first-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.first-commit p {
+  margin: 0;
+}

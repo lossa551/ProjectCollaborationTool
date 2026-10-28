@@ -11,6 +11,7 @@ import {
   missingLfs,
   missingLines,
   parseSetupConfig,
+  planFirstCommit,
   planSetup,
   rulesBlock,
   setupFiles,
@@ -246,6 +247,31 @@ describe('the Godot editor plugin', () => {
     ).toEqual([
       { action: 'lock', path: 'res://levels/one.tscn' },
       { action: 'release', path: 'res://a.tres' },
+    ]);
+  });
+});
+
+describe('planFirstCommit', () => {
+  it('adds a README and a .gitignore with the engine lines to an empty folder', () => {
+    const { files, write } = planFirstCommit('Trader-2.0', 'godot', []);
+    expect(files).toEqual([
+      { path: 'README.md', isNew: true },
+      { path: '.gitignore', isNew: true },
+    ]);
+    expect(write['README.md']).toBe('# Trader-2.0\n');
+    expect(write['.gitignore']).toContain('.godot/');
+    expect(write['.gitignore']).toContain('Thumbs.db');
+  });
+
+  it('keeps files that are there and takes setup’s files along', () => {
+    const { files, write } = planFirstCommit('Tool', 'generic', ['readme.md', '.gitignore', 'AGENTS.md', 'CLAUDE.md', 'src/', 'docs/project-memory.md']);
+    expect(write).toEqual({});
+    expect(files).toEqual([
+      { path: 'readme.md', isNew: false },
+      { path: '.gitignore', isNew: false },
+      { path: 'AGENTS.md', isNew: false },
+      { path: 'CLAUDE.md', isNew: false },
+      { path: 'docs/project-memory.md', isNew: false },
     ]);
   });
 });
