@@ -11,6 +11,8 @@ const InvitePayload = z.object({
   url: z.string().url(),
   secret: z.string().min(1),
   sessionName: z.string().optional(),
+  /** Which session on that server; codes made before it was added have none. */
+  sessionId: z.string().min(1).optional(),
 });
 export type Invite = z.infer<typeof InvitePayload>;
 

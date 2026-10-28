@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { encodeInvite } from '@pct/shared';
 import { LEGACY_HOST_KEY, SessionHistory } from '../src/main/sessions';
 
 const dirs: string[] = [];
@@ -15,13 +16,16 @@ function folder() {
   return dir;
 }
 
-const joined = (history: SessionHistory, url: string, extra: { sessionId?: string; lastUsedAt?: number } = {}) =>
+/** A test key per address; real joined keys are random. */
+const keyOf = (url: string) => `join-${url.replace(/\W/g, '')}`;
+
+const joined = (history: SessionHistory, url: string, extra: { sessionId?: string; lastUsedAt?: number; secret?: string; key?: string } = {}) =>
   history.save({
-    key: history.joinKey(url),
+    key: extra.key ?? keyOf(url),
     role: 'join',
     sessionId: extra.sessionId ?? null,
     name: 'Game',
-    invite: `pct1.${url}`,
+    invite: encodeInvite({ url, secret: extra.secret ?? 'secret' }),
     repo: null,
     ...(extra.lastUsedAt !== undefined && { lastUsedAt: extra.lastUsedAt }),
   });
@@ -52,7 +56,7 @@ describe('SessionHistory', () => {
     const history = new SessionHistory(folder());
     joined(history, 'ws://a/ws', { lastUsedAt: 1 });
     joined(history, 'ws://b/ws', { lastUsedAt: 2 });
-    history.update(history.joinKey('ws://a/ws'), { sessionId: 'sa', name: 'Renamed', repo: 'o/r' });
+    history.update(keyOf('ws://a/ws'), { sessionId: 'sa', name: 'Renamed', repo: 'o/r' });
     expect(history.list()[1]).toMatchObject({ sessionId: 'sa', name: 'Renamed', repo: 'o/r', lastUsedAt: 1 });
   });
 
@@ -60,8 +64,41 @@ describe('SessionHistory', () => {
     const history = new SessionHistory(folder());
     joined(history, 'ws://old/ws', { sessionId: 'same' });
     joined(history, 'ws://new/ws');
-    history.update(history.joinKey('ws://new/ws'), { sessionId: 'same' });
-    expect(history.list().map((s) => s.key)).toEqual([history.joinKey('ws://new/ws')]);
+    history.update(keyOf('ws://new/ws'), { sessionId: 'same' });
+    expect(history.list().map((s) => s.key)).toEqual([keyOf('ws://new/ws')]);
+  });
+
+  it('keeps two sessions hosted on the same PC apart', () => {
+    const history = new SessionHistory(folder());
+    const url = 'ws://friend:7420/ws';
+    joined(history, url, { key: 'join-a', sessionId: 'a', secret: 'sa' });
+    joined(history, url, { key: 'join-b', sessionId: 'b', secret: 'sb' });
+    expect(history.list()).toHaveLength(2);
+    // New codes carry the session id.
+    expect(history.findJoined({ url, secret: 'rotated', sessionId: 'a' })?.key).toBe('join-a');
+    expect(history.findJoined({ url, secret: 'sb', sessionId: 'b' })?.key).toBe('join-b');
+    expect(history.findJoined({ url, secret: 'sc', sessionId: 'c' })).toBeNull();
+    // Older codes are matched by address and secret together.
+    expect(history.findJoined({ url, secret: 'sb' })?.key).toBe('join-b');
+    expect(history.findJoined({ url, secret: 'other' })).toBeNull();
+  });
+
+  it('finds entries saved by address before, so nothing is lost', () => {
+    const dir = folder();
+    const url = 'ws://friend:7420/ws';
+    const legacyKey = 'join-0123456789abcdef';
+    joined(new SessionHistory(dir), url, { key: legacyKey, sessionId: 'a', secret: 's' });
+    const history = new SessionHistory(dir);
+    expect(history.findJoined({ url, secret: 's' })?.key).toBe(legacyKey);
+    expect(history.findJoined({ url: 'ws://moved:7420/ws', secret: 'new', sessionId: 'a' })?.key).toBe(legacyKey);
+    // A code for another session at that address does not take the old entry.
+    expect(history.findJoined({ url, secret: 's', sessionId: 'b' })).toBeNull();
+  });
+
+  it('remembers the port a hosted session used', () => {
+    const dir = folder();
+    new SessionHistory(dir).save({ key: 'host-1', role: 'host', sessionId: 'h', name: 'Mine', invite: null, repo: null, port: 7421 });
+    expect(new SessionHistory(dir).get('host-1')?.port).toBe(7421);
   });
 
   it('never drops hosted sessions when trimming old joined ones', () => {

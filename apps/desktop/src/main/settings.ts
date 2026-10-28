@@ -1,6 +1,6 @@
 import { app, safeStorage } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 // Small settings kept on this PC: which project folder is your workspace in
 // each session, and the GitHub token the hosted server uses.
@@ -28,6 +28,21 @@ function readFolders(): Record<string, string> {
 export function workspaceFolder(sessionId: string): string | null {
   return readFolders()[sessionId] ?? null;
 }
+
+/** The other sessions whose project folder on this PC is this one. */
+export function sessionsUsingFolder(folder: string, exceptSessionId: string): string[] {
+  const same = samePath(folder);
+  return Object.entries(readFolders())
+    .filter(([id, saved]) => id !== exceptSessionId && same(saved))
+    .map(([id]) => id);
+}
+
+const samePath = (a: string) => {
+  // Windows paths ignore case.
+  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
+  const target = norm(a);
+  return (b: string) => norm(b) === target;
+};
 
 export function saveWorkspaceFolder(sessionId: string, folder: string | null) {
   const folders = readFolders();
