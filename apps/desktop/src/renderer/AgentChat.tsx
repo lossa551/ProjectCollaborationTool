@@ -992,14 +992,7 @@ function SaveToMemory({ state, chat }: { state: AppState; chat: ChatInfo }) {
 
 /** How big the context is, and how close to where a new chat is suggested. */
 function ContextSize({ context }: { context: ChatContext }) {
-  const trimmed = context.trimmed > 0 && ` ${context.trimmed} old tool ${context.trimmed === 1 ? 'result' : 'results'} shortened.`;
-  if (!context.warnAt) {
-    return (
-      <p className="small">
-        About {formatTokens(context.tokens)} tokens in context.{trimmed}
-      </p>
-    );
-  }
+  if (!context.warnAt) return <p className="small">About {formatTokens(context.tokens)} tokens in context.</p>;
   const share = Math.min(1, context.tokens / context.warnAt);
   const large = contextIsLarge(context);
   return (
@@ -1012,10 +1005,7 @@ function ContextSize({ context }: { context: ChatContext }) {
           About {formatTokens(context.tokens)} of {formatTokens(context.warnAt)} tokens
         </span>
       </span>
-      <p className="small muted">
-        {large ? 'Large: continuing in a new chat is cheaper from here.' : 'A new chat is suggested past this size.'}
-        {trimmed}
-      </p>
+      <p className="small muted">{large ? 'Large: continuing in a new chat is cheaper from here.' : 'A new chat is suggested past this size.'}</p>
     </div>
   );
 }
@@ -1114,7 +1104,7 @@ function HandoffForm({
       </label>
       {task && (
         <label className="field">
-          <span>Move "{task.title}" to</span>
+          <span>{continuing ? `Stage of "${task.title}"` : `Move "${task.title}" to`}</span>
           <select value={stage} onChange={(e) => setStage(e.target.value as TaskStage)}>
             {TaskStage.options.map((s) => (
               <option key={s} value={s}>
