@@ -24,6 +24,16 @@ const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ?
 const str = (value: unknown) => (typeof value === 'string' ? value : '');
 const short = (text: string, max = 80) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+/** Whether the tool result of a call is still whole in the history (not cleared, and not lost with a rebuilt history). */
+export function resultShown(history: LoopMessage[], id: string): boolean {
+  for (const m of history) {
+    if (m.role !== 'tool') continue;
+    const r = m.results.find((x) => x.id === id);
+    if (r) return !r.isError && !r.content.startsWith(`[${CLEARED}`);
+  }
+  return false;
+}
+
 /** What an old tool result said, in one line. */
 export function summarizeResult(call: ToolCall | undefined, result: ToolResult): string {
   const input = (call?.input && typeof call.input === 'object' ? call.input : {}) as Record<string, unknown>;

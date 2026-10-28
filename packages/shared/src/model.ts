@@ -457,6 +457,10 @@ export const ChatContext = z.object({
   warnAt: z.number().int().positive().nullable().default(null),
   /** Old tool results and inputs shortened so far to keep the context small. */
   trimmed: z.number().int().min(0).default(0),
+  /** Repeated file reads answered with "unchanged" or only the changed lines (our own loop, issue #91). */
+  readsSaved: z.number().int().min(0).default(0),
+  /** Reads of a file part the agent had read before in the chat (CLI agents: counted, not changed). */
+  readsRepeated: z.number().int().min(0).default(0),
 });
 export type ChatContext = z.infer<typeof ChatContext>;
 

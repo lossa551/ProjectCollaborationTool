@@ -111,6 +111,11 @@ function pieces({ agent, chat, task, startedBy, memory, taskChatIds, readsMemory
         'approve them. If an action is blocked or denied, ' +
         'do not try to reach the same result another way: say what you need and why. Keep changes to what the task asks for, ' +
         'and avoid adding new systems, dependencies or files the task does not need. Paths are relative to the repository root.',
+      // Our own loop answers repeated reads briefly (reads.ts); a CLI agent's reads can only be watched, so it is asked instead.
+      recordsResults
+        ? ''
+        : 'Read long files in parts, starting with the part you need, and do not read a file again unless it changed since ' +
+          'you read it: your earlier copy is still in your context, and every copy is sent again with each step.',
       agent.allowedPaths.length > 0 ? `You may change only these paths:\n${agent.allowedPaths.map((p) => `- ${p}`).join('\n')}` : '',
     ]
       .filter(Boolean)
@@ -250,6 +255,9 @@ export function describeContext(
     measured?: number | null;
     /** Old tool results and inputs shortened so far (see trimHistory). */
     trimmed?: number;
+    /** Repeated reads answered briefly (our own loop), and repeated reads seen (CLI agents), see reads.ts. */
+    readsSaved?: number;
+    readsRepeated?: number;
     /** When to suggest continuing in a new chat; null for agents that keep their own context. */
     warnAt?: number | null;
   },
@@ -264,5 +272,12 @@ export function describeContext(
     tokens: conversation,
   });
   const estimated = items.reduce((sum, item) => sum + item.tokens, 0);
-  return { items, tokens: extra.measured || estimated, warnAt: extra.warnAt ?? null, trimmed };
+  return {
+    items,
+    tokens: extra.measured || estimated,
+    warnAt: extra.warnAt ?? null,
+    trimmed,
+    readsSaved: extra.readsSaved ?? 0,
+    readsRepeated: extra.readsRepeated ?? 0,
+  };
 }
