@@ -7,8 +7,11 @@ import { normalizePath } from '@pct/shared';
 // running commands, always inside the folder. Whether it is allowed to is
 // decided before these are called (see guard.ts).
 
-const MAX_READ_BYTES = 256 * 1024;
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_READ_CHARS = 256 * 1024;
 const MAX_OUTPUT = 20_000;
+/** Lines read_file returns when no limit is given (issue #91); long files are read in parts. */
+export const DEFAULT_READ_LINES = 400;
 
 function git(root: string, args: string[], maxBuffer = 16 * 1024 * 1024): Promise<string> {
   return new Promise((resolvePromise, reject) => {
@@ -21,6 +24,17 @@ function git(root: string, args: string[], maxBuffer = 16 * 1024 * 1024): Promis
 
 export function clip(text: string, limit = MAX_OUTPUT): string {
   return text.length > limit ? `${text.slice(0, limit)}\n… (${text.length - limit} more characters)` : text;
+}
+
+/** Lines `offset` to `offset + limit - 1` of a file, numbered, and how many more there are. */
+export function numberLines(text: string, offset = 1, limit = DEFAULT_READ_LINES): string {
+  const lines = text.split('\n');
+  const start = Math.max(1, offset);
+  const slice = lines.slice(start - 1, start - 1 + limit);
+  const numbered = slice.map((line, i) => `${String(start + i).padStart(5)}  ${line}`).join('\n');
+  const left = lines.length - (start - 1 + limit);
+  const more = left > 0 ? `\n… ${left} more lines; read them with offset ${start + limit}` : '';
+  return clip(numbered, MAX_READ_CHARS) + more;
 }
 
 export class ProjectFiles {
@@ -61,19 +75,20 @@ export class ProjectFiles {
     return rel.split(sep).join('/');
   }
 
-  async read(rawPath: string, offset = 1, limit = 2000): Promise<string> {
+  async read(rawPath: string, offset = 1, limit = DEFAULT_READ_LINES): Promise<string> {
+    const file = await this.readText(rawPath);
+    return 'text' in file ? numberLines(file.text, offset, limit) : file.message;
+  }
+
+  /** A text file's whole content; for a folder or binary file, what to say instead. */
+  async readText(rawPath: string): Promise<{ rel: string; text: string } | { rel: string; message: string }> {
     const { abs, rel } = await this.resolve(rawPath);
     const info = await stat(abs);
-    if (info.isDirectory()) return this.list(rel);
-    if (info.size > MAX_READ_BYTES * 8) throw new Error(`${rel} is too large to read (${info.size} bytes)`);
+    if (info.isDirectory()) return { rel, message: await this.list(rel) };
+    if (info.size > MAX_FILE_BYTES) throw new Error(`${rel} is too large to read (${info.size} bytes)`);
     const buffer = await readFile(abs);
-    if (buffer.subarray(0, 8000).includes(0)) return `${rel} is a binary file (${info.size} bytes).`;
-    const lines = buffer.toString('utf8').split('\n');
-    const start = Math.max(1, offset);
-    const slice = lines.slice(start - 1, start - 1 + limit);
-    const numbered = slice.map((line, i) => `${String(start + i).padStart(5)}  ${line}`).join('\n');
-    const more = start - 1 + limit < lines.length ? `\n… ${lines.length - (start - 1 + limit)} more lines` : '';
-    return clip(numbered, MAX_READ_BYTES) + more;
+    if (buffer.subarray(0, 8000).includes(0)) return { rel, message: `${rel} is a binary file (${info.size} bytes).` };
+    return { rel, text: buffer.toString('utf8') };
   }
 
   /** Files under a folder, as git sees them (ignored files left out). */

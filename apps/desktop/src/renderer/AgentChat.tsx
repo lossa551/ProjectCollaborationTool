@@ -831,6 +831,7 @@ export function ChatSidePanel({
                   ))}
                 </ul>
                 <ContextSize context={context} />
+                <RepeatedReads context={context} />
               </>
             ) : (
               <p className="muted small">Shown once the agent has started on this chat.</p>
@@ -1007,6 +1008,22 @@ function ContextSize({ context }: { context: ChatContext }) {
       </span>
       <p className="small muted">{large ? 'Large: continuing in a new chat is cheaper from here.' : 'A new chat is suggested past this size.'}</p>
     </div>
+  );
+}
+
+/** Repeated file reads: answered briefly by our own loop, or only counted for CLI agents (issue #91). */
+function RepeatedReads({ context }: { context: ChatContext }) {
+  const parts: string[] = [];
+  if (context.readsSaved > 0) parts.push(`${context.readsSaved} ${context.readsSaved === 1 ? 'read' : 'reads'} saved`);
+  if (context.readsRepeated > 0) parts.push(`${context.readsRepeated} ${context.readsRepeated === 1 ? 'file part' : 'file parts'} read again`);
+  if (parts.length === 0) return null;
+  const title = context.readsSaved > 0
+    ? 'Files the agent read again were answered with "unchanged" or only the changed lines, instead of a second copy.'
+    : 'This agent read the same part of a file more than once; each copy stays in its context.';
+  return (
+    <p className="small muted" title={title}>
+      {parts.join(' · ')}
+    </p>
   );
 }
 

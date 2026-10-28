@@ -37,12 +37,15 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'read_file',
-    description: 'Read a text file with line numbers. Use offset and limit for long files.',
+    description:
+      'Read a text file with line numbers, 400 lines at a time unless you give a limit. Read long files in parts with offset ' +
+      'and limit, starting with the part you need. Reading the same part again only says whether it changed (and shows the ' +
+      'changed lines), so there is no need to re-read a file to check it.',
     schema: object(
       {
         path: { type: 'string', description: 'Repo-relative path, forward slashes.' },
         offset: { type: 'integer', description: 'First line to read, from 1.' },
-        limit: { type: 'integer', description: 'How many lines to read (default 2000).' },
+        limit: { type: 'integer', description: 'How many lines to read (default 400).' },
       },
       ['path'],
     ),

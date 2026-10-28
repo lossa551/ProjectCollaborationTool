@@ -47,7 +47,8 @@ import {
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { contextUpdate, describeContext, freezePrompt, systemPrompt, type ContextInput } from './context.js';
-import { trimHistory } from './trim.js';
+import { resultShown, trimHistory } from './trim.js';
+import { ReadMemo } from './reads.js';
 import {
   ENGINE_BRIDGES,
   LIVE_EDITOR_BRIDGES,
@@ -167,6 +168,11 @@ interface ChatRun {
   handled: Set<string>;
   history: LoopMessage[] | null;
   filesRead: Set<string>;
+  /** What read_file returned per file, so a second read of the same part is answered briefly (issue #91). */
+  reads: ReadMemo;
+  /** Reads a CLI agent made of a file part it had read before in this chat; the app can only count them. */
+  cliReads: Set<string>;
+  readsRepeated: number;
   busy: boolean;
   again: boolean;
   abort: AbortController | null;
@@ -398,6 +404,9 @@ export class AgentRunner {
         handled: new Set(),
         history: null,
         filesRead: new Set(),
+        reads: new ReadMemo(),
+        cliReads: new Set(),
+        readsRepeated: 0,
         busy: false,
         again: false,
         abort: null,
@@ -1013,6 +1022,8 @@ export class AgentRunner {
         conversation: JSON.stringify(run.history ?? []),
         measured: run.promptTokens,
         trimmed: run.trimmed,
+        readsSaved: run.reads.saved,
+        readsRepeated: run.readsRepeated,
         warnAt: agent.connection.type === 'api' ? CONTEXT_WARN_TOKENS : null,
       },
     );
@@ -1410,9 +1421,11 @@ export class AgentRunner {
       history.push({ role: 'assistant', text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
       if (turn.toolCalls.length === 0) return;
       const results: ToolResult[] = [];
+      // A tool result the model still has whole: in this step's results, or in the history and not cleared.
+      const visible = (id: string) => results.some((r) => r.id === id && !r.isError) || resultShown(history, id);
       for (const call of turn.toolCalls) {
         if (signal.aborted) results.push({ id: call.id, content: 'Stopped by a person.', isError: true });
-        else results.push(await this.executeTool(current, agent, run, call, signal));
+        else results.push(await this.executeTool(current, agent, run, call, signal, visible));
       }
       history.push({ role: 'tool', results });
       this.setState(chat.id, 'working', 'Thinking');
@@ -1433,7 +1446,14 @@ export class AgentRunner {
     );
   }
 
-  private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
+  private async executeTool(
+    chat: ChatInfo,
+    agent: AgentProfile,
+    run: ChatRun,
+    call: ToolCall,
+    signal: AbortSignal,
+    visible: (id: string) => boolean,
+  ): Promise<ToolResult> {
     const id = randomUUID();
     const files = this.filesOf(chat.id);
     const engineLabel = this.bridge?.serverName(call.name) ? BRIDGE_SHORT[this.bridge.server.kind] : null;
@@ -1465,8 +1485,12 @@ export class AgentRunner {
       case 'read_file': {
         const input = parseInput(ReadFileInput, call.input);
         if (!input.ok) return error(input.error);
-        run.filesRead.add(input.value.path);
-        return attempt(input.value.path, () => files.read(input.value.path, input.value.offset, input.value.limit));
+        const { path, offset, limit } = input.value;
+        run.filesRead.add(path);
+        return attempt(path, async () => {
+          const file = await files.readText(path);
+          return 'text' in file ? run.reads.read(file.rel, file.text, call.id, visible, offset, limit) : file.message;
+        });
       }
       case 'list_files': {
         const input = parseInput(ListFilesInput, call.input);
@@ -1966,7 +1990,12 @@ export class AgentRunner {
       case 'Read':
       case 'NotebookRead': {
         const rel = this.filesOf(chat.id).toRelative(String(input.file_path ?? input.notebook_path ?? ''));
-        if (rel) run.filesRead.add(rel);
+        if (rel) {
+          run.filesRead.add(rel);
+          const part = `${rel.toLowerCase()}:${String(input.offset ?? '')}:${String(input.limit ?? '')}`;
+          if (run.cliReads.has(part)) run.readsRepeated++;
+          else run.cliReads.add(part);
+        }
         return { allow: true, reason: 'Reading is allowed' };
       }
       case 'Glob':

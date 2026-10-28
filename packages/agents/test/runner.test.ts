@@ -423,13 +423,14 @@ describe('agent runner', () => {
     const large = { input: 2_000, output: 100, cacheRead: 100_000, cacheWrite: 8_000 };
     const read = (i: number): ModelTurn => ({
       text: '',
-      toolCalls: [{ id: `r${i}`, name: 'read_file', input: { path: 'src/big.gd' } }],
+      // A different file each time: a second read of the same one would only say it is unchanged.
+      toolCalls: [{ id: `r${i}`, name: 'read_file', input: { path: `src/big${i}.gd` } }],
       stop: 'tool_use',
       usage: i < 10 ? small : large,
     });
     const { martin, profile, model, root } = await setup([...Array.from({ length: 13 }, (_, i) => read(i + 1)), { text: 'Read it all.', toolCalls: [], stop: 'end', usage: large }]);
     mkdirSync(joinPath(root, 'src'), { recursive: true });
-    writeFileSync(joinPath(root, 'src/big.gd'), Array.from({ length: 200 }, (_, i) => `var line_${i} = ${i}`).join('\n'));
+    for (let i = 1; i <= 13; i++) writeFileSync(joinPath(root, `src/big${i}.gd`), Array.from({ length: 200 }, (_, i) => `var line_${i} = ${i}`).join('\n'));
     const chatId = martin.createChat({ agentId: profile.id, title: 'Long read' });
     await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
     martin.openChat(chatId);
@@ -440,7 +441,7 @@ describe('agent runner', () => {
     // Up to 11 steps everything is sent whole; at 12, the 6 oldest are cleared in one go and the last 6 stay.
     expect(results(11).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
     expect(results(12).slice(0, 6).map((r) => r.content)).toEqual(
-      Array(6).fill('[Old result cleared to keep the context small: read src/big.gd, 200 lines. Run the tool again if you need it.]'),
+      Array.from({ length: 6 }, (_, i) => `[Old result cleared to keep the context small: read src/big${i + 1}.gd, 200 lines. Run the tool again if you need it.]`),
     );
     expect(results(12).slice(6).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
     // The next request starts the same way, so the provider's cache still matches.
@@ -452,6 +453,33 @@ describe('agent runner', () => {
     expect(warnings[0]!.text).toContain('about 110k tokens');
     const idle = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
     expect(idle.chats.find((c) => c.id === chatId)!.context).toMatchObject({ tokens: 110_000, warnAt: 100_000, trimmed: 6 });
+  });
+
+  it('answers a repeated read briefly and sends only what changed after an edit', async () => {
+    const read = (id: string): ModelTurn => ({ text: '', toolCalls: [{ id, name: 'read_file', input: { path: 'src/player.gd' } }], stop: 'tool_use' });
+    const { martin, profile, model, root } = await setup([
+      read('r1'),
+      read('r2'),
+      { text: '', toolCalls: [{ id: 'e1', name: 'edit_file', input: { path: 'src/player.gd', old_text: 'var speed = 20', new_text: 'var speed = 25' } }], stop: 'tool_use' },
+      read('r3'),
+      { text: 'Faster now.', toolCalls: [], stop: 'end' },
+    ]);
+    mkdirSync(joinPath(root, 'src'), { recursive: true });
+    writeFileSync(joinPath(root, 'src/player.gd'), Array.from({ length: 40 }, (_, i) => `var speed = ${i}`).join('\n'));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Speed' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Make the player faster' });
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Faster now.' && !m.streaming));
+
+    const result = (id: string) => model.requests.at(-1)!.messages.flatMap((m) => (m.role === 'tool' ? m.results : [])).find((r) => r.id === id)!;
+    expect(result('r1').content).toMatch(/^ {4}1 {2}var speed = 0\n/);
+    expect(result('r2').content).toBe('src/player.gd is unchanged since you read it (40 lines); the copy earlier in this conversation is current.');
+    expect(result('r3').content).toContain('src/player.gd changed since you read it (now 40 lines, was 40): lines 21-21 are new, replacing old lines 21-21.');
+    expect(result('r3').content).toContain('   21  var speed = 25');
+    expect(result('r3').content.split('\n')).toHaveLength(8);
+    const idle = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    expect(idle.chats.find((c) => c.id === chatId)!.context).toMatchObject({ readsSaved: 2, readsRepeated: 0 });
   });
 
   it('undoes files a command changed outside the agent’s paths unless a person keeps them', async () => {
