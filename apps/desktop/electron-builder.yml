@@ -34,6 +34,11 @@ nsis:
   runAfterFinish: true
   shortcutName: Foreus
 
+# Every release, beta or stable, carries latest.yml, which is what the app
+# reads on both update channels (see src/main/updater.ts). Without this a beta
+# version would publish beta.yml instead.
+detectUpdateChannel: false
+
 publish:
   provider: github
   owner: lossa551

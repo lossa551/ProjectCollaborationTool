@@ -88,14 +88,32 @@ export const AGENT_TOOLS: ToolSpec[] = [
 
 export const RunTestsInput = z.object({ target: z.string().max(500).optional() });
 
-/** Offered when the project is a Godot project with a test add-on (GUT or gdUnit4) and the app knows where Godot is. */
-export const RUN_TESTS_TOOL: ToolSpec = {
-  name: 'run_tests',
-  description:
-    'Run the game’s tests headless in Godot (GUT or gdUnit4) and get a summary: passing, failing and which tests failed. ' +
-    'Use the result as evidence for record_test_result. May need a person’s approval, like a command.',
-  schema: object(
-    { target: { type: 'string', description: 'A res:// test folder or test script; leave out for all tests.' } },
-    [],
-  ),
-};
+/**
+ * Offered when the app can run the game's tests: a Godot project with a test
+ * add-on (GUT or gdUnit4) and Godot's path known, or an Unreal project with
+ * Unreal Engine found on this PC.
+ */
+export function runTestsTool(engine: 'godot' | 'unreal'): ToolSpec {
+  if (engine === 'unreal') {
+    return {
+      name: 'run_tests',
+      description:
+        'Run the project’s Unreal automation tests headless (UnrealEditor-Cmd, no rendering) and get a summary: passing, failing and ' +
+        'which tests failed. Takes minutes. Use the result as evidence for record_test_result. May need a person’s approval, like a command.',
+      schema: object(
+        { target: { type: 'string', description: 'A test name prefix, e.g. Project.Combat; leave out for every test under Project.' } },
+        [],
+      ),
+    };
+  }
+  return {
+    name: 'run_tests',
+    description:
+      'Run the game’s tests headless in Godot (GUT or gdUnit4) and get a summary: passing, failing and which tests failed. ' +
+      'Use the result as evidence for record_test_result. May need a person’s approval, like a command.',
+    schema: object(
+      { target: { type: 'string', description: 'A res:// test folder or test script; leave out for all tests.' } },
+      [],
+    ),
+  };
+}

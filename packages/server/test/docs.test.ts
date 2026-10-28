@@ -131,6 +131,7 @@ describe('shared documents', () => {
       duplicates: [{ reason: 'identical', paths: ['a.png', 'b.png'] }],
       unusedAssets: [],
       unusedGameFiles: [],
+      epicLayout: [],
       unusedDependencies: [],
       folderNotes: [],
     });

@@ -26,3 +26,9 @@
 .version-settings dd {
   margin: 0;
 }
+
+.update-channels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}

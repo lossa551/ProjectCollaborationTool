@@ -45,6 +45,10 @@ export const SetupConfig = z.object({
   engine: z.preprocess((value) => (value === 'summer' ? 'godot' : value), Engine),
   /** Files the bloat check leaves out (globs, as in lock rules). */
   bloatSkip: z.array(z.string().trim().min(1).max(200)).max(200).default([]),
+  /** Unreal: the project folder inside Content, when it is not named like the .uproject. */
+  unrealContentFolder: z.string().trim().min(1).max(200).optional(),
+  /** Unreal: more top folders in Content the team allows (e.g. a Fab pack), beside the project folder and Common. */
+  unrealFolders: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
 });
 export type SetupConfig = z.infer<typeof SetupConfig>;
 
@@ -63,6 +67,7 @@ const epic = (page: string) => `${EPIC_DOCS}/${page}?application_version=5.8`;
 
 /** Epic's official pages the Unreal preset treats as the source of truth (UE 5.8). */
 export const EPIC_GUIDES = {
+  projectStructure: epic('incamera-vfx-project-structure-example-in-unreal-engine'),
   folderStructure: epic('assets-folder-structure-in-unreal-engine'),
   assetNaming: epic('recommended-asset-naming-conventions-in-unreal-engine-projects'),
   codingStandard: epic('epic-cplusplus-coding-standard-for-unreal-engine'),
@@ -133,6 +138,7 @@ export const PRESETS: Record<Engine, Preset> = {
       'Intermediate/',
       'Saved/',
       'Plugins/**/Binaries/',
+      'Plugins/EngineWire/',
       'Plugins/**/Intermediate/',
       '.vs/',
       '.idea/',
@@ -148,13 +154,15 @@ export const PRESETS: Record<Engine, Preset> = {
     bloatSkip: ['Content/__ExternalActors__/**', 'Content/__ExternalObjects__/**', 'Content/Developers/**', 'Content/Collections/**'],
     rules: [
       "Epic's official Unreal Engine 5.8 documentation is the source of truth for this project. Follow it over your own habits, and never invent your own layout:",
-      `- Folder structure: ${EPIC_GUIDES.folderStructure}`,
+      `- Project folder structure: ${EPIC_GUIDES.projectStructure}`,
+      `- Assets folder structure: ${EPIC_GUIDES.folderStructure}`,
       `- Asset naming: ${EPIC_GUIDES.assetNaming}`,
       `- C++ coding standard: ${EPIC_GUIDES.codingStandard}`,
       `- Source control: ${EPIC_GUIDES.sourceControl}`,
       `- One File Per Actor: ${EPIC_GUIDES.oneFilePerActor}`,
       '',
-      "- Place every new asset where Epic's folder structure says: under `Content/<Project>/`, grouped by feature, with shared assets grouped by type. Do not create new top-level folders in `Content/`.",
+      "- Place every new asset where Epic's folder structure says: project content in `Content/<Project>/` (a folder named after the project), content shared with other projects in `Content/Common/`. Inside the project folder use Epic's folders: `Assets/` for characters, environments and FX (by type, e.g. `Assets/Chr/`, `Assets/Rocks/`, then one folder per asset), `Envs/` for levels, `Sequences/`, `Media/`, and `Tools/` for utility Blueprints, widgets, structures and enums. Do not create other top-level folders in `Content/`; the app refuses engine calls that would.",
+      '- Change `.uasset` and `.umap` files through the Unreal Editor (or the Unreal tools the app gives you), never by writing the files.',
       '- Name assets `[AssetTypePrefix]_[AssetName]_[Descriptor]_[OptionalVariantLetterOrNumber]` with Epic\'s prefixes, e.g. `BP_` Blueprint, `WBP_` Widget Blueprint, `ABP_` Animation Blueprint, `M_` Material, `MI_` Material Instance, `SM_` Static Mesh, `SK_` Skeletal Mesh, `SKEL_` Skeleton, `T_` Texture, `FXS_` Niagara System, `DT_` Data Table. For a type Epic does not list, follow the list as a guide.',
       '- Write C++ to the Epic coding standard (naming prefixes `U`, `A`, `F`, `E`, `I`, `T`, `b` for bools; one class per header).',
       '- `.uasset` and `.umap` are binary and can never be merged: take an exclusive lock before changing one, and do not move or rename assets outside the editor.',
@@ -165,6 +173,7 @@ export const PRESETS: Record<Engine, Preset> = {
     ],
     reminders: [
       'Turn on One File Per Actor (World Partition levels have it already) in each level\'s World Settings, so two people can edit one map.',
+      'Agents reach the Unreal Editor through the EngineWire plugin: add it from Home once on each PC. Unreal builds it from source, so a Blueprint-only project needs one C++ class first (Tools → New C++ Class), and the PC needs Visual Studio with the C++ game development workload.',
     ],
   },
 };
@@ -362,7 +371,10 @@ export function withConfig(text: string | null, engine: Engine): string {
   const old = parseSetupConfig(text);
   const skips = [...(old?.bloatSkip ?? [])];
   for (const skip of PRESETS[engine].bloatSkip) if (!skips.includes(skip)) skips.push(skip);
-  return `${JSON.stringify({ engine, bloatSkip: skips } satisfies SetupConfig, null, 2)}\n`;
+  const config: SetupConfig = { engine, bloatSkip: skips };
+  if (old?.unrealContentFolder) config.unrealContentFolder = old.unrealContentFolder;
+  if (old?.unrealFolders) config.unrealFolders = old.unrealFolders;
+  return `${JSON.stringify(config, null, 2)}\n`;
 }
 
 export const MEMORY_ENGINE_PREFIX = 'Engine:';

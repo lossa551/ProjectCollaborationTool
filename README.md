@@ -58,7 +58,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 
 ### Notifications and updates
 - **Windows notifications** for approvals, finished or stuck agents, lock waits and failing checks; click one to open it, mute any kind.
-- **Automatic updates** from GitHub Releases with a Restart to update button.
+- **Automatic updates** from GitHub Releases with a Restart to update button, on a Stable or Beta update channel.
 
 ## Layout
 
@@ -106,7 +106,9 @@ Updates download in the background from GitHub Releases. When one is ready,
 Windows shows a notification and the button at the top of the window says
 **Restart to update**; until then it
 shows your version and can check again. If you are hosting, restarting ends
-the session until you host again.
+the session until you host again. Settings → Versions → **Update channel**
+switches this PC between Stable releases and Beta previews from the `beta`
+branch, and back.
 
 ## Develop
 
@@ -176,7 +178,9 @@ and their saved invite stops working until they get a new code.
 Every push to `main` (except docs-only changes) publishes a new release: the
 Release workflow builds the installer on Windows and puts it on GitHub
 Releases. Installed apps check every 15 minutes, download it, show a Windows
-notification and turn the button into **Restart to update**.
+notification and turn the button into **Restart to update**. Every push to
+`beta` publishes a prerelease (`0.NEXT.0-beta.N`) that only apps on the Beta
+channel take; see [docs/releasing.md](docs/releasing.md).
 
 The version is the major.minor from `apps/desktop/package.json` plus the
 workflow's run number, for example `0.1.12`. Change major or minor there when

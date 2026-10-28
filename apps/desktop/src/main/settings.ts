@@ -1,6 +1,8 @@
 import { app, safeStorage } from 'electron';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import type { UpdateChannel } from '../common/api';
+import { defaultChannel } from './update-channel';
 
 // Small settings kept on this PC: which project folder is your workspace in
 // each session, and the GitHub token the hosted server uses.
@@ -148,6 +150,8 @@ interface Preferences {
   foundGodotPath?: string;
   /** By session id: the agents that do not get the engine's tools (all others do). */
   engineAgentsOff?: Record<string, string[]>;
+  /** Stable or beta releases; unset follows defaultChannel. See docs/releasing.md. */
+  updateChannel?: UpdateChannel;
 }
 
 const preferencesPath = () => join(app.getPath('userData'), 'preferences.json');
@@ -166,6 +170,7 @@ function readPreferences(): Preferences {
         typeof prefs.notesAgents === 'object' && {
           notesAgents: Object.fromEntries(Object.entries(prefs.notesAgents).filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
         }),
+      ...((prefs.updateChannel === 'stable' || prefs.updateChannel === 'beta') && { updateChannel: prefs.updateChannel }),
       ...(typeof prefs.engineBridge === 'string' && { engineBridge: prefs.engineBridge }),
       ...(typeof prefs.godotPath === 'string' && { godotPath: prefs.godotPath }),
       ...(typeof prefs.foundGodotPath === 'string' && { foundGodotPath: prefs.foundGodotPath }),
@@ -272,4 +277,13 @@ export function saveEngineAgent(sessionId: string, agentId: string, on: boolean)
   const off = (all[sessionId] ?? []).filter((id) => id !== agentId);
   all[sessionId] = on ? off : [...off, agentId];
   savePreferences({ engineAgentsOff: all });
+}
+
+/** The releases this PC updates to: what you chose, else what the installed build came from. */
+export function updateChannel(version: string): UpdateChannel {
+  return readPreferences().updateChannel ?? defaultChannel(version);
+}
+
+export function saveUpdateChannel(channel: UpdateChannel) {
+  savePreferences({ updateChannel: channel });
 }

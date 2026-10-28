@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { matchesAny } from './paths.js';
 
 // Core records of a session. People and agents are both participants: they
 // show up in presence, hold locks and own tasks the same way.
@@ -170,8 +171,21 @@ export const DEFAULT_LOCK_RULES: LockRules = {
     '*.mp3',
     '*.sqlite',
     '*.db',
+    '*.uasset',
+    '*.umap',
   ],
 };
+
+/**
+ * Unreal's assets and levels are binary and can never be merged: they always
+ * take an exclusive lock, whatever the session's rules say (issue #11).
+ */
+export const ALWAYS_EXCLUSIVE = ['*.uasset', '*.umap'];
+
+/** The lock a path takes under these rules. */
+export function lockKindFor(path: string, rules: LockRules): LockKind {
+  return matchesAny(path, rules.exclusivePatterns) || matchesAny(path, ALWAYS_EXCLUSIVE) ? 'exclusive' : 'soft';
+}
 
 // GitHub status. The server polls GitHub for the linked repository and sends
 // everyone the same picture, so only the host needs a token.

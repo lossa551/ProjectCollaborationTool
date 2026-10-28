@@ -81,6 +81,7 @@ const api: PctApi = {
   setEngineBridge: (bridge) => ipcRenderer.send(Channel.setEngineBridge, bridge),
   setEngineAgent: (agentId, on) => ipcRenderer.send(Channel.setEngineAgent, agentId, on),
   installGodotPlugin: () => ipcRenderer.invoke(Channel.installGodotPlugin),
+  installUnrealPlugin: () => ipcRenderer.invoke(Channel.installUnrealPlugin),
   setGodotPath: (choose) => ipcRenderer.invoke(Channel.setGodotPath, choose),
   discardNoteDraft: (notePath) => ipcRenderer.send(Channel.discardNoteDraft, notePath),
   onState(listener) {
@@ -89,6 +90,7 @@ const api: PctApi = {
     return () => ipcRenderer.off(Channel.state, handler);
   },
   getUpdate: () => ipcRenderer.invoke(Channel.getUpdate),
+  setUpdateChannel: (channel) => ipcRenderer.invoke(Channel.setUpdateChannel, channel),
   update: () => ipcRenderer.invoke(Channel.update),
   onUpdate(listener) {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => listener(info);

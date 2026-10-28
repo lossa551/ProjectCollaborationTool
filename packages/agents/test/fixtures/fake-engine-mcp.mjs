@@ -1,7 +1,9 @@
 // A stand-in for an engine's MCP server in tests: FAKE_KIND=godot answers like
 // the Godot MCP server (create_scene writes the scene into projectPath),
 // FAKE_KIND=summer like Summer's (summer_call, with receipts and a stale
-// overwrite refusal). Every call is appended to FAKE_LOG.
+// overwrite refusal), FAKE_KIND=unreal like EngineWire's `unreal` gateway
+// (execute saves the asset it names under FAKE_ROOT/Content and lists it, and
+// params.alsoChanged, in receipt.changes). Every call is appended to FAKE_LOG.
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -22,7 +24,9 @@ const tools =
         },
         { name: 'run_project', description: 'Run the game', inputSchema: { type: 'object', properties: { projectPath: { type: 'string' } } } },
       ]
-    : [
+    : kind === 'unreal'
+      ? [{ name: 'unreal', description: 'Unreal Engine editor: operation search, describe, execute or configure.', inputSchema: { type: 'object', properties: { operation: { type: 'string' } }, required: ['operation'] } }]
+      : [
         { name: 'summer_call', description: 'Run a Summer operation', inputSchema: { type: 'object', properties: { operation: { type: 'string' }, input: { type: 'object' } } } },
       ];
 
@@ -43,6 +47,20 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, '[gd_scene format=3]\n\n[node name="Root" type="Node2D"]\n');
     result = text(`Scene created at ${args.scenePath}`);
+  } else if (name === 'unreal') {
+    const params = args.params ?? {};
+    if (args.operation !== 'execute') {
+      result = text({ success: true, rows: [] });
+    } else {
+      const target = params.assetPath ?? (params.name && params.savePath ? `${params.savePath}/${params.name}` : null);
+      if (target) {
+        const file = join(process.env.FAKE_ROOT, 'Content', `${target.replace(/^\/Game\//, '')}.uasset`);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, 'uasset');
+      }
+      const changes = [target, ...(params.alsoChanged ? [params.alsoChanged] : [])].filter(Boolean);
+      result = text({ success: true, data: { assetPath: target }, receipt: { status: 'success', capabilityId: `${args.tool}.${args.action}`, changes } });
+    }
   } else if (name === 'get_godot_version') {
     result = text('4.5.1.stable');
   } else if (name === 'summer_call') {

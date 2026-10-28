@@ -1,13 +1,18 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { rmSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join as joinPath, resolve as resolvePath } from 'node:path';
 import {
   CLI_TOOLS,
+  SETUP_CONFIG_PATH,
   WORKSPACE_FILE_LIMIT,
   AGENT_ERROR_PREFIX,
   approvalActivity,
+  describeLayoutProblems,
+  epicLayoutProblems,
+  parseSetupConfig,
+  unrealLayout,
   budgetsFor,
   commitDraftUsageId,
   formatCost,
@@ -34,11 +39,13 @@ import {
   type ToolStatus,
   type UsageSource,
   type UndoMode,
+  type SetupConfig,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { describeContext, systemPrompt, type ContextInput } from './context.js';
 import {
   ENGINE_BRIDGES,
+  LIVE_EDITOR_BRIDGES,
   EngineBridge,
   claudeEngineTool,
   classifyEngineCall,
@@ -53,6 +60,14 @@ import {
   type EngineServer,
   type EngineSettings,
 } from './engine.js';
+import {
+  findUnrealProject,
+  parseUnrealTestOutput,
+  unrealReceiptChanges,
+  unrealTestCommand,
+  unrealToRepoPath,
+  type UnrealProject,
+} from './unreal.js';
 import { ProjectFiles } from './files.js';
 import { checkCommand, checkEdit, othersLocks, type GuardContext } from './guard.js';
 import { parseInput, type LoopMessage, type ModelAdapter, type ToolCall, type ToolResult } from './models/types.js';
@@ -61,7 +76,7 @@ import {
   EditFileInput,
   ListFilesInput,
   ReadFileInput,
-  RUN_TESTS_TOOL,
+  runTestsTool,
   RecordTestResultInput,
   RunCommandInput,
   RunTestsInput,
@@ -180,16 +195,18 @@ interface ChatRun {
   engineProblem: string | null;
 }
 
-/** A Godot (or Summer Engine) project, as one chat sees it. */
+/** A Godot (or Summer Engine) or Unreal project, as one chat sees it. */
 interface ChatEngine {
   server: EngineServer | null;
-  /** The project.godot folder, repo-relative. */
+  /** The project.godot folder, repo-relative ('' for an Unreal project). */
   godotDir: string;
+  /** The Unreal project; null for a Godot one. */
+  unreal: UnrealProject | null;
   /** The same folder on disk, in the folder the chat works in. */
   projectDir: string;
   /** The engine's tools for our own loop; empty for CLI agents (they get the server themselves). */
   tools: ToolSpec[];
-  /** Runs the tests headless; null without Godot's path or a test add-on. */
+  /** Runs the tests headless; null without Godot's path and a test add-on, or Unreal's editor. */
   testCommand: ((target?: string) => Promise<string>) | null;
   /** How the tests are run, for the agent's instructions. */
   testHint: string | null;
@@ -199,6 +216,9 @@ interface ChatEngine {
 
 /** The Godot MCP server's tools that take no project folder. */
 const GODOT_NO_PROJECT = new Set(['get_debug_output', 'stop_project', 'get_godot_version', 'list_projects']);
+
+/** How tool lines name each engine. */
+const BRIDGE_SHORT: Record<EngineServer['kind'], string> = { godot: 'Godot', summer: 'Summer', unreal: 'Unreal' };
 
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
@@ -572,10 +592,11 @@ export class AgentRunner {
   private async workspaceFor(chat: ChatInfo, run: ChatRun): Promise<ProjectFiles> {
     const setting = this.options.worktrees;
     if (setting === false) return (run.files ??= this.files);
-    // Summer Engine edits the project its editor has open, which is the project folder: chats that
-    // use it work there too. A chat that already has a copy keeps it (and is told Summer cannot reach it).
+    // Summer Engine and the Unreal Editor edit the project they have open, which is the project folder: chats
+    // that use them work there too. A chat that already has a copy keeps it (and is told the editor cannot reach it).
     const agent = this.profile();
-    if (!run.worktree && !chat.worktree && agent && this.options.engine?.(agent)?.server?.kind === 'summer') {
+    const bridge = agent ? this.options.engine?.(agent)?.server?.kind : undefined;
+    if (!run.worktree && !chat.worktree && bridge && LIVE_EDITOR_BRIDGES.has(bridge)) {
       return (run.files = this.files);
     }
     const known = run.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
@@ -930,8 +951,9 @@ export class AgentRunner {
     if (!engine) return null;
     return {
       bridge: engine.server ? ENGINE_BRIDGES[engine.server.kind].label : null,
-      liveEditor: engine.server?.kind === 'summer',
+      liveEditor: !!engine.server && LIVE_EDITOR_BRIDGES.has(engine.server.kind),
       godotDir: engine.godotDir,
+      unreal: engine.unreal ? { dir: engine.unreal.dir, name: engine.unreal.name } : null,
       projectDir: engine.projectDir,
       tests: engine.testHint ? (agent.connection.type === 'api' ? 'tool' : engine.testHint) : null,
     };
@@ -1164,6 +1186,7 @@ export class AgentRunner {
     const after = await this.filesOf(chat.id).changedFiles();
     const fresh = [...after].filter((f) => !before.has(f) && !this.run(chat.id).approvedPaths.has(f.toLowerCase()));
     if (fresh.length === 0) return;
+    await this.flagUnrealLayout(chat, fresh);
     const ctx = this.guardContext(chat, agent);
     const undo: string[] = [];
     const ask: { path: string; reason: string }[] = [];
@@ -1200,6 +1223,18 @@ export class AgentRunner {
       }
     }
     if (undone.length > 0) this.notice(chat.id, `Undid changes ${what} made to ${undone.join(', ')}.`);
+  }
+
+  /** Unreal assets and levels a run saved where Epic's structure or naming says otherwise are pointed out in the chat. */
+  private async flagUnrealLayout(chat: ChatInfo, paths: string[]) {
+    const assets = paths.filter((p) => /\.(uasset|umap)$/i.test(p));
+    if (assets.length === 0) return;
+    const project = this.runs.get(chat.id)?.engine?.unreal ?? (await findUnrealProject(this.filesOf(chat.id).root));
+    if (!project) return;
+    const layout = unrealLayout(project.uproject, await this.setupConfig());
+    const wrong = assets.map((path) => ({ path, problems: epicLayoutProblems(path, layout) })).filter((w) => w.problems.length > 0);
+    if (wrong.length === 0) return;
+    this.notice(chat.id, `Not by Epic's folder structure or naming: ${wrong.slice(0, 5).map((w) => describeLayoutProblems(w.path, w.problems)).join(' ')}`);
   }
 
   // Our own loop, for model APIs.
@@ -1260,7 +1295,7 @@ export class AgentRunner {
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
     const id = randomUUID();
     const files = this.filesOf(chat.id);
-    const engineLabel = this.bridge?.serverName(call.name) ? (this.bridge.server.kind === 'godot' ? 'Godot' : 'Summer') : null;
+    const engineLabel = this.bridge?.serverName(call.name) ? BRIDGE_SHORT[this.bridge.server.kind] : null;
     const label = TOOL_LABEL[call.name] ?? engineLabel ?? call.name;
     const show = (summary: string, status: ToolStatus, output = '') => {
       if (status === 'running') this.setActivity(chat.id, `${TOOL_ACTIVITY[call.name] ?? (engineLabel ? `${engineLabel}:` : label)} ${summary}`);
@@ -1342,7 +1377,13 @@ export class AgentRunner {
         const input = parseInput(RunTestsInput, call.input);
         if (!input.ok) return error(input.error);
         const tests = run.engine?.testCommand;
-        if (!tests) return error('This project has no tests the app can run (it needs Godot’s path in Settings and the GUT or gdUnit4 add-on).');
+        if (!tests) {
+          return error(
+            run.engine?.unreal
+              ? 'The app does not know where Unreal Engine is on this PC, so it cannot run the tests.'
+              : 'This project has no tests the app can run (it needs Godot’s path in Settings and the GUT or gdUnit4 add-on).',
+          );
+        }
         const command = await tests(input.value.target);
         const what = `Run the game’s tests (${run.engine!.testLabel}${input.value.target ? `, ${input.value.target}` : ''})`;
         const problem = await this.gateCommand(chat, agent, command, signal, what);
@@ -1350,8 +1391,9 @@ export class AgentRunner {
         const before = await files.changedFiles();
         const summary = input.value.target ?? 'all tests';
         show(summary, 'running');
-        const result = await files.run(command, signal, 10 * 60_000);
-        const tested = parseTestOutput(result.output, result.exitCode);
+        // Unreal starts a whole editor (without rendering) for the tests, which takes a while.
+        const result = await files.run(command, signal, (run.engine!.unreal ? 30 : 10) * 60_000);
+        const tested = run.engine!.unreal ? parseUnrealTestOutput(result.output, result.exitCode) : parseTestOutput(result.output, result.exitCode);
         const output = `${describeTests(tested)}\n\n${result.output}\n(exit code ${result.exitCode ?? 'none'})`;
         show(summary, tested.passed ? 'done' : 'failed', output);
         await this.reviewChanges(chat, agent, before, 'the tests', signal);
@@ -1369,7 +1411,7 @@ export class AgentRunner {
   private toolsFor(run: ChatRun): ToolSpec[] {
     const engine = run.engine;
     if (!engine) return AGENT_TOOLS;
-    return [...AGENT_TOOLS, ...(engine.testCommand ? [RUN_TESTS_TOOL] : []), ...engine.tools];
+    return [...AGENT_TOOLS, ...(engine.testCommand ? [runTestsTool(engine.unreal ? 'unreal' : 'godot')] : []), ...engine.tools];
   }
 
   /** The engine server for these settings, started again when they changed. */
@@ -1390,18 +1432,34 @@ export class AgentRunner {
     if (!settings) return null;
     const files = this.filesOf(chat.id);
     const godotDir = await findGodotProject(files.root);
-    if (godotDir === null) return null;
-    const projectDir = godotDir ? joinPath(files.root, ...godotDir.split('/')) : files.root;
+    const unreal = godotDir === null ? await findUnrealProject(files.root) : null;
+    if (godotDir === null && !unreal) return null;
     let testCommand: ChatEngine['testCommand'] = null;
     let testHint: string | null = null;
-    const framework = await findTestFramework(projectDir);
-    if (settings.godotPath && framework) {
-      const godotPath = settings.godotPath;
-      testCommand = (target) => godotTestCommand(godotPath, projectDir, framework, target);
-      testHint = await testCommand();
+    let testLabel = 'Unreal Automation';
+    let projectDir: string;
+    if (unreal) {
+      projectDir = unreal.dir ? joinPath(files.root, ...unreal.dir.split('/')) : files.root;
+      const editor = settings.unrealEditor;
+      const uproject = joinPath(files.root, ...unreal.uproject.split('/'));
+      if (editor) {
+        testCommand = async (target) => unrealTestCommand(editor, uproject, target);
+        testHint = await testCommand();
+      }
+    } else {
+      projectDir = godotDir ? joinPath(files.root, ...godotDir.split('/')) : files.root;
+      const framework = await findTestFramework(projectDir);
+      if (settings.godotPath && framework) {
+        const godotPath = settings.godotPath;
+        testCommand = (target) => godotTestCommand(godotPath, projectDir, framework, target);
+        testHint = await testCommand();
+      }
+      testLabel = framework === 'gdunit4' ? 'gdUnit4' : 'GUT';
     }
+    // Each engine's server only fits its own projects.
+    const fits = (kind: EngineServer['kind']) => (unreal ? kind === 'unreal' : kind !== 'unreal');
     let tools: ToolSpec[] = [];
-    const server = settings.server;
+    const server = settings.server && fits(settings.server.kind) ? settings.server : null;
     if (server && agent.connection.type === 'api') {
       try {
         tools = await this.bridgeFor(server).specs();
@@ -1416,8 +1474,59 @@ export class AgentRunner {
         this.bridge = null;
       }
     }
-    const testLabel = framework === 'gdunit4' ? 'gdUnit4' : 'GUT';
-    return { server: tools.length > 0 || agent.connection.type === 'cli' ? server : null, godotDir, projectDir, tools, testCommand, testHint, testLabel };
+    return {
+      server: tools.length > 0 || agent.connection.type === 'cli' ? server : null,
+      godotDir: godotDir ?? '',
+      unreal,
+      projectDir,
+      tools,
+      testCommand,
+      testHint,
+      testLabel,
+    };
+  }
+
+  /** The project's setup file (.collab-tool.json), for the Unreal layout it allows. */
+  private async setupConfig(): Promise<SetupConfig | null> {
+    return parseSetupConfig(await readFile(joinPath(this.options.root, SETUP_CONFIG_PATH), 'utf8').catch(() => null));
+  }
+
+  /**
+   * After an Unreal call: what EngineWire's receipt says it changed, beyond
+   * the files the call named, is checked and locked too. Returns what to tell
+   * the agent when it changed something it may not (or someone else holds),
+   * or null.
+   */
+  private async lockUnrealChanges(
+    chat: ChatInfo,
+    agent: AgentProfile,
+    project: UnrealProject,
+    call: EngineCall,
+    text: string,
+    root: string,
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    const exists = (rel: string) => existsSync(joinPath(root, ...rel.split('/')));
+    const named = new Set(call.kind === 'edit' ? call.paths.map((p) => p.toLowerCase()) : []);
+    const changed = unrealReceiptChanges(text)
+      .map((objectPath) => unrealToRepoPath(objectPath, project, exists))
+      .filter((path): path is string => !!path && !named.has(path.toLowerCase()));
+    if (changed.length === 0) return null;
+    const problems: string[] = [];
+    for (const path of [...new Set(changed)]) {
+      const gate = await this.gateEdit(chat, agent, path, signal);
+      if ('blocked' in gate) problems.push(`${path}: ${gate.blocked}`);
+      else this.run(chat.id).approvedPaths.add(gate.path.toLowerCase());
+    }
+    if (problems.length === 0) return null;
+    this.notice(chat.id, `The Unreal Editor changed files the agent may not change: ${problems.join('; ')}. The agent is asked to undo it.`);
+    return `The call also changed files you may not change: ${problems.join('; ')}. Undo it now (control_editor undo) and do not save those assets.`;
+  }
+
+  /** Sorts an engine call for this chat (see classifyEngineCall). */
+  private classify(engine: ChatEngine, kind: EngineServer['kind'], tool: string, input: unknown, root: string): EngineCall {
+    const unreal = engine.unreal ? { project: engine.unreal, exists: (rel: string) => existsSync(joinPath(root, ...rel.split('/'))) } : undefined;
+    return classifyEngineCall(kind, tool, input, engine.godotDir, root, unreal);
   }
 
   /**
@@ -1426,14 +1535,32 @@ export class AgentRunner {
    * follows the agent's rule for commands. Returns why not, or null.
    */
   private async gateEngine(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: EngineCall, signal: AbortSignal): Promise<string | null> {
-    if (run.engine?.server?.kind === 'summer' && run.worktree && call.kind !== 'read') {
+    const kind = run.engine?.server?.kind;
+    if (kind && LIVE_EDITOR_BRIDGES.has(kind) && run.worktree && call.kind !== 'read') {
+      const name = kind === 'summer' ? 'Summer Engine' : 'The Unreal Editor';
       return (
-        `Summer Engine changes the project open in its editor, but this chat works in its own copy (${run.worktree.branch}); ` +
-        'start a new chat to work through Summer, or make the change with file edits here'
+        `${name} changes the project open in its editor, but this chat works in its own copy (${run.worktree.branch}); ` +
+        `start a new chat to work through the editor, or make the change with file edits here`
       );
     }
     if (call.kind === 'read') return null;
     if (call.kind === 'action') return this.gateCommand(chat, agent, call.what, signal);
+    // New Unreal assets go where Epic's folder structure says and are named by Epic's conventions.
+    const unreal = run.engine?.unreal;
+    if (unreal && call.fresh?.length) {
+      const layout = unrealLayout(unreal.uproject, await this.setupConfig());
+      const wrong = call.fresh
+        .map((path) => ({ path, problems: epicLayoutProblems(path, layout, call.expected) }))
+        .filter((w) => w.problems.length > 0);
+      if (wrong.length) {
+        this.notice(chat.id, `Refused ${call.what}: ${wrong.map((w) => w.path).join(', ')} would not follow Epic's folder structure or asset naming.`);
+        return `${wrong.map((w) => describeLayoutProblems(w.path, w.problems)).join(' ')} Pick a path and name that follow them and call again`;
+      }
+    }
+    if (call.ask) {
+      const approved = await this.askApproval(chat.id, `${call.what.replace(/^Unreal /, 'Unreal: ')} ${call.paths.join(', ')}`, 'Deletes or overwrites assets in the Unreal project.', signal);
+      if (!approved) return signal.aborted ? 'stopped' : 'a person did not approve this';
+    }
     for (const path of call.paths) {
       const gate = await this.gateEdit(chat, agent, path, signal);
       if ('blocked' in gate) return gate.blocked;
@@ -1463,9 +1590,9 @@ export class AgentRunner {
       if (tool === 'list_projects') input = { ...input, directory: engine.projectDir };
       else if (!GODOT_NO_PROJECT.has(tool)) input = { ...input, projectPath: engine.projectDir };
     }
-    const classified = classifyEngineCall(engine.server!.kind, tool, input, engine.godotDir, files.root);
+    const classified = this.classify(engine, engine.server!.kind, tool, input, files.root);
     // The tool line is labelled with the engine already.
-    const what = classified.what.replace(/^(Godot|Summer) /, '');
+    const what = classified.what.replace(/^(Godot|Summer|Unreal) /, '');
     const summary = classified.kind === 'edit' ? `${what} ${classified.paths.join(', ')}` : what;
     const problem = await this.gateEngine(chat, agent, run, classified, signal);
     if (problem) return blocked(summary, problem);
@@ -1488,6 +1615,13 @@ export class AgentRunner {
     if (answer.approvalUrl) this.notice(chat.id, `Summer Engine needs a person to approve this first: ${answer.approvalUrl}`);
     const receipts = answer.receipts.length ? `\nWrote: ${answer.receipts.join(', ')}` : '';
     const failed = result.isError || answer.error !== null;
+    if (engine.unreal && classified.kind !== 'read' && !failed) {
+      const problem = await this.lockUnrealChanges(chat, agent, engine.unreal, classified, result.text, files.root, signal);
+      if (problem) {
+        show(summary, 'failed', problem);
+        return error(`${result.text}\n\n${problem}`);
+      }
+    }
     const output = `${result.text}${receipts}`;
     show(summary, failed ? 'failed' : 'done', output.length > 600 ? `${output.slice(0, 600)}…` : output);
     // Files the engine changed that the call did not name are checked like a command's.
@@ -1699,7 +1833,7 @@ export class AgentRunner {
           if (kind === 'godot' && given !== null && !samePath(resolvePath(given), resolvePath(engine.projectDir))) {
             return deny(`this chat's Godot project is ${engine.projectDir}; call the tool again with projectPath set to that`);
           }
-          const call = classifyEngineCall(kind, engineTool.tool, input, engine.godotDir, this.filesOf(chat.id).root);
+          const call = this.classify(engine, kind, engineTool.tool, input, this.filesOf(chat.id).root);
           const problem = await this.gateEngine(chat, agent, run, call, signal);
           return problem ? deny(problem) : { allow: true, reason: 'Checked by Foreus' };
         }
