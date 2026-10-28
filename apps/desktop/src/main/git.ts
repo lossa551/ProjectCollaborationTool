@@ -113,6 +113,45 @@ export async function hasCommit(cwd: string): Promise<boolean> {
   return (await tryRun(['rev-parse', '--verify', '--quiet', 'HEAD'], cwd)) !== null;
 }
 
+export interface FirstCommitOptions {
+  /** Files to commit, already written. */
+  paths: string[];
+  message: string;
+  /** The branch the commit goes on, e.g. the GitHub repository's default branch. */
+  branch: string;
+  /** Pushes the branch to origin, adding origin as this address when the repository has none. */
+  push: { remoteUrl: string | null; token: string | null } | null;
+}
+
+/**
+ * Makes the first commit of a repository that has none, with just these
+ * files, on the given branch; then pushes it when asked. Says what happened.
+ */
+export async function firstCommit(cwd: string, { paths, message, branch, push }: FirstCommitOptions): Promise<string> {
+  try {
+    if (await hasCommit(cwd)) throw new Error('This repository already has a commit.');
+    if ((await tryRun(['check-ref-format', '--branch', branch], cwd)) === null) throw new Error(`${branch} is not a valid branch name.`);
+    // Nothing is on the unborn branch yet, so it is simply renamed (git's default may be master).
+    await run(['symbolic-ref', 'HEAD', `refs/heads/${branch}`], { cwd });
+    const commit = await commitPaths(cwd, paths, message);
+    if (!commit) throw new Error('There was nothing to commit.');
+    const made = `Made the first commit (${commit}) on ${branch}`;
+    if (!push) return `${made}. Push it to share it.`;
+    if ((await tryRun(['remote', 'get-url', 'origin'], cwd)) === null) {
+      if (!push.remoteUrl) return `${made}. This repository has no GitHub remote yet: link the repository on the GitHub page, then push.`;
+      await run(['remote', 'add', 'origin', push.remoteUrl], { cwd });
+    }
+    try {
+      await remote(['push', '-u', 'origin', branch], { cwd, token: push.token });
+    } catch (error) {
+      throw new Error(`${made}, but pushing it failed: ${explain(error).message}`);
+    }
+    return `${made} and pushed it to GitHub.`;
+  } catch (error) {
+    throw explain(error);
+  }
+}
+
 /** Git LFS is installed on this PC. */
 export async function hasGitLfs(cwd: string): Promise<boolean> {
   return (await tryRun(['lfs', 'version'], cwd)) !== null;

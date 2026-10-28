@@ -18,6 +18,7 @@ import { keyProblem, runnerOf } from './Agents';
 import { useKept } from './kept';
 import { recall, remember } from './storage';
 import { ask } from './Dialog';
+import { FirstCommitPrompt } from './FirstCommit';
 
 export const taskForBranch = (tasks: Task[], branch: string | null) => (branch ? tasks.find((t) => t.branch === branch) : undefined);
 
@@ -430,6 +431,10 @@ function GitCard({ state }: { state: AppState }) {
             : 'not on GitHub yet'}
         </span>
       </p>
+      <FirstCommitPrompt
+        state={state}
+        why="Agent chats need one to work in their own copy of the project, and there is nothing to push or pull until there is one."
+      />
       {mismatch && (
         <p className="warning small">
           This folder is a clone of {local.remote!.owner}/{local.remote!.name}, not the linked {repo.owner}/{repo.name}.

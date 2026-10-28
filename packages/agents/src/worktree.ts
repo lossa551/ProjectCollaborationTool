@@ -85,6 +85,11 @@ export async function canMakeWorktrees(root: string): Promise<boolean> {
   return (await tryGit(root, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'])) !== null;
 }
 
+/** Whether the folder is in a git repository, with or without commits. */
+export async function isRepository(root: string): Promise<boolean> {
+  return (await tryGit(root, ['rev-parse', '--git-dir'])) !== null;
+}
+
 /** The branch checked out in a folder; null when detached or not a repository. */
 export async function currentBranch(folder: string): Promise<string | null> {
   const head = await tryGit(folder, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
