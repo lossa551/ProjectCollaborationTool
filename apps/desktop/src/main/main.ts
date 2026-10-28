@@ -104,7 +104,7 @@ import {
 import { EngineWatch, engineSettingsFor, findGodotOnPath, findUnrealOnPc } from './engine';
 import { addEngineWire } from './unreal';
 import { GodotEditorLink } from './godot-editor';
-import { applyUpdate, getUpdateState, startUpdater } from './updater';
+import { applyUpdate, getUpdateChannel, getUpdateState, setUpdateChannel, startUpdater } from './updater';
 import { GitError, clone, commitPaths, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
@@ -2042,8 +2042,17 @@ ipcMain.handle(Channel.folderNotePaths, () => folderNotePaths());
 ipcMain.on(Channel.copyText, (_event, text: unknown) => {
   if (typeof text === 'string') clipboard.writeText(text);
 });
-const updateInfo = () => ({ version: app.getVersion(), protocol: PROTOCOL_VERSION, database: SCHEMA_VERSION, state: getUpdateState() });
+const updateInfo = () => ({
+  version: app.getVersion(),
+  channel: getUpdateChannel(),
+  protocol: PROTOCOL_VERSION,
+  database: SCHEMA_VERSION,
+  state: getUpdateState(),
+});
 ipcMain.handle(Channel.getUpdate, () => updateInfo());
+ipcMain.handle(Channel.setUpdateChannel, (_event, channel: unknown) => {
+  if (channel === 'stable' || channel === 'beta') return setUpdateChannel(channel);
+});
 // Hosting stops cleanly before the restart, so the friend sees the host leave.
 ipcMain.handle(Channel.update, () => applyUpdate(leave));
 

@@ -4,18 +4,23 @@ name: Release
 # Release. Installed apps find it there, download it and offer the update.
 # The version is apps/desktop's major.minor plus this workflow's run number,
 # so it always goes up: bump major or minor in package.json by hand when you
-# want to, the patch takes care of itself. The rules are in docs/releasing.md.
+# want to, the patch takes care of itself.
+# Every push to beta publishes a prerelease instead, versioned as a preview of
+# the next minor (0.2.0-beta.N while stable is 0.1.x), which only apps on the
+# Beta update channel take. It never becomes GitHub's latest release, so the
+# stable channel never sees it. The rules are in docs/releasing.md.
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# One queue per branch, so a beta push never cancels a waiting stable release.
 concurrency:
-  group: release
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -34,16 +39,32 @@ jobs:
       - name: Set the version
         shell: bash
         run: |
-          base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
-          npm version "$base.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
-          echo "VERSION=$base.$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          if [ "$GITHUB_REF_NAME" = beta ]; then
+            stable=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+            version=$(node .github/scripts/beta-version.mjs "$(node -p "require('./apps/desktop/package.json').version")" "$stable" "$GITHUB_RUN_NUMBER")
+            # Notes and size are against the previous beta (else the stable one).
+            prev=$(gh release list --limit 50 --json tagName,isPrerelease,isDraft -q '[.[] | select(.isPrerelease and (.isDraft | not))][0].tagName' 2>/dev/null || true)
+            echo "PREV=${prev:-$stable}" >> "$GITHUB_ENV"
+            echo "KIND=--prerelease" >> "$GITHUB_ENV"
+            echo "LATEST=--latest=false" >> "$GITHUB_ENV"
+          else
+            base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
+            version="$base.$GITHUB_RUN_NUMBER"
+            echo "PREV=$(gh release view --json tagName -q .tagName 2>/dev/null || true)" >> "$GITHUB_ENV"
+            echo "KIND=" >> "$GITHUB_ENV"
+            echo "LATEST=--latest" >> "$GITHUB_ENV"
+          fi
+          npm version "$version" --no-git-tag-version -w @pct/desktop
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # A size line (small, medium or large) for the top of the release notes,
       # from what changed since the last release; see docs/releasing.md.
       - name: Judge the release size
         shell: bash
         run: |
           : > "$RUNNER_TEMP/notes.md"
-          prev=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          prev="$PREV"
           if [ -n "$prev" ] && gh api "repos/$GITHUB_REPOSITORY/compare/$prev...$GITHUB_SHA" > "$RUNNER_TEMP/compare.json"; then
             node .github/scripts/release-size.mjs "$RUNNER_TEMP/compare.json" > "$RUNNER_TEMP/notes.md" || : > "$RUNNER_TEMP/notes.md"
           fi
@@ -53,9 +74,13 @@ jobs:
       # The release is created here as a draft, on this exact commit, so that
       # electron-builder's parallel uploads all find it instead of racing to
       # create it, and installed apps only see it once every file is there.
+      # Beta and stable tags never collide (v0.2.0-beta.N against v0.1.N).
       - name: Create a draft release
         shell: bash
-        run: gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+        run: |
+          start=()
+          if [ -n "$PREV" ]; then start=(--notes-start-tag "$PREV"); fi
+          gh release view "v$VERSION" > /dev/null 2>&1 || gh release create "v$VERSION" --draft $KIND --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes "${start[@]}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release -w @pct/desktop
@@ -63,6 +88,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish the release
         shell: bash
-        run: gh release edit "v$VERSION" --draft=false --latest
+        run: gh release edit "v$VERSION" --draft=false $KIND $LATEST
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
