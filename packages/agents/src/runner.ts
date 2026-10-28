@@ -8,6 +8,7 @@ import {
   SETUP_CONFIG_PATH,
   WORKSPACE_FILE_LIMIT,
   AGENT_ERROR_PREFIX,
+  CONTEXT_WARN_TOKENS,
   approvalActivity,
   describeLayoutProblems,
   epicLayoutProblems,
@@ -44,6 +45,7 @@ import {
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { describeContext, systemPrompt, type ContextInput } from './context.js';
+import { trimHistory } from './trim.js';
 import {
   ENGINE_BRIDGES,
   LIVE_EDITOR_BRIDGES,
@@ -196,6 +198,12 @@ interface ChatRun {
   engine: ChatEngine | null;
   /** Said in the chat that the engine could not be reached, so it is not said every turn. */
   engineProblem: string | null;
+  /** Prompt tokens the provider counted for the last model call; null before the first one. */
+  promptTokens: number | null;
+  /** Old tool results and inputs shortened so far (see trimHistory). */
+  trimmed: number;
+  /** Said in the chat that its context is large, so it is said once. */
+  contextWarned: boolean;
 }
 
 /** A Godot (or Summer Engine) or Unreal project, as one chat sees it. */
@@ -404,6 +412,9 @@ export class AgentRunner {
         stopNotice: null,
         engine: null,
         engineProblem: null,
+        promptTokens: null,
+        trimmed: 0,
+        contextWarned: false,
       };
       this.runs.set(chatId, run);
     }
@@ -992,7 +1003,13 @@ export class AgentRunner {
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
     const context = describeContext(
       this.contextInput(agent, chat, task),
-      { filesRead: [...run.filesRead], conversation: JSON.stringify(run.history ?? []) },
+      {
+        filesRead: [...run.filesRead],
+        conversation: JSON.stringify(run.history ?? []),
+        measured: run.promptTokens,
+        trimmed: run.trimmed,
+        warnAt: agent.connection.type === 'api' ? CONTEXT_WARN_TOKENS : null,
+      },
     );
     this.client.setChatAgentState(chatId, state, context, activity);
   }
@@ -1346,6 +1363,8 @@ export class AgentRunner {
       }
       const current = this.chat(chat.id) ?? chat;
       const task = this.client.getState().tasks.find((t) => t.id === current.taskId) ?? null;
+      // Old tool results go once enough have piled up, in place, so the cached start of the history stays put between batches.
+      run.trimmed += trimHistory(history);
       const writer = this.textWriter(chat.id);
       const turn = await model.complete({
         system: systemPrompt(this.contextInput(agent, current, task)),
@@ -1355,7 +1374,11 @@ export class AgentRunner {
         onText: writer.append,
       });
       writer.finish(turn.text);
-      if (turn.usage) this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null);
+      if (turn.usage) {
+        this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null);
+        run.promptTokens = turn.usage.input + turn.usage.cacheRead + turn.usage.cacheWrite;
+        this.warnIfContextLarge(chat.id, run);
+      }
       if (turn.stop === 'refusal') {
         history.push({ role: 'assistant', text: turn.text, toolCalls: [] });
         this.notice(chat.id, 'The model declined to continue with this request.');
@@ -1379,6 +1402,18 @@ export class AgentRunner {
       if (signal.aborted) throw new Error('stopped');
     }
     this.notice(chat.id, `Paused after ${maxSteps} steps. Send a message to let it continue.`);
+  }
+
+  /** Once per chat: says the context has grown large and that a new chat would be cheaper. */
+  private warnIfContextLarge(chatId: string, run: ChatRun) {
+    if (run.contextWarned || (run.promptTokens ?? 0) < CONTEXT_WARN_TOKENS) return;
+    run.contextWarned = true;
+    this.notice(
+      chatId,
+      `This chat's context is now about ${Math.round(run.promptTokens! / 1000)}k tokens, so every step re-sends a lot. ` +
+        'Old tool results are being shortened, but for the rest of a long task it is cheaper to continue in a new chat: ' +
+        'use "Continue in a new chat" to carry the plan, decisions, acceptance criteria and paths over to a fresh one.',
+    );
   }
 
   private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {

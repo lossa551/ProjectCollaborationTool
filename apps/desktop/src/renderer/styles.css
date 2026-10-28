@@ -1408,6 +1408,28 @@ a {
   flex-direction: column;
 }
 
+/* Continue in a new chat (issue #88) */
+
+.context-warning {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border-color: var(--warn);
+}
+
+.continue-panel {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.context-size p {
+  margin: 4px 0 0;
+}
+
 /* Git actions on the GitHub page */
 
 .git-files {

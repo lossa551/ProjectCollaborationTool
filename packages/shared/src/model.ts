@@ -451,10 +451,26 @@ export const ChatContext = z.object({
   items: z
     .array(z.object({ label: z.string().max(200), detail: z.string().max(500), tokens: z.number().int() }))
     .max(200),
-  /** Rough size of everything sent to the model, in tokens. */
+  /** Rough size of everything sent to the model, in tokens (what the provider counted for the last call, when known). */
   tokens: z.number().int(),
+  /** Past this many tokens the chat suggests continuing in a new chat; null when the agent keeps its own context (CLI agents). */
+  warnAt: z.number().int().positive().nullable().default(null),
+  /** Old tool results and inputs shortened so far to keep the context small. */
+  trimmed: z.number().int().min(0).default(0),
 });
 export type ChatContext = z.infer<typeof ChatContext>;
+
+/**
+ * Context size at which an API agent's chat suggests "Continue in a new chat"
+ * (issue #88). Past it every step re-sends a lot, and some models charge more
+ * per token for long prompts (Haiku 5.5 doubles past 100k).
+ */
+export const CONTEXT_WARN_TOKENS = 100_000;
+
+/** Whether a chat's context has grown past the point where a fresh chat is cheaper. */
+export function contextIsLarge(context: ChatContext | null | undefined): boolean {
+  return !!context?.warnAt && context.tokens >= context.warnAt;
+}
 
 export const ChatAgentState = z.enum(['idle', 'working', 'waiting']);
 export type ChatAgentState = z.infer<typeof ChatAgentState>;

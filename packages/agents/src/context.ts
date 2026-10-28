@@ -190,10 +190,28 @@ export function systemPrompt(input: ContextInput): string {
 }
 
 /** The context panel's list: the pieces above, files the agent read, and the conversation. */
-export function describeContext(input: ContextInput, extra: { filesRead: string[]; conversation: string }): ChatContext {
+export function describeContext(
+  input: ContextInput,
+  extra: {
+    filesRead: string[];
+    conversation: string;
+    /** Prompt tokens the provider counted for the agent's last call, when there was one. */
+    measured?: number | null;
+    /** Old tool results and inputs shortened so far (see trimHistory). */
+    trimmed?: number;
+    /** When to suggest continuing in a new chat; null for agents that keep their own context. */
+    warnAt?: number | null;
+  },
+): ChatContext {
   const items = pieces(input).map((p) => ({ label: p.label, detail: p.detail, tokens: estimateTokens(p.text) }));
   for (const file of extra.filesRead.slice(-150)) items.push({ label: 'File', detail: file, tokens: 0 });
   const conversation = estimateTokens(extra.conversation);
-  items.push({ label: 'Conversation', detail: 'Messages and tool results so far', tokens: conversation });
-  return { items, tokens: items.reduce((sum, item) => sum + item.tokens, 0) };
+  const trimmed = extra.trimmed ?? 0;
+  items.push({
+    label: 'Conversation',
+    detail: `Messages and tool results so far${trimmed ? ` (${trimmed} old ${trimmed === 1 ? 'result' : 'results'} shortened)` : ''}`,
+    tokens: conversation,
+  });
+  const estimated = items.reduce((sum, item) => sum + item.tokens, 0);
+  return { items, tokens: extra.measured || estimated, warnAt: extra.warnAt ?? null, trimmed };
 }

@@ -261,6 +261,11 @@ export interface HandoffRequest {
   /** Title of the new chat; made from the task or the sender otherwise. */
   title?: string;
   handoff: Omit<Handoff, 'fromChatId' | 'fromName'>;
+  /**
+   * Continue fromChatId in a new chat (issue #88): the new chat also starts
+   * from that chat's files, so its agent picks up where the work is.
+   */
+  continue?: boolean;
 }
 
 export type ResultWith<T> = { ok: true; value: T } | { ok: false; error: string };

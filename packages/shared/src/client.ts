@@ -490,8 +490,11 @@ export class SessionClient {
     return id;
   }
 
-  /** Starts a new chat with the messages of another chat up to and including one of them. */
-  branchChat(options: { fromChatId: string; fromMessageId: string; title: string; agentId?: string }): string {
+  /**
+   * Starts a new chat with the messages of another chat up to and including one
+   * of them; with a handoff, it starts from the handoff and the files instead.
+   */
+  branchChat(options: { fromChatId: string; fromMessageId: string; title: string; agentId?: string; handoff?: Handoff }): string {
     const id = crypto.randomUUID();
     this.send({ type: 'chat.branch', id, ...options });
     return id;

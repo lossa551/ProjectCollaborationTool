@@ -256,6 +256,11 @@ export const ChatBranchMessage = z.object({
   /** The agent that carries on; the parent chat's agent when left out. */
   agentId: z.string().optional(),
   title: ChatTitle,
+  /**
+   * Continue in a new chat instead (issue #88): the new chat gets this handoff
+   * and the parent's files at that message, but none of its messages.
+   */
+  handoff: Handoff.optional(),
 });
 
 export const ChatUpdateMessage = z.object({

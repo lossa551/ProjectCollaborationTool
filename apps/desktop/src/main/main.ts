@@ -1304,7 +1304,8 @@ function chatToTask(chatId: unknown): Result {
 /**
  * Hands work to another agent: a new chat that starts from the handoff
  * package, the task moved to the next stage and, if that agent is running,
- * assigned to it.
+ * assigned to it. Continuing a chat is a handoff too, usually to the same
+ * agent, whose new chat also keeps the old chat's files (issue #88).
  */
 function handOff(request: HandoffRequest): ResultWith<string> {
   const state = client.getState();
@@ -1318,14 +1319,29 @@ function handOff(request: HandoffRequest): ResultWith<string> {
   const handoff = parsed.data;
   const task = state.tasks.find((t) => t.id === request.taskId) ?? null;
   const title = ChatTitle.safeParse(
-    request.title ?? (task ? `${task.title} · ${handoff.stage ?? 'handoff'}` : `Handoff from ${handoff.fromName ?? 'chat'}`),
+    request.title ??
+      (request.continue && from
+        ? `${from.title.slice(0, 180)} (continued)`
+        : task
+          ? `${task.title} · ${handoff.stage ?? 'handoff'}`
+          : `Handoff from ${handoff.fromName ?? 'chat'}`),
   );
-  const chatId = client.createChat({
-    agentId: target.id,
-    title: title.success ? title.data : 'Handoff',
-    taskId: task?.id ?? null,
-    handoff,
-  });
+  let chatId: string;
+  if (request.continue) {
+    // A new chat on the same work, with the files as they are now and a small context.
+    if (!from) return { ok: false, error: 'That chat no longer exists.' };
+    if (from.state !== 'idle') return { ok: false, error: 'Wait until the agent has finished its turn, so the new chat starts from its latest files.' };
+    const last = state.messages[from.id]?.at(-1);
+    if (!last) return { ok: false, error: 'This chat has nothing to continue yet.' };
+    chatId = client.branchChat({ fromChatId: from.id, fromMessageId: last.id, title: title.success ? title.data : 'Continued chat', agentId: target.id, handoff });
+  } else {
+    chatId = client.createChat({
+      agentId: target.id,
+      title: title.success ? title.data : 'Handoff',
+      taskId: task?.id ?? null,
+      handoff,
+    });
+  }
   client.postChat(chatId, { kind: 'handoff', text: renderHandoff(handoff, task?.title ?? null) });
   if (task) {
     const running = state.participants.find((p) => p.agent?.profileId === target.id);
