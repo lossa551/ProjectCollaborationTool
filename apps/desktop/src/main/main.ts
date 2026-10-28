@@ -1465,8 +1465,6 @@ async function folderNoteTask(folder: unknown): Promise<ResultWith<string>> {
 // a note gone stale or a big folder without one, it drafts the note and the
 // draft waits on the Folder notes tab until someone accepts or discards it.
 
-const NOTE_PURPOSE = 'short folder notes (AGENTS.md) that tell other agents what a folder is for';
-
 function currentNotesAgent(): string | null {
   const sessionId = client.getState().session?.id;
   return sessionId ? notesAgent(sessionId) : null;
@@ -1570,7 +1568,7 @@ async function draftNote(agentId: string, folder: FolderInfo, report: FolderNote
     if (!started.ok) throw new Error(started.error);
   }
   const input = await noteDraftInput(root, folder, report);
-  const text = cleanNote(await localAgents.draft(agentId, noteDraftPrompt(folder, input), null, signal, NOTE_PURPOSE));
+  const text = cleanNote(await localAgents.draft(agentId, noteDraftPrompt(folder, input), null, signal, 'notes'));
   if (!text) throw new Error('The agent answered with an empty note.');
   return { text, previous: input.existing };
 }

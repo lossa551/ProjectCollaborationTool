@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, type AgentProfile, type SessionState } from '@pct/shared';
+import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, notesDraftUsageId, type AgentProfile, type SessionState } from '@pct/shared';
 import { startServer, type RunningServer } from '@pct/server';
 import { AgentRunner, type AgentRunnerOptions, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
 
@@ -911,6 +911,16 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     const state = await waitFor(martin, (s) => s.usage.length === 1);
     expect(state.usage[0]).toMatchObject({ chatId: commitDraftUsageId(profile.id), agentId: profile.id, taskId, calls: 1, input: 3000, output: 80 });
     expect(state.chats).toHaveLength(0);
+  });
+
+  it('counts a folder note draft apart from commit drafts', async () => {
+    const usage = { input: 12_000, output: 400, cacheRead: 0, cacheWrite: 0 };
+    const { martin, profile, model } = await setup([{ text: '# Player\n\nMovement and jumps.', toolCalls: [], stop: 'end', usage, model: 'claude-haiku-5-5' }]);
+    const text = await runners[0]!.draft('Write the note for src/player', null, new AbortController().signal, 'notes');
+    expect(text).toBe('# Player\n\nMovement and jumps.');
+    expect(model.requests[0]!.system).toContain('folder notes');
+    const state = await waitFor(martin, (s) => s.usage.length === 1);
+    expect(state.usage[0]).toMatchObject({ chatId: notesDraftUsageId(profile.id), agentId: profile.id, taskId: null, model: 'claude-haiku-5-5' });
   });
 });
 

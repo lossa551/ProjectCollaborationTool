@@ -3,7 +3,7 @@ import { ENGINE_LABELS, Engine, todo, type SetupItem, type SetupItemId } from '@
 import type { AppState, SetupOutcome, SetupPlan } from '../common/api';
 import { formatTokens } from '../common/folder-notes';
 import { FirstCommitPrompt } from './FirstCommit';
-import { draftProblem } from './GitHub';
+import { CHEAPEST_WHY, NotesCostWarning, draftAgentLabel, draftAgents } from './NotesAgent';
 
 // Project setup (#46), the "Add project" wizard. Make the project with the
 // engine first; this screen then looks at the folder, shows the preset for
@@ -31,7 +31,8 @@ export function SetupScreen({ state, onDone }: { state: AppState; onDone: () => 
   const [open, setOpen] = useState<SetupItemId | null>(null);
   const [outcome, setOutcome] = useState<SetupOutcome | null>(null);
 
-  const usable = state.session.agents.filter((a) => draftProblem(a, state) === null);
+  // Cheapest first: the notes agent drafts by itself all day.
+  const usable = draftAgents(state);
   const agent = usable.find((a) => a.id === agentId) ?? usable.find((a) => a.id === state.notesAgent) ?? usable[0] ?? null;
 
   const load = async (pick: Engine | null) => {
@@ -200,11 +201,13 @@ export function SetupScreen({ state, onDone }: { state: AppState; onDone: () => 
                 <select value={agent?.id ?? ''} disabled={!!running} onChange={(e) => setAgentId(e.target.value)}>
                   {usable.map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.name}
+                      {draftAgentLabel(a, state, usable[0])}
                     </option>
                   ))}
                 </select>
               </label>
+              <p className="muted small">{CHEAPEST_WHY}</p>
+              {agent && <NotesCostWarning state={state} agent={agent} />}
               {plan.noteFolders.length === 0 ? (
                 <p className="muted small">
                   {plan.firstCommit ? 'Folders are offered once the project has a commit; run setup again after this one.' : 'No big folder is missing a note.'}

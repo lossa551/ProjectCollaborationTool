@@ -14,6 +14,7 @@ import {
   type NoteState,
 } from '../common/folder-notes';
 import { runnerOf } from './Agents';
+import { NotesCostWarning, NotesSpend } from './NotesAgent';
 
 // Project memory, Folder notes tab: each folder of your project folder with
 // its token weight and whether its AGENTS.md still matches it. Every warning
@@ -436,13 +437,15 @@ function NoteDrafts({ state }: { state: AppState }) {
               ? `${agent.name} keeps folder notes up to date: when a note goes stale or a big folder has none, it drafts the note here for you to review.`
               : 'Drafts from before the notes agent was turned off.'}
           </p>
+          {agent && <NotesSpend state={state} agent={agent} />}
         </div>
         {agent && (
-          <button className="secondary" onClick={() => window.pct.setNotesAgent(null)} title="Stop drafting notes by itself; you can turn it on again in project setup">
+          <button className="secondary" onClick={() => window.pct.setNotesAgent(null)} title="Stop drafting notes by itself; you can turn it on again in Settings, Agents, or project setup">
             Turn off
           </button>
         )}
       </div>
+      {agent && <NotesCostWarning state={state} agent={agent} />}
       {error && <p className="error small">{error}</p>}
       <ul className="fn-draft-list">
         {drafts.map((draft) => (
