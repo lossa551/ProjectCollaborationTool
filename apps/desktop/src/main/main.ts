@@ -100,7 +100,8 @@ import {
   notesAgent,
   workspaceFolder,
 } from './settings';
-import { EngineWatch, engineSettingsFor, findGodotOnPath } from './engine';
+import { EngineWatch, engineSettingsFor, findGodotOnPath, findUnrealOnPc } from './engine';
+import { addEngineWire } from './unreal';
 import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateState, startUpdater } from './updater';
 import { GitError, clone, commitPaths, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
@@ -186,8 +187,8 @@ const godotEditor = new GodotEditorLink({
 });
 client.subscribe((state) => void godotEditor.update(workspace?.folder ?? null, state));
 
-// The engine programs on this PC: the app reacts when Godot or Summer Engine opens your project.
-const editorName = (kind: 'godot' | 'summer') => (kind === 'godot' ? 'Godot' : 'Summer Engine');
+// The engine programs on this PC: the app reacts when Godot, Summer Engine or the Unreal Editor opens your project.
+const editorName = (kind: 'godot' | 'summer' | 'unreal') => (kind === 'godot' ? 'Godot' : kind === 'summer' ? 'Summer Engine' : 'The Unreal Editor');
 const pluginOffered = new Set<string>();
 const engineWatch = new EngineWatch({
   link: godotEditor,
@@ -196,7 +197,8 @@ const engineWatch = new EngineWatch({
   event(event) {
     const state = client.getState();
     const youId = state.you?.id;
-    const dir = godotEditor.projectDir();
+    const unrealDir = engineWatch.unreal()?.uproject.replace(/\/?[^/]+$/, '') ?? null;
+    const dir = event.editor.kind === 'unreal' ? unrealDir : godotEditor.projectDir();
     const inProject = (path: string) => !dir || path.toLowerCase().startsWith(`${dir.toLowerCase()}/`);
     const others = state.locks.filter((l) => l.holder.id !== youId && inProject(l.path));
     const name = editorName(event.editor.kind);
@@ -206,7 +208,9 @@ const engineWatch = new EngineWatch({
         key: `engine-open-${Date.now()}`,
         kind: 'engine',
         title: `${name} opened your project`,
-        body: `${first.holder.name} holds ${first.path}${others.length > 1 ? ` and ${others.length - 1} more` : ''}. Lock what you change first (Locks dock).`,
+        body:
+          `${first.holder.name} holds ${first.path}${others.length > 1 ? ` and ${others.length - 1} more` : ''}. ` +
+          (event.editor.kind === 'unreal' ? 'Do not save those assets; lock what you change first (Locks in the app).' : 'Lock what you change first (Locks dock).'),
         target: null,
       });
     }
@@ -226,6 +230,16 @@ const engineWatch = new EngineWatch({
     const folder = workspace?.folder;
     if (!folder || pluginOffered.has(folder)) return;
     pluginOffered.add(folder);
+    if (editor.kind === 'unreal') {
+      notifier.notify({
+        key: `engine-plugin-${folder}`,
+        kind: 'engine',
+        title: 'Let agents work in the Unreal Editor?',
+        body: 'Your project has no EngineWire plugin, so agents cannot reach the editor. One click on Home adds it (on this PC only).',
+        target: null,
+      });
+      return;
+    }
     notifier.notify({
       key: `engine-plugin-${folder}`,
       kind: 'engine',
@@ -1061,7 +1075,7 @@ async function startAgent(agentId: unknown): Promise<Result> {
     startedById: state.you.id,
     root: workspace.folder,
     // Read each turn, so engine settings changed here apply from the agent's next turn.
-    engine: (agent) => engineSettingsFor(engineNow(), agent),
+    engine: (agent) => engineSettingsFor(engineNow(), agent, workspace?.folder ?? null),
   });
   return { ok: true };
 }
@@ -1537,6 +1551,28 @@ async function installGodotPlugin(): Promise<ResultWith<{ reload: boolean }>> {
   }
 }
 
+/**
+ * Adds EngineWire (ChiR24/Unreal_mcp, pinned) to your Unreal project's
+ * Plugins folder: fetched with git, kept out of the repository (.gitignore),
+ * so each PC adds its own and nobody's editor asks for a plugin it does not
+ * have. Unreal builds it the next time the editor opens the project.
+ */
+async function installUnrealPlugin(): Promise<ResultWith<{ restart: boolean }>> {
+  const root = workspace?.folder;
+  if (!root) return { ok: false, error: 'Choose your project folder first (bottom left).' };
+  const unreal = engineWatch.unreal();
+  if (!unreal) return { ok: false, error: 'Your project folder has no .uproject.' };
+  try {
+    await addEngineWire(root, unreal.uproject);
+    void watcher?.poll();
+    return { ok: true, value: { restart: engineNow().editor?.kind === 'unreal' } };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    pushState();
+  }
+}
+
 /** Drafts this many notes at most per scan, so a big drift does not run up a bill at once. */
 const UPKEEP_PER_SCAN = 2;
 const UPKEEP_CHECK_MS = 15 * 60_000;
@@ -1743,7 +1779,7 @@ ipcMain.handle(Channel.readSetup, (_event, engine: unknown) => readSetup(engine)
 ipcMain.handle(Channel.runSetup, (_event, request: unknown) => runSetup(request));
 ipcMain.on(Channel.cancelSetup, () => setupAbort?.abort());
 ipcMain.on(Channel.setEngineBridge, (_event, bridge: unknown) => {
-  if (bridge !== 'auto' && bridge !== 'off' && bridge !== 'godot' && bridge !== 'summer') return;
+  if (bridge !== 'auto' && bridge !== 'off' && bridge !== 'godot' && bridge !== 'summer' && bridge !== 'unreal') return;
   saveEngineBridge(bridge);
   pushState();
 });
@@ -1756,6 +1792,7 @@ ipcMain.on(Channel.setEngineAgent, (_event, agentId: unknown, on: unknown) => {
 });
 
 ipcMain.handle(Channel.installGodotPlugin, () => installGodotPlugin());
+ipcMain.handle(Channel.installUnrealPlugin, () => installUnrealPlugin());
 ipcMain.handle(Channel.setGodotPath, async (_event, choose: unknown): Promise<Result> => {
   if (choose !== true) {
     saveGodotPath(null);
@@ -1992,6 +2029,7 @@ void app.whenReady().then(() => {
     pushState();
   });
   void findGodotOnPath().then(pushState);
+  void findUnrealOnPc().then(pushState);
   engineWatch.start();
   startUpdater(
     () => window?.webContents.send(Channel.updateState, updateInfo()),

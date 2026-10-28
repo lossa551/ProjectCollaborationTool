@@ -139,14 +139,14 @@ export interface AppState {
 }
 
 /** Which engine MCP server agents on this PC use; see ENGINE_BRIDGES in @pct/agents. auto picks from what is open. */
-export type EngineBridgeChoice = 'auto' | 'off' | 'godot' | 'summer';
+export type EngineBridgeChoice = 'auto' | 'off' | 'godot' | 'summer' | 'unreal';
 
-/** A Godot or Summer Engine editor on this PC. */
+/** A Godot, Summer Engine or Unreal Editor on this PC. */
 export interface EngineEditor {
-  kind: 'godot' | 'summer';
-  /** It has your project open (the Locks plugin says so); false when it is only running. */
+  kind: 'godot' | 'summer' | 'unreal';
+  /** It has your project open (the Locks plugin says so, or Unreal's command line); false when it is only running. */
   projectOpen: boolean;
-  /** The open scene, as a path in your project folder; null when not known. */
+  /** The open scene, as a path in your project folder; null when not known (always for Unreal). */
   scene: string | null;
   version: string | null;
 }
@@ -155,7 +155,7 @@ export interface EngineEditor {
 export interface EngineState {
   bridge: EngineBridgeChoice;
   /** The server agents get now: the choice, or what auto picked; null for none. */
-  active: 'godot' | 'summer' | null;
+  active: 'godot' | 'summer' | 'unreal' | null;
   /** Why it is that, in a few words (for auto, or why there is none). */
   activeWhy: string;
   /** Godot (or Summer Engine) executable, for tests and the Godot MCP server. */
@@ -174,6 +174,22 @@ export interface EngineState {
   plugin: 'missing' | 'old' | 'ok' | null;
   /** The editor that is open, preferring one that has your project. */
   editor: EngineEditor | null;
+  /** Unreal (issue #11); null when your project folder has no .uproject. */
+  unreal: UnrealState | null;
+}
+
+/** An Unreal project in your project folder, and what this PC has for it. */
+export interface UnrealState {
+  /** The .uproject, repo-relative. */
+  uproject: string;
+  /** The engine it asks for ("5.8"), or a source build's id. */
+  engineVersion: string | null;
+  /** UnrealEditor-Cmd for that engine, for the tests; null when not found. */
+  editorCmd: string | null;
+  /** EngineWire (the plugin agents reach the editor through) is in the project or enabled from the engine. */
+  plugin: 'ok' | 'missing';
+  /** The project has C++ modules, so Unreal can build a code plugin like EngineWire. */
+  hasCode: boolean;
 }
 
 /** What project setup would do in your project folder. */
@@ -448,6 +464,8 @@ export interface PctApi {
   setEngineAgent(agentId: string, on: boolean): void;
   /** Adds or updates the Locks plugin in your project folder's Godot project, and commits it. */
   installGodotPlugin(): Promise<ResultWith<{ reload: boolean }>>;
+  /** Adds EngineWire to your Unreal project's Plugins folder (this PC only; it is in .gitignore). */
+  installUnrealPlugin(): Promise<ResultWith<{ restart: boolean }>>;
   /** choose: asks for the Godot executable; otherwise forgets it and looks on the PATH again. */
   setGodotPath(choose: boolean): Promise<Result>;
   /** Writes a drafted note into your project folder, for you to commit. */
@@ -535,6 +553,7 @@ export const Channel = {
   setEngineBridge: 'pct:set-engine-bridge',
   setEngineAgent: 'pct:set-engine-agent',
   installGodotPlugin: 'pct:install-godot-plugin',
+  installUnrealPlugin: 'pct:install-unreal-plugin',
   setGodotPath: 'pct:set-godot-path',
   discardNoteDraft: 'pct:discard-note-draft',
   state: 'pct:state',

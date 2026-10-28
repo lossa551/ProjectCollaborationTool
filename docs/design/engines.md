@@ -124,12 +124,68 @@ app reacting when someone opens the Godot editor.
 - **Still yours to do:** install Node.js, install Summer Engine and sign in
   once (`npx summer-engine@latest login`). Approvals are unchanged.
 
+## Unreal Engine adapter (#11, built 2026-10-28)
+
+Built on ChiR24/Unreal_mcp (EngineWire 0.6.0), pinned: the app runs
+`npx unreal-engine-mcp-server@0.6.0` with `UE_PROJECT_PATH` set, and the
+proxy reads EngineWire's capability token from `Saved/MCP/capability-token`,
+so there is no token to copy. Server name and pinning live in one place
+(`engineServer`), so Epic's official MCP can be added later as another bridge.
+
+- **Bridge.** EngineWire has one MCP tool, `unreal` (search, describe,
+  execute, configure), which our agent loop passes on as `unreal`; Claude Code
+  gets it through `--mcp-config` as before, behind the PreToolUse hook.
+  Like Summer, it drives the live editor, so agents in a worktree still act
+  on the project folder (no DerivedDataCache/Intermediate copies per agent).
+- **Sorting each call** (packages/agents/src/unreal.ts). search, describe and
+  read-only capabilities pass. The rest map their targets (`/Game/...`
+  object paths, `*Path` params for the capability's own domain, and the
+  source of a move, rename or delete) to `Content/....uasset` or `.umap`
+  files. Those need the agent's exclusive lock and to be in task scope; an
+  asset that does not exist yet must also follow Epic's layout and naming,
+  or the call is refused with the rules and asked again. Capabilities whose
+  catalog effect is destructive (453 records, generated into
+  unreal-capabilities.ts) need an approval naming the files. Edits with no
+  named file (for example "spawn actor in the open level") are allowed and
+  the files the editor reports changed are locked after.
+- **Receipts.** EngineWire's `receipt.changes` lists the packages a call
+  touched; the runner takes locks on them and flags any that break Epic's
+  layout in the agent chat.
+- **Epic's rules.** packages/shared/src/unreal.ts holds Epic's prefix table
+  and the recommended structure (`Content/<Project>/` with Assets, Envs,
+  Media, Sequences, Stages, StageLevels, Tools; `Content/Common`), with the
+  project's folder names in `.collab-tool.json` (`unreal`). The Unreal setup
+  preset's AGENTS.md cites the Epic pages (naming, project structure, coding
+  standard, source control) as the source of truth. Unlisted prefixes are
+  accepted, as Epic calls its list a guide.
+- **Locks.** `.uasset` and `.umap` are always exclusive, whatever the
+  project's own patterns say (`lockKindFor`), in the server and in the hook.
+- **Tests.** `run_tests` runs `UnrealEditor-Cmd <uproject>
+  -ExecCmds="Automation RunTests <filter>; Quit" -NullRHI` and reads the
+  pass and fail lines back. The editor is found from the .uproject's
+  EngineAssociation (launcher list, registry, Epic Games folders) or from
+  the running editor.
+- **Bloat check.** Assets are reachable from levels, `__External*` actors,
+  Config and Source references, through the `/Game/` names in each asset's
+  header. Developers and Collections folders are left alone, and an asset
+  that is still a Git LFS pointer is skipped. Epic layout problems get their
+  own section.
+- **What happens on its own.** Automatic picks EngineWire for a folder with a
+  .uproject. Home shows an Unreal panel (editor open or not, plugin state,
+  engine version found). "Add EngineWire" clones the plugin at the pinned tag
+  into `Plugins/EngineWire` and commits only a `.gitignore` line: the plugin
+  is about 2000 third-party files, so each PC adds its own and an editor
+  without it never asks for a missing plugin. A toast says when the editor
+  opens the project without it.
+- **Still yours to do:** the project needs a C++ target (EngineWire is a C++
+  plugin Unreal builds when it opens the project), and Node.js. EngineWire's
+  own compatibility record (0.6.0) says its plugin did not compile on UE 5.8
+  preview 1 and was last checked on 5.7.4, so 5.8 needs a check on Martin's PC.
+
 ## Open
 
-- Unreal (#11): the same bridge works for any MCP server; Unreal needs its
-  own sorting of tool calls (ChiR24/Unreal_mcp's capabilities), and a
-  decision on `DerivedDataCache`/`Intermediate` for agent copies (seed, share,
-  or open the engine only in the project folder, as with Summer).
+- Unreal: Epic's official MCP as a second bridge once it is past
+  experimental; EngineWire on 5.8 once its plugin compiles there.
 - Summer's write receipts and refusals are read from the answer shape in its
   docs (`ok`, `status`, `error.code`); the exact receipt fields are not
   documented, so the app looks for any path with a hash or size.

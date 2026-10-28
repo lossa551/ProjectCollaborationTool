@@ -354,10 +354,24 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
             ))}
           </BloatSection>
           {report.unusedGameFiles.length > 0 && (
-            <BloatSection title="Godot files the game never loads" count={report.unusedGameFiles.length} empty="">
+            <BloatSection
+              title={report.unusedGameFiles.some((p) => /\.uasset$/i.test(p)) ? 'Unreal assets no level, config or code uses' : 'Godot files the game never loads'}
+              count={report.unusedGameFiles.length}
+              empty=""
+            >
               {report.unusedGameFiles.map((path) => (
                 <li key={path}>
                   <code className="small">{path}</code> {noteButton(`game:${path}`, `Possibly unused: ${path}`, path)}
+                </li>
+              ))}
+            </BloatSection>
+          )}
+          {report.epicLayout.length > 0 && (
+            <BloatSection title="Unreal assets not where Epic says, or not named by Epic’s conventions" count={report.epicLayout.length} empty="">
+              {report.epicLayout.map((item) => (
+                <li key={item.path}>
+                  <code className="small">{item.path}</code> <span className="muted small">{item.problem}</span>{' '}
+                  {noteButton(`epic:${item.path}`, `Not by Epic's layout: ${item.path}`, `${item.path}: ${item.problem}`)}
                 </li>
               ))}
             </BloatSection>

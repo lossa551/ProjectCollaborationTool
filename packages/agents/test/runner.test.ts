@@ -61,7 +61,7 @@ class ScriptedModel implements ModelAdapter {
   }
 }
 
-async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: Partial<AgentRunnerOptions> = {}) {
+async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: Partial<AgentRunnerOptions> = {}, allowedPaths = ['src/**']) {
   server = await startServer({ port: 0, host: '127.0.0.1' });
   const root = mkdtempSync(joinPath(tmpdir(), 'pct-agent-'));
   // Agents' own copies go next to the project folder.
@@ -72,7 +72,7 @@ async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: P
     name: 'Builder',
     connection: { type: 'api', provider: 'anthropic', model: 'claude-opus-5-5', baseUrl: null },
     responsibilities: 'Implements gameplay code.',
-    allowedPaths: ['src/**'],
+    allowedPaths,
     approvals,
   });
   const { agents } = await waitFor(martin, (s) => s.agents.length === 1);
@@ -795,6 +795,113 @@ describe('agent runner with a game engine', () => {
     expect(state.chats.find((c) => c.id === chatId)?.worktree ?? null).toBeNull();
     expect(messages.filter((m) => m.tool).at(-1)?.tool).toMatchObject({ name: 'Summer', status: 'done', summary: 'engine.write_file src/jump.gd' });
     expect(messages.filter((m) => m.tool).at(-1)?.tool?.output).toContain('Wrote: res://src/jump.gd');
+  });
+
+  describe('Unreal (EngineWire)', () => {
+    const unrealServer = (box: { root: string; log: string }) => () => ({
+      server: { kind: 'unreal' as const, command: process.execPath, args: [fixture], env: { FAKE_KIND: 'unreal', FAKE_ROOT: box.root, FAKE_LOG: box.log } },
+      godotPath: null,
+    });
+    const execute = (id: string, tool: string, action: string, params: Record<string, unknown>) => ({
+      id,
+      name: 'unreal',
+      input: { operation: 'execute', tool, action, params },
+    });
+
+    async function unrealProject(turns: ModelTurn[], options: Partial<AgentRunnerOptions> = {}) {
+      const box = { root: '', log: '' };
+      const made = await setup(turns, DEFAULT_APPROVALS, { engine: unrealServer(box), lockWaitMs: 200, ...options }, ['Content/**', 'src/**']);
+      box.root = made.root;
+      box.log = joinPath(made.root, '..', `${made.root.split(/[\\/]/).at(-1)}.log`);
+      dirs.push(box.log);
+      const git = (...args: string[]) => execFileSync('git', args, { cwd: made.root, encoding: 'utf8' });
+      git('init', '-q', '-b', 'main');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'Test');
+      writeFileSync(joinPath(made.root, 'Shooter.uproject'), '{"EngineAssociation":"5.8"}');
+      git('add', '.');
+      git('commit', '-qm', 'start');
+      return { ...made, box };
+    }
+
+    it('makes an asset in the open editor, in the project folder, with an exclusive lock', async () => {
+      const turns: ModelTurn[] = [
+        { text: '', toolCalls: [execute('t1', 'manage_asset', 'create_material_instance', { name: 'MI_Rock_B', savePath: '/Game/Shooter/Assets/Rocks' })], stop: 'tool_use' },
+        { text: 'Made it.', toolCalls: [], stop: 'end' },
+      ];
+      const { martin, profile, model, root, box } = await unrealProject(turns);
+      const chatId = await startChat(martin, profile, 'Make a rock material instance');
+      const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Made it.' && !m.streaming));
+      const path = 'Content/Shooter/Assets/Rocks/MI_Rock_B.uasset';
+      expect(existsSync(joinPath(root, path))).toBe(true);
+      expect(state.locks.find((l) => l.path === path)).toMatchObject({ kind: 'exclusive', holder: { name: 'Builder' }, chatId });
+      // The editor has the project folder open: no copy of its own.
+      expect(state.chats.find((c) => c.id === chatId)?.worktree ?? null).toBeNull();
+      expect(state.messages[chatId]!.find((m) => m.tool)?.tool).toMatchObject({ name: 'Unreal', status: 'done', summary: `manage_asset.create_material_instance ${path}` });
+      expect(calls(box.log)).toHaveLength(1);
+      expect(model.requests[0]!.tools.map((t) => t.name)).toContain('unreal');
+      expect(model.requests[0]!.system).toContain('Unreal Engine project (Shooter.uproject)');
+      expect(model.requests[0]!.system).toContain('Content/Shooter/');
+    });
+
+    it('refuses a new asset outside Epic’s folder structure or naming, before the editor sees it', async () => {
+      const turns: ModelTurn[] = [
+        { text: '', toolCalls: [execute('t1', 'manage_asset', 'create_material_instance', { name: 'RockInstance', savePath: '/Game/Materials' })], stop: 'tool_use' },
+        { text: 'I will put it where Epic says.', toolCalls: [], stop: 'end' },
+      ];
+      const { martin, profile, model, box } = await unrealProject(turns);
+      const chatId = await startChat(martin, profile, 'Make a rock material instance');
+      const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'I will put it where Epic says.' && !m.streaming));
+      const blocked = state.messages[chatId]!.find((m) => m.tool?.status === 'blocked')!.tool!.output;
+      expect(blocked).toContain('outside Content/Shooter/');
+      expect(blocked).toContain('MI_<Name>');
+      expect(blocked).toContain('dev.epicgames.com');
+      expect(calls(box.log)).toEqual([]);
+      expect((model.requests[1]!.messages.at(-1) as { results: { isError: boolean }[] }).results[0]!.isError).toBe(true);
+    });
+
+    it('always asks a person before a delete', async () => {
+      const turns: ModelTurn[] = [
+        { text: '', toolCalls: [execute('t1', 'manage_asset', 'delete', { assetPath: '/Game/Shooter/Assets/Rocks/SM_Rock_A' })], stop: 'tool_use' },
+        { text: 'Kept it.', toolCalls: [], stop: 'end' },
+      ];
+      const { martin, profile, box } = await unrealProject(turns);
+      const chatId = await startChat(martin, profile, 'Clean up rocks');
+      const asking = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.approval?.state === 'pending'));
+      const card = asking.messages[chatId]!.find((m) => m.approval?.state === 'pending')!;
+      expect(card.approval!.action).toBe('Unreal: manage_asset.delete Content/Shooter/Assets/Rocks/SM_Rock_A.uasset');
+      martin.decideApproval(chatId, card.id, false);
+      await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Kept it.' && !m.streaming));
+      expect(calls(box.log)).toEqual([]);
+    });
+
+    it('tells the agent to undo when the editor changed an asset someone else holds', async () => {
+      const held = 'Content/Shooter/Assets/Rocks/M_Rock.uasset';
+      const turns: ModelTurn[] = [
+        {
+          text: '',
+          toolCalls: [
+            execute('t1', 'manage_asset', 'set_material_parameter', {
+              assetPath: '/Game/Shooter/Assets/Rocks/MI_Rock_A',
+              parameterName: 'Tint',
+              alsoChanged: '/Game/Shooter/Assets/Rocks/M_Rock',
+            }),
+          ],
+          stop: 'tool_use',
+        },
+        { text: 'Undone.', toolCalls: [], stop: 'end' },
+      ];
+      const { martin, profile, model } = await unrealProject(turns);
+      martin.acquireLock(held, { reason: 'Reworking the rock material' });
+      await waitFor(martin, (s) => s.locks.some((l) => l.path === held && l.kind === 'exclusive'));
+      const chatId = await startChat(martin, profile, 'Tint the rock');
+      const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.text === 'Undone.' && !m.streaming));
+      const told = (model.requests[1]!.messages.at(-1) as { results: { content: string; isError: boolean }[] }).results[0]!;
+      expect(told.isError).toBe(true);
+      expect(told.content).toContain(`${held}: ${held} is still locked by Martin`);
+      expect(told.content).toContain('control_editor undo');
+      expect(state.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.startsWith('The Unreal Editor changed files the agent may not change'))).toBe(true);
+    });
   });
 });
 

@@ -10,4 +10,6 @@ export type { LoopMessage, ModelAdapter, ModelRequest, ModelTurn, ToolCall, Tool
 export { createModel, type ApiKeys } from './providers.js';
 export * from './worktree.js';
 export * from './engine.js';
+export * from './unreal.js';
+export { UNREAL_CATALOG_REVISION } from './unreal-capabilities.js';
 export { McpClient, type McpCallResult, type McpServerCommand, type McpTool } from './mcp.js';

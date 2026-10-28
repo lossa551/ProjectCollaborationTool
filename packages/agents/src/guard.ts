@@ -1,4 +1,5 @@
 import {
+  lockKindFor,
   matchesAny,
   normalizePath,
   samePath,
@@ -81,7 +82,7 @@ export function othersLocks(
 export function checkEdit(ctx: GuardContext, rawPath: string): EditDecision {
   const path = normalizePath(rawPath);
   if (!path) return { verdict: 'deny', reasons: ['the path is outside the project'], path: null, lockKind: 'soft' };
-  const lockKind: LockKind = matchesAny(path, ctx.lockRules.exclusivePatterns) ? 'exclusive' : 'soft';
+  const lockKind: LockKind = lockKindFor(path, ctx.lockRules);
   if (/^\.git(\/|$)/i.test(path)) return { verdict: 'deny', reasons: ['agents do not edit .git'], path, lockKind };
 
   const parts: { verdict: Verdict; reason: string | null }[] = [];

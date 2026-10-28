@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { epicLayoutProblems, unrealLayout } from './unreal.js';
 
 // The bloat check: things that make a project bigger than it needs to be.
 // Whoever runs it scans their own project folder; the report is shared with
@@ -50,8 +51,10 @@ export const BloatReport = z.object({
   truncated: z.boolean(),
   duplicates: z.array(BloatDuplicate).max(BLOAT_LIST_LIMIT),
   unusedAssets: z.array(z.string().max(1024)).max(BLOAT_LIST_LIMIT),
-  /** Godot scenes, scripts and resources the game never loads (see findUnusedGodotFiles). */
+  /** Godot scenes, scripts and resources the game never loads (see findUnusedGodotFiles), or Unreal assets nothing reaches (findUnusedUnrealAssets). */
   unusedGameFiles: z.array(z.string().max(1024)).max(BLOAT_LIST_LIMIT).default([]),
+  /** Unreal assets and levels placed or named against Epic's structure and naming (see epicLayoutProblems). */
+  epicLayout: z.array(z.object({ path: z.string().max(1024), problem: z.string().max(1000) })).max(BLOAT_LIST_LIMIT).default([]),
   unusedDependencies: z.array(UnusedDependency).max(BLOAT_LIST_LIMIT),
   folderNotes: z.array(FolderNoteFinding).max(BLOAT_LIST_LIMIT).default([]),
 });
@@ -66,6 +69,8 @@ export interface ScannedFile {
   hash: string | null;
   /** Content of text files small enough to read. */
   text: string | null;
+  /** Unreal .uasset/.umap: the package paths its header names (/Game/...), i.e. what it uses. */
+  refs?: string[];
 }
 
 /** Files that count as assets: referenced by name from code, scenes or configs. */
@@ -280,6 +285,88 @@ export function findUnusedGodotFiles(files: ScannedFile[]): string[] {
   return out;
 }
 
+// Unreal (issue #11): levels are where the game starts, so every .umap is
+// used, with the actors One File Per Actor keeps beside them; so is anything
+// named in Config/*.ini (default maps, game mode, asset manager folders) or in
+// C++ source. From there an asset uses what its header names. Assets in
+// Developers/ and Collections/ are people's own and left alone.
+
+/** The .uproject folders (repo-relative, '' for the top). */
+export function unrealProjects(files: ScannedFile[]): string[] {
+  return files.filter((f) => /\.uproject$/i.test(f.path)).map((f) => dirName(f.path));
+}
+
+/** /Game/... package paths in text, e.g. "/Game/Shooter/Envs/L_Main" from "/Game/Shooter/Envs/L_Main.L_Main". */
+export function packagePaths(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/\/Game\/[A-Za-z0-9_\-/]+/g)) out.add(m[0].replace(/\/+$/, ''));
+  return [...out];
+}
+
+export function findUnusedUnrealAssets(files: ScannedFile[]): string[] {
+  const out: string[] = [];
+  for (const dir of unrealProjects(files)) {
+    const prefix = dir ? `${dir}/` : '';
+    const content = `${prefix}Content/`;
+    // Package path (lower case, /Game/...) to its file.
+    const packages = new Map<string, ScannedFile>();
+    for (const f of files) {
+      if (!f.path.startsWith(content) || !/\.(uasset|umap)$/i.test(f.path)) continue;
+      packages.set(`/game/${f.path.slice(content.length).replace(/\.(uasset|umap)$/i, '')}`.toLowerCase(), f);
+    }
+    const reached = new Set<string>();
+    const queue: ScannedFile[] = [];
+    const reach = (pkg: string) => {
+      const key = pkg.toLowerCase();
+      const hit = packages.get(key);
+      if (hit) {
+        if (!reached.has(key)) {
+          reached.add(key);
+          queue.push(hit);
+        }
+        return;
+      }
+      // A folder (the asset manager scans whole folders): everything in it.
+      for (const [other, file] of packages) {
+        if (other.startsWith(`${key}/`) && !reached.has(other)) {
+          reached.add(other);
+          queue.push(file);
+        }
+      }
+    };
+    for (const [key, f] of packages) {
+      const rel = f.path.slice(content.length);
+      if (/\.umap$/i.test(f.path) || /^(__ExternalActors__|__ExternalObjects__|Developers|Collections)\//i.test(rel)) reach(key);
+    }
+    for (const f of files) {
+      if (f.text === null || !f.path.startsWith(prefix)) continue;
+      const rel = f.path.slice(prefix.length);
+      if (/^(Config\/.*\.ini|Source\/.*\.(h|cpp|cs)|Plugins\/.*\.(h|cpp|ini))$/i.test(rel)) for (const pkg of packagePaths(f.text)) reach(pkg);
+    }
+    while (queue.length) {
+      const file = queue.shift()!;
+      for (const pkg of file.refs ?? []) reach(pkg);
+    }
+    // An asset used whose header was not read hides what it uses in turn: then nothing is reported.
+    if ([...reached].some((key) => packages.get(key)!.refs === undefined)) continue;
+    for (const [key, f] of packages) if (!reached.has(key) && /\.uasset$/i.test(f.path)) out.push(f.path);
+  }
+  return out;
+}
+
+/** Unreal assets and levels that do not follow Epic's structure or naming, one line each. */
+export function findEpicLayoutIssues(files: ScannedFile[], config: { unrealContentFolder?: string; unrealFolders?: string[] } | null): { path: string; problem: string }[] {
+  const out: { path: string; problem: string }[] = [];
+  for (const uproject of files.filter((f) => /\.uproject$/i.test(f.path))) {
+    const layout = unrealLayout(uproject.path, config);
+    for (const f of files) {
+      const problems = epicLayoutProblems(f.path, layout);
+      if (problems.length) out.push({ path: f.path, problem: problems.join('; ') });
+    }
+  }
+  return out;
+}
+
 /** Commands a package installs under another name. */
 const PACKAGE_COMMANDS: Record<string, string[]> = {
   typescript: ['tsc'],
@@ -340,7 +427,7 @@ function escapeRegExp(text: string): string {
 
 export function analyzeBloat(
   files: ScannedFile[],
-  info: { ranBy: string; branch: string | null; truncated: boolean },
+  info: { ranBy: string; branch: string | null; truncated: boolean; setup?: { unrealContentFolder?: string; unrealFolders?: string[] } | null },
   now = Date.now(),
   folderNotes: FolderNoteFinding[] = [],
 ): BloatReport {
@@ -352,9 +439,11 @@ export function analyzeBloat(
     truncated: info.truncated,
     duplicates: findDuplicates(files).slice(0, BLOAT_LIST_LIMIT),
     unusedAssets: findUnusedAssets(files).slice(0, BLOAT_LIST_LIMIT),
-    unusedGameFiles: findUnusedGodotFiles(files)
-      .filter((path) => GODOT_GAME_FILES.has(extensionOf(path)))
-      .slice(0, BLOAT_LIST_LIMIT),
+    unusedGameFiles: [...findUnusedGodotFiles(files).filter((path) => GODOT_GAME_FILES.has(extensionOf(path))), ...findUnusedUnrealAssets(files)].slice(
+      0,
+      BLOAT_LIST_LIMIT,
+    ),
+    epicLayout: findEpicLayoutIssues(files, info.setup ?? null).slice(0, BLOAT_LIST_LIMIT),
     unusedDependencies: findUnusedDependencies(files).slice(0, BLOAT_LIST_LIMIT),
     folderNotes: folderNotes.slice(0, BLOAT_LIST_LIMIT),
   };

@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 import { normalizePath } from '@pct/shared';
 import { McpClient, type McpCallResult, type McpTool } from './mcp.js';
 import type { ToolSpec } from './models/types.js';
+import { classifyUnrealCall, type UnrealProject } from './unreal.js';
 
 // Game engine bridges (issue #10). Agents act in the engine through an MCP
 // server the app runs and talks to itself: the Godot MCP server
@@ -13,7 +14,7 @@ import type { ToolSpec } from './models/types.js';
 // edit, and anything else (playing the game, running editor scripts, cloud
 // operations) follows the agent's rule for commands.
 
-export type EngineBridgeKind = 'godot' | 'summer';
+export type EngineBridgeKind = 'godot' | 'summer' | 'unreal';
 
 export const ENGINE_BRIDGES: Record<EngineBridgeKind, { label: string; detail: string }> = {
   godot: {
@@ -24,7 +25,14 @@ export const ENGINE_BRIDGES: Record<EngineBridgeKind, { label: string; detail: s
     label: 'Summer Engine',
     detail: 'Drives the Summer Engine editor that has your project open. Agents that use it work in your project folder.',
   },
+  unreal: {
+    label: 'Unreal Editor (EngineWire)',
+    detail: 'Drives the Unreal Editor that has your project open, through the EngineWire plugin. Agents that use it work in your project folder.',
+  },
 };
+
+/** Bridges that drive an editor someone has open on the project folder, rather than a copy of their own. */
+export const LIVE_EDITOR_BRIDGES: ReadonlySet<EngineBridgeKind> = new Set(['summer', 'unreal']);
 
 /** The engine's MCP server: how to start it (stdio). */
 export interface EngineServer {
@@ -40,6 +48,8 @@ export interface EngineSettings {
   server: EngineServer | null;
   /** Godot (or Summer Engine) executable, for running the tests; null when not known. */
   godotPath: string | null;
+  /** Unreal's UnrealEditor-Cmd, for running the automation tests; null when not known. */
+  unrealEditor?: string | null;
 }
 
 /** The project.godot folder, repo-relative ('' for the top folder); null when there is none near the top. */
@@ -79,8 +89,12 @@ export function engineToRepoPath(raw: string, godotDir: string, root: string): s
 export type EngineCall =
   /** Looks at the engine or the game; nothing in the project changes. */
   | { kind: 'read'; what: string }
-  /** Changes these project files (repo-relative). */
-  | { kind: 'edit'; what: string; paths: string[] }
+  /**
+   * Changes these project files (repo-relative). ask: a person approves it
+   * first whatever the agent's rules say (Unreal deletes); fresh: files it
+   * makes, with the asset type prefixes Epic gives them (Unreal).
+   */
+  | { kind: 'edit'; what: string; paths: string[]; ask?: boolean; fresh?: string[]; expected?: string[] }
   /** Does something else: runs the game or code, or changes things outside the files it names. */
   | { kind: 'action'; what: string };
 
@@ -146,9 +160,20 @@ function pathsIn(args: Record<string, unknown>, keys: string[], godotDir: string
 /**
  * Sorts one engine tool call. tool is the server's own name (without any
  * prefix the app adds); godotDir is the project.godot folder; root the folder
- * the agent works in.
+ * the agent works in; unreal the Unreal project, for EngineWire's calls.
  */
-export function classifyEngineCall(kind: EngineBridgeKind, tool: string, rawInput: unknown, godotDir: string, root: string): EngineCall {
+export function classifyEngineCall(
+  kind: EngineBridgeKind,
+  tool: string,
+  rawInput: unknown,
+  godotDir: string,
+  root: string,
+  unreal?: { project: UnrealProject; exists: (repoPath: string) => boolean },
+): EngineCall {
+  if (kind === 'unreal') {
+    if (!unreal) return { kind: 'action', what: `Unreal ${tool}` };
+    return classifyUnrealCall(tool, rawInput, unreal.project, unreal.exists);
+  }
   const input = record(rawInput);
   if (kind === 'godot') {
     const what = `Godot ${tool}`;
@@ -325,7 +350,7 @@ export async function seedGodotCache(root: string, copy: string): Promise<boolea
 /** Tool names an API model sees for the engine's tools; unique and within providers' rules. */
 export function engineToolName(kind: EngineBridgeKind, tool: string): string {
   const clean = tool.replace(/[^a-zA-Z0-9_-]/g, '_');
-  const name = kind === 'godot' ? `godot_${clean}` : clean.startsWith('summer') ? clean : `summer_${clean}`;
+  const name = kind === 'godot' ? `godot_${clean}` : clean.startsWith(kind) ? clean : `${kind}_${clean}`;
   return name.slice(0, 64);
 }
 
@@ -399,5 +424,6 @@ export function claudeEngineTool(toolName: string): { kind: EngineBridgeKind | n
   if (server === 'engine') return { kind: null, tool };
   if (server.startsWith('summer')) return { kind: 'summer', tool };
   if (server.startsWith('godot')) return { kind: 'godot', tool };
+  if (server.startsWith('unreal')) return { kind: 'unreal', tool };
   return null;
 }

@@ -86,6 +86,7 @@ describe('SqliteStorage', () => {
       duplicates: [],
       unusedAssets: ['art/old.png'],
       unusedGameFiles: [],
+      epicLayout: [],
       unusedDependencies: [],
       folderNotes: [],
     });

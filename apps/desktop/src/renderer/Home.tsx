@@ -499,6 +499,41 @@ function Locks({ state, go, onCode }: { state: AppState; go: (target: NeedTarget
 
 /** The game engine at a glance: is the editor open, what agents get, and the one click that is missing. */
 function EnginePanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+  const { engine } = state;
+  if (engine.unreal && !engine.godotProject) return <UnrealPanel state={state} onSettings={onSettings} />;
+  return <GodotPanel state={state} onSettings={onSettings} />;
+}
+
+/** What agents get from the engine, for the Godot and Unreal panels. */
+function AgentsRow({ state }: { state: AppState }) {
+  const { engine, session } = state;
+  return (
+    <li>
+      <span className={`tone tone-${engine.active ? 'good' : 'idle'}`} />
+      <span className="grow">
+        {engine.active ? (
+          <>
+            Agents act in the engine through {BRIDGE_NAMES[engine.active]}
+            <span className="muted small"> · {engine.agents.length} of {session.agents.length} agents · {engine.activeWhy}</span>
+          </>
+        ) : (
+          <>
+            Agents have no engine tools<span className="muted small"> · {engine.activeWhy}</span>
+          </>
+        )}
+      </span>
+      {engine.node === false && engine.bridge !== 'off' && (
+        <button className="secondary small" onClick={() => window.open(NODE_URL)}>
+          Get Node.js
+        </button>
+      )}
+    </li>
+  );
+}
+
+const BRIDGE_NAMES = { godot: 'the Godot MCP server', summer: 'Summer Engine', unreal: 'EngineWire in the Unreal Editor' };
+
+function GodotPanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
   const { engine, session } = state;
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
@@ -538,26 +573,7 @@ function EnginePanel({ state, onSettings }: { state: AppState; onSettings: () =>
             </span>
           </li>
         )}
-        <li>
-          <span className={`tone tone-${engine.active ? 'good' : 'idle'}`} />
-          <span className="grow">
-            {engine.active ? (
-              <>
-                Agents act in the engine through {engine.active === 'summer' ? 'Summer Engine' : 'the Godot MCP server'}
-                <span className="muted small"> · {engine.agents.length} of {session.agents.length} agents · {engine.activeWhy}</span>
-              </>
-            ) : (
-              <>
-                Agents have no engine tools<span className="muted small"> · {engine.activeWhy}</span>
-              </>
-            )}
-          </span>
-          {engine.node === false && engine.bridge !== 'off' && (
-            <button className="secondary small" onClick={() => window.open(NODE_URL)}>
-              Get Node.js
-            </button>
-          )}
-        </li>
+        <AgentsRow state={state} />
         {(engine.plugin === 'missing' || engine.plugin === 'old') && (
           <li>
             <span className="tone tone-warn" />
@@ -579,6 +595,84 @@ function EnginePanel({ state, onSettings }: { state: AppState; onSettings: () =>
             <button className="secondary small" onClick={onSettings}>
               Choose
             </button>
+          </li>
+        )}
+      </ul>
+      {note && <p className={note.error ? 'error small' : 'muted small'}>{note.text}</p>}
+    </section>
+  );
+}
+
+/** Unreal (issue #11): the editor, EngineWire, the engine for the tests, and who holds the assets. */
+function UnrealPanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+  const { engine, session } = state;
+  const unreal = engine.unreal!;
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
+  const open = engine.editor?.kind === 'unreal' && engine.editor.projectOpen;
+  const youId = session.you?.id ?? null;
+  const assets = session.locks.filter((l) => /\.(uasset|umap)$/i.test(l.path) && l.holder.id !== youId);
+  const addPlugin = async () => {
+    setBusy(true);
+    setNote(null);
+    const result = await window.pct.installUnrealPlugin();
+    setBusy(false);
+    if (!result.ok) setNote({ error: true, text: result.error });
+    else
+      setNote({
+        error: false,
+        text: result.value.restart
+          ? 'Added. Close and reopen the project in the Unreal Editor; it asks to build EngineWire, say Yes.'
+          : 'Added. The next time you open the project, the Unreal Editor asks to build EngineWire: say Yes.',
+      });
+  };
+  return (
+    <section className="home-panel engine-panel">
+      <h2>
+        Game engine
+        <span className="muted">{open ? 'Unreal Editor open' : engine.editor?.kind === 'unreal' ? 'Unreal Editor running' : 'editor closed'}</span>
+        <button className="link small" onClick={onSettings}>
+          Settings
+        </button>
+      </h2>
+      <ul className="home-rows">
+        <li>
+          <span className={`tone tone-${open ? 'good' : 'idle'}`} />
+          <span className="grow">{describeEditor(engine)}</span>
+        </li>
+        {assets.length > 0 && (
+          <li>
+            <span className="tone tone-warn" />
+            <span className="grow">
+              {assets[0]!.holder.name} holds {assets[0]!.path}
+              {assets.length > 1 ? ` and ${assets.length - 1} more Unreal assets` : ''}
+              <span className="muted small"> · do not save those in the editor; they are binary and cannot be merged</span>
+            </span>
+          </li>
+        )}
+        <AgentsRow state={state} />
+        {unreal.plugin === 'missing' && (
+          <li>
+            <span className="tone tone-warn" />
+            <span className="grow">
+              Let agents work in the Unreal Editor
+              <span className="muted small">
+                {' '}
+                · adds EngineWire to Plugins/ on this PC (kept out of git){unreal.hasCode ? '' : '; your project needs one C++ class first (Tools → New C++ Class) so Unreal can build it'}
+              </span>
+            </span>
+            <button className="secondary small" disabled={busy} onClick={() => void addPlugin()}>
+              {busy ? 'Adding…' : 'Add EngineWire'}
+            </button>
+          </li>
+        )}
+        {!unreal.editorCmd && (
+          <li>
+            <span className="tone tone-idle" />
+            <span className="grow">
+              Unreal Engine {unreal.engineVersion ?? ''} not found on this PC
+              <span className="muted small"> · open the project in the Unreal Editor once, and the app takes the engine from there for the tests</span>
+            </span>
           </li>
         )}
       </ul>
