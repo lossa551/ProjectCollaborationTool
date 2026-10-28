@@ -20,6 +20,8 @@ export const RecordTestResultInput = z.object({
   evidence: z.string().min(1).max(4000),
 });
 
+export const ReadMemoryInput = z.object({ title: z.string().min(1).max(200) });
+
 const object = (properties: Record<string, unknown>, required: string[]) => ({
   type: 'object',
   properties,
@@ -35,12 +37,15 @@ export const AGENT_TOOLS: ToolSpec[] = [
   },
   {
     name: 'read_file',
-    description: 'Read a text file with line numbers. Use offset and limit for long files.',
+    description:
+      'Read a text file with line numbers, 400 lines at a time unless you give a limit. Read long files in parts with offset ' +
+      'and limit, starting with the part you need. Reading the same part again only says whether it changed (and shows the ' +
+      'changed lines), so there is no need to re-read a file to check it.',
     schema: object(
       {
         path: { type: 'string', description: 'Repo-relative path, forward slashes.' },
         offset: { type: 'integer', description: 'First line to read, from 1.' },
-        limit: { type: 'integer', description: 'How many lines to read (default 2000).' },
+        limit: { type: 'integer', description: 'How many lines to read (default 400).' },
       },
       ['path'],
     ),
@@ -83,6 +88,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
       },
       ['criterion_id', 'result', 'evidence'],
     ),
+  },
+  {
+    name: 'read_memory',
+    description:
+      'Read the full text of a project memory entry that your instructions list by title only (archived entries too). Give its title as listed.',
+    schema: object({ title: { type: 'string', description: 'The entry’s title, or part of it.' } }, ['title']),
   },
 ];
 

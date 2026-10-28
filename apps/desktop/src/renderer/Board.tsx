@@ -244,6 +244,11 @@ function TaskCard({
           </span>
         ))}
         <CriteriaSummary task={task} />
+        {task.duplicateCheck?.verdict === 'duplicate' && (
+          <span className="warning" title={`${task.duplicateCheck.by}: ${task.duplicateCheck.answer}`}>
+            May duplicate
+          </span>
+        )}
         {overlaps.length > 0 && (
           <span className="warning" title={overlaps.map((o) => o.path).join('\n')}>
             {overlaps.length} {overlaps.length === 1 ? 'overlap' : 'overlaps'}

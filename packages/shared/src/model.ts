@@ -88,6 +88,26 @@ export type Criterion = z.infer<typeof Criterion>;
 /** A spending limit in US dollars; the agent pauses and asks to go on when it is reached. */
 export const Budget = z.number().positive().max(1_000_000);
 
+/**
+ * The review-time question (issue #93): an agent read the change and the
+ * folder notes and said whether the change adds a system, helper or asset the
+ * notes say already exists.
+ */
+export const DuplicateVerdict = z.enum(['duplicate', 'clear', 'unsure']);
+export type DuplicateVerdict = z.infer<typeof DuplicateVerdict>;
+
+export const DuplicateCheck = z.object({
+  verdict: DuplicateVerdict,
+  /** The agent's answer: what it found, and where the existing one is. */
+  answer: z.string().max(2000),
+  /** The agent that answered. */
+  by: z.string().max(64),
+  at: z.number(),
+  /** How many changed files it looked at. */
+  files: z.number().int().min(0),
+});
+export type DuplicateCheck = z.infer<typeof DuplicateCheck>;
+
 export const Task = z.object({
   id: z.string(),
   title: TaskTitle,
@@ -105,6 +125,8 @@ export const Task = z.object({
   criteria: z.array(Criterion).max(CRITERIA_LIMIT).default([]),
   /** What all the task's agent chats together may spend; null for no limit. */
   budget: Budget.nullable().default(null),
+  /** The last review-time duplicate question about this task's change. */
+  duplicateCheck: DuplicateCheck.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
   /** Bumped on every change; lets offline edits detect conflicts later. */
@@ -451,10 +473,30 @@ export const ChatContext = z.object({
   items: z
     .array(z.object({ label: z.string().max(200), detail: z.string().max(500), tokens: z.number().int() }))
     .max(200),
-  /** Rough size of everything sent to the model, in tokens. */
+  /** Rough size of everything sent to the model, in tokens (what the provider counted for the last call, when known). */
   tokens: z.number().int(),
+  /** Past this many tokens the chat suggests continuing in a new chat; null when the agent keeps its own context (CLI agents). */
+  warnAt: z.number().int().positive().nullable().default(null),
+  /** Old tool results and inputs shortened so far to keep the context small. */
+  trimmed: z.number().int().min(0).default(0),
+  /** Repeated file reads answered with "unchanged" or only the changed lines (our own loop, issue #91). */
+  readsSaved: z.number().int().min(0).default(0),
+  /** Reads of a file part the agent had read before in the chat (CLI agents: counted, not changed). */
+  readsRepeated: z.number().int().min(0).default(0),
 });
 export type ChatContext = z.infer<typeof ChatContext>;
+
+/**
+ * Context size at which an API agent's chat suggests "Continue in a new chat"
+ * (issue #88). Past it every step re-sends a lot, and some models charge more
+ * per token for long prompts (Haiku 5.5 doubles past 100k).
+ */
+export const CONTEXT_WARN_TOKENS = 100_000;
+
+/** Whether a chat's context has grown past the point where a fresh chat is cheaper. */
+export function contextIsLarge(context: ChatContext | null | undefined): boolean {
+  return !!context?.warnAt && context.tokens >= context.warnAt;
+}
 
 export const ChatAgentState = z.enum(['idle', 'working', 'waiting']);
 export type ChatAgentState = z.infer<typeof ChatAgentState>;

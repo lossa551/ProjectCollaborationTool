@@ -3,6 +3,8 @@ export { checkCommand, checkEdit, scopesFor, type Decision, type EditDecision, t
 export { ProjectFiles } from './files.js';
 export { AGENT_TOOLS } from './tools.js';
 export { describeContext, systemPrompt, type ContextInput } from './context.js';
+export { KEEP_TOOL_STEPS, TRIM_BATCH, resultShown, summarizeResult, trimHistory } from './trim.js';
+export { ReadMemo, changedRegion, DIFF_CONTEXT } from './reads.js';
 export { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent } from './cli.js';
 export { AnthropicAdapter } from './models/anthropic.js';
 export { OpenAICompatibleAdapter } from './models/openai.js';

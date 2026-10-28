@@ -8,13 +8,16 @@ import {
   SETUP_CONFIG_PATH,
   WORKSPACE_FILE_LIMIT,
   AGENT_ERROR_PREFIX,
+  CONTEXT_WARN_TOKENS,
+  MEMORY_KIND_SINGULAR,
+  findMemory,
   approvalActivity,
   describeLayoutProblems,
   epicLayoutProblems,
   parseSetupConfig,
   unrealLayout,
   budgetsFor,
-  commitDraftUsageId,
+  draftUsageId,
   formatCost,
   priceFor,
   tokenCost,
@@ -41,9 +44,12 @@ import {
   type UsageSource,
   type UndoMode,
   type SetupConfig,
+  type DraftKind,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
-import { describeContext, systemPrompt, type ContextInput } from './context.js';
+import { contextUpdate, describeContext, freezePrompt, systemPrompt, type ContextInput } from './context.js';
+import { resultShown, trimHistory } from './trim.js';
+import { ReadMemo } from './reads.js';
 import {
   ENGINE_BRIDGES,
   LIVE_EDITOR_BRIDGES,
@@ -77,6 +83,7 @@ import {
   EditFileInput,
   ListFilesInput,
   ReadFileInput,
+  ReadMemoryInput,
   runTestsTool,
   RecordTestResultInput,
   RunCommandInput,
@@ -162,6 +169,11 @@ interface ChatRun {
   handled: Set<string>;
   history: LoopMessage[] | null;
   filesRead: Set<string>;
+  /** What read_file returned per file, so a second read of the same part is answered briefly (issue #91). */
+  reads: ReadMemo;
+  /** Reads a CLI agent made of a file part it had read before in this chat; the app can only count them. */
+  cliReads: Set<string>;
+  readsRepeated: number;
   busy: boolean;
   again: boolean;
   abort: AbortController | null;
@@ -196,6 +208,12 @@ interface ChatRun {
   engine: ChatEngine | null;
   /** Said in the chat that the engine could not be reached, so it is not said every turn. */
   engineProblem: string | null;
+  /** Prompt tokens the provider counted for the last model call; null before the first one. */
+  promptTokens: number | null;
+  /** Old tool results and inputs shortened so far (see trimHistory). */
+  trimmed: number;
+  /** Said in the chat that its context is large, so it is said once. */
+  contextWarned: boolean;
 }
 
 /** A Godot (or Summer Engine) or Unreal project, as one chat sees it. */
@@ -223,6 +241,13 @@ const GODOT_NO_PROJECT = new Set(['get_debug_output', 'stop_project', 'get_godot
 /** How tool lines name each engine. */
 const BRIDGE_SHORT: Record<EngineServer['kind'], string> = { godot: 'Godot', summer: 'Summer', unreal: 'Unreal' };
 
+/** What the agent is told it writes in a draft. */
+const DRAFT_PURPOSES: Record<DraftKind, string> = {
+  commit: 'git commit messages',
+  notes: 'short folder notes (AGENTS.md) that tell other agents what a folder is for',
+  review: 'a short review answer about a change',
+};
+
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
 /** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
@@ -239,6 +264,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   edit_file: 'Editing',
   run_command: 'Running',
   record_test_result: 'Recording a test result:',
+  read_memory: 'Reading project memory:',
   run_tests: 'Running the tests',
 };
 
@@ -250,6 +276,7 @@ const TOOL_LABEL: Record<string, string> = {
   edit_file: 'Edit',
   run_command: 'Run',
   record_test_result: 'Test result',
+  read_memory: 'Project memory',
   run_tests: 'Tests',
 };
 
@@ -301,15 +328,16 @@ export class AgentRunner {
 
   /**
    * Answers one prompt outside any chat, with no tools: used to draft a
-   * commit message. What the call uses counts for this agent and the task.
+   * commit message or a folder note. What the call uses counts for this
+   * agent (and the task), under the id of its kind of draft.
    */
-  async draft(prompt: string, taskId: string | null, signal: AbortSignal, purpose = 'git commit messages'): Promise<string> {
+  async draft(prompt: string, taskId: string | null, signal: AbortSignal, kind: DraftKind = 'commit'): Promise<string> {
     const agent = this.profile();
     if (!agent) throw new Error('This agent no longer exists.');
-    // Every draft (commit messages, folder notes) counts as the agent's own usage.
-    const usageId = commitDraftUsageId(agent.id);
-    const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null) =>
-      this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId });
+    const usageId = draftUsageId(kind, agent.id);
+    const purpose = DRAFT_PURPOSES[kind];
+    const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null, single = false) =>
+      this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId, single });
     const connection = agent.connection;
     if (connection.type === 'api') {
       const factory = this.options.createModel;
@@ -321,7 +349,7 @@ export class AgentRunner {
         signal,
         onText: () => {},
       });
-      if (turn.usage) record(turn.model ?? connection.model, connection.provider === 'ollama' ? 'free' : 'priced', turn.usage, null);
+      if (turn.usage) record(turn.model ?? connection.model, connection.provider === 'ollama' ? 'free' : 'priced', turn.usage, null, true);
       if (turn.stop === 'refusal') throw new Error('The model declined to write a message.');
       return turn.text;
     }
@@ -356,7 +384,7 @@ export class AgentRunner {
       args.push('-');
       result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env }, prompt, signal, parse: parseCodexLine, onEvent });
     }
-    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null);
+    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null, true);
     if (signal.aborted) throw new Error('stopped');
     if (failure || (result.exitCode !== 0 && result.exitCode !== null)) {
       const detail = failure ?? (result.stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${result.exitCode}`);
@@ -385,6 +413,9 @@ export class AgentRunner {
         handled: new Set(),
         history: null,
         filesRead: new Set(),
+        reads: new ReadMemo(),
+        cliReads: new Set(),
+        readsRepeated: 0,
         busy: false,
         again: false,
         abort: null,
@@ -404,6 +435,9 @@ export class AgentRunner {
         stopNotice: null,
         engine: null,
         engineProblem: null,
+        promptTokens: null,
+        trimmed: 0,
+        contextWarned: false,
       };
       this.runs.set(chatId, run);
     }
@@ -992,7 +1026,15 @@ export class AgentRunner {
     const task = this.client.getState().tasks.find((t) => t.id === chat.taskId) ?? null;
     const context = describeContext(
       this.contextInput(agent, chat, task),
-      { filesRead: [...run.filesRead], conversation: JSON.stringify(run.history ?? []) },
+      {
+        filesRead: [...run.filesRead],
+        conversation: JSON.stringify(run.history ?? []),
+        measured: run.promptTokens,
+        trimmed: run.trimmed,
+        readsSaved: run.reads.saved,
+        readsRepeated: run.readsRepeated,
+        warnAt: agent.connection.type === 'api' ? CONTEXT_WARN_TOKENS : null,
+      },
     );
     this.client.setChatAgentState(chatId, state, context, activity);
   }
@@ -1029,6 +1071,8 @@ export class AgentRunner {
       task,
       startedBy: this.options.startedBy,
       memory: this.client.getState().memory,
+      taskChatIds: chat.taskId ? this.client.getState().chats.filter((c) => c.taskId === chat.taskId && c.id !== chat.id).map((c) => c.id) : [],
+      readsMemory: agent.connection.type === 'api',
       folderNotes: this.runs.get(chat.id)?.folderNotes ?? [],
       worktree: this.runs.get(chat.id)?.worktree ?? null,
       recordsResults: agent.connection.type === 'api',
@@ -1048,8 +1092,9 @@ export class AgentRunner {
     };
   }
 
-  private recordUsage(chatId: string, model: string, source: UsageSource, usage: TokenUsage, cost: number | null) {
-    this.client.recordUsage({ chatId, model, source, ...usage, cost, day: usageDay(Date.now()) });
+  /** `single`: the usage is one model call's, not a CLI run's totals. */
+  private recordUsage(chatId: string, model: string, source: UsageSource, usage: TokenUsage, cost: number | null, single = false) {
+    this.client.recordUsage({ chatId, model, source, ...usage, cost, day: usageDay(Date.now()), single });
   }
 
   /** What the CLI run going on now has used, by the price table, before the tool reports it. */
@@ -1338,6 +1383,12 @@ export class AgentRunner {
     const maxSteps = this.options.maxSteps ?? 40;
     const connection = agent.connection;
     const source: UsageSource = connection.type === 'api' && connection.provider === 'ollama' ? 'free' : 'priced';
+    const taskOf = (c: ChatInfo) => this.client.getState().tasks.find((t) => t.id === c.taskId) ?? null;
+    // The system prompt and tools stay as they were when the turn began, so the provider's cached prefix holds;
+    // a change meanwhile (a criterion recorded, memory edited) goes to the agent as a note after the next tool results.
+    const first = this.chat(chat.id) ?? chat;
+    const frozen = freezePrompt(this.contextInput(agent, first, taskOf(first)));
+    const tools = this.toolsFor(run);
     for (let step = 0; step < maxSteps; step++) {
       if (!(await this.withinBudget(chat, run, signal))) {
         if (signal.aborted) throw new Error('stopped');
@@ -1345,17 +1396,27 @@ export class AgentRunner {
         return;
       }
       const current = this.chat(chat.id) ?? chat;
-      const task = this.client.getState().tasks.find((t) => t.id === current.taskId) ?? null;
+      const last = history.at(-1);
+      if (last?.role === 'tool') {
+        const note = contextUpdate(frozen, this.contextInput(agent, current, taskOf(current)));
+        if (note) history[history.length - 1] = { ...last, note: last.note ? `${last.note}\n\n${note}` : note };
+      }
+      // Old tool results go once enough have piled up, in place, so the cached start of the history stays put between batches.
+      run.trimmed += trimHistory(history);
       const writer = this.textWriter(chat.id);
       const turn = await model.complete({
-        system: systemPrompt(this.contextInput(agent, current, task)),
+        system: frozen.text,
         messages: history,
-        tools: this.toolsFor(run),
+        tools,
         signal,
         onText: writer.append,
       });
       writer.finish(turn.text);
-      if (turn.usage) this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null);
+      if (turn.usage) {
+        this.recordUsage(chat.id, turn.model ?? (connection.type === 'api' ? connection.model : agent.name), source, turn.usage, null, true);
+        run.promptTokens = turn.usage.input + turn.usage.cacheRead + turn.usage.cacheWrite;
+        this.warnIfContextLarge(chat.id, run);
+      }
       if (turn.stop === 'refusal') {
         history.push({ role: 'assistant', text: turn.text, toolCalls: [] });
         this.notice(chat.id, 'The model declined to continue with this request.');
@@ -1370,9 +1431,11 @@ export class AgentRunner {
       history.push({ role: 'assistant', text: turn.text, toolCalls: turn.toolCalls, raw: turn.raw });
       if (turn.toolCalls.length === 0) return;
       const results: ToolResult[] = [];
+      // A tool result the model still has whole: in this step's results, or in the history and not cleared.
+      const visible = (id: string) => results.some((r) => r.id === id && !r.isError) || resultShown(history, id);
       for (const call of turn.toolCalls) {
         if (signal.aborted) results.push({ id: call.id, content: 'Stopped by a person.', isError: true });
-        else results.push(await this.executeTool(current, agent, run, call, signal));
+        else results.push(await this.executeTool(current, agent, run, call, signal, visible));
       }
       history.push({ role: 'tool', results });
       this.setState(chat.id, 'working', 'Thinking');
@@ -1381,7 +1444,26 @@ export class AgentRunner {
     this.notice(chat.id, `Paused after ${maxSteps} steps. Send a message to let it continue.`);
   }
 
-  private async executeTool(chat: ChatInfo, agent: AgentProfile, run: ChatRun, call: ToolCall, signal: AbortSignal): Promise<ToolResult> {
+  /** Once per chat: says the context has grown large and that a new chat would be cheaper. */
+  private warnIfContextLarge(chatId: string, run: ChatRun) {
+    if (run.contextWarned || (run.promptTokens ?? 0) < CONTEXT_WARN_TOKENS) return;
+    run.contextWarned = true;
+    this.notice(
+      chatId,
+      `This chat's context is now about ${Math.round(run.promptTokens! / 1000)}k tokens, so every step re-sends a lot. ` +
+        'Old tool results are being shortened, but for the rest of a long task it is cheaper to continue in a new chat: ' +
+        'use "Continue in a new chat" to carry the plan, decisions, acceptance criteria and paths over to a fresh one.',
+    );
+  }
+
+  private async executeTool(
+    chat: ChatInfo,
+    agent: AgentProfile,
+    run: ChatRun,
+    call: ToolCall,
+    signal: AbortSignal,
+    visible: (id: string) => boolean,
+  ): Promise<ToolResult> {
     const id = randomUUID();
     const files = this.filesOf(chat.id);
     const engineLabel = this.bridge?.serverName(call.name) ? BRIDGE_SHORT[this.bridge.server.kind] : null;
@@ -1413,8 +1495,12 @@ export class AgentRunner {
       case 'read_file': {
         const input = parseInput(ReadFileInput, call.input);
         if (!input.ok) return error(input.error);
-        run.filesRead.add(input.value.path);
-        return attempt(input.value.path, () => files.read(input.value.path, input.value.offset, input.value.limit));
+        const { path, offset, limit } = input.value;
+        run.filesRead.add(path);
+        return attempt(path, async () => {
+          const file = await files.readText(path);
+          return 'text' in file ? run.reads.read(file.rel, file.text, call.id, visible, offset, limit) : file.message;
+        });
       }
       case 'list_files': {
         const input = parseInput(ListFilesInput, call.input);
@@ -1462,6 +1548,18 @@ export class AgentRunner {
         this.client.verifyCriterion(task.id, criterion.id, input.value.result, input.value.evidence);
         return ok(`Recorded "${criterion.text}" as ${input.value.result}.`);
       }
+      case 'read_memory': {
+        const input = parseInput(ReadMemoryInput, call.input);
+        if (!input.ok) return error(input.error);
+        const found = findMemory(this.client.getState().memory, input.value.title);
+        if (!found.length) return error(`No project memory entry is called "${input.value.title}".`);
+        show(found.map((e) => e.title).join(', '), 'done');
+        return ok(
+          found
+            .map((e) => `${MEMORY_KIND_SINGULAR[e.kind]}${e.archived ? ' (archived)' : ''}: ${e.title}\n${e.body.trim() || '(no details)'}`)
+            .join('\n\n'),
+        );
+      }
       case 'run_tests': {
         const input = parseInput(RunTestsInput, call.input);
         if (!input.ok) return error(input.error);
@@ -1500,7 +1598,9 @@ export class AgentRunner {
   private toolsFor(run: ChatRun): ToolSpec[] {
     const engine = run.engine;
     if (!engine) return AGENT_TOOLS;
-    return [...AGENT_TOOLS, ...(engine.testCommand ? [runTestsTool(engine.unreal ? 'unreal' : 'godot')] : []), ...engine.tools];
+    // By name, so the list (which comes before the system prompt in the cache) does not change with the server's order.
+    const fromServer = [...engine.tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return [...AGENT_TOOLS, ...(engine.testCommand ? [runTestsTool(engine.unreal ? 'unreal' : 'godot')] : []), ...fromServer];
   }
 
   /** The engine server for these settings, started again when they changed. */
@@ -1827,7 +1927,7 @@ export class AgentRunner {
     }
     // A run stopped before the tool reported its usage still counts what it used so far.
     if (!reported) {
-      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null);
+      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null, true);
     }
     run.live.clear();
     // Open tool lines of a stopped or failed run stay readable.
@@ -1900,7 +2000,12 @@ export class AgentRunner {
       case 'Read':
       case 'NotebookRead': {
         const rel = this.filesOf(chat.id).toRelative(String(input.file_path ?? input.notebook_path ?? ''));
-        if (rel) run.filesRead.add(rel);
+        if (rel) {
+          run.filesRead.add(rel);
+          const part = `${rel.toLowerCase()}:${String(input.offset ?? '')}:${String(input.limit ?? '')}`;
+          if (run.cliReads.has(part)) run.readsRepeated++;
+          else run.cliReads.add(part);
+        }
         return { allow: true, reason: 'Reading is allowed' };
       }
       case 'Glob':

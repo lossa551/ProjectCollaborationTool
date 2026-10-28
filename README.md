@@ -28,7 +28,8 @@ and agent chat. Design notes live in [docs/design](docs/design).
 - **Same rules as people**: every edit and command is checked against locks, allowed paths and approval rules, and agents lock files themselves.
 - **Own copy of the project** for each agent chat (a git worktree), so agents never touch your folder or each other's work.
 - **Hand-offs** turn a chat into a task or pass it to another agent with the plan, decisions, paths and acceptance criteria.
-- **Cost and budgets**: token and cost tracking per agent, chat and task, with budgets that ask before going further.
+- **Cost and budgets**: token and cost tracking per agent, chat and task, with budgets that ask before going further. Each chat shows per day how much of its input was uncached, read from the prompt cache or written to it, with a hint when the cache keeps breaking. Prices can have a long-prompt tier (Haiku 5.5 past 100k tokens), applied per model call.
+- **Small contexts**: long agent chats shorten old tool results on their own, show how big the context is, and past 100k tokens offer to **continue in a new chat** that gets a handoff and the chat's files instead of the whole conversation. An agent's instructions stay fixed for a whole turn, so the provider's prompt cache keeps working; a task, memory or note change made meanwhile reaches the agent as a short update after its next tool results. Agents read files 400 lines at a time; reading the same part again only says it is unchanged, or shows just the lines that changed since, and the context panel counts the reads saved.
 
 ### Review and undo
 - **Review an agent's changes**: see the diff, merge it into your branch, push and open a pull request, or discard it.
@@ -39,9 +40,10 @@ and agent chat. Design notes live in [docs/design](docs/design).
 - **Planning space** for notes, feature ideas, requirements, dependencies and tasks, tracked from plan to done.
 - **Roadmap** with milestones (Now, Next, Later or your own), dates and risk warnings.
 - **Acceptance criteria and test results** on each task, so you can see what is ready, blocked or still unverified.
-- **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents.
-- **Folder notes** that an agent drafts and keeps up to date for you to review.
-- **Bloat check** that lists duplicate files, unused assets, unneeded dependencies and large files.
+- **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents. Agents get it within a 4k-token budget (conventions and decisions first, entries about their task before the rest); entries past it go by title and are read on demand. The Memory page shows what every agent call carries, and finished plans or fixed issues can be **archived**: kept in the record, no longer sent.
+- **Folder notes** that an agent drafts and keeps up to date for you to review. The notes agent (setup, or Settings, Agents) starts on the cheapest agent you have, shows what its notes cost today and this week, and warns when it is an expensive model. Each agent's cost lists its folder notes and commit message drafts apart.
+- **Bloat check** that lists duplicate files, copied-and-tweaked code (with the share in common), unused assets, unused Godot add-ons and Unreal plugins, unneeded dependencies and large files. It runs by itself when main or beta gets new commits in your folder and once a day, marks what is new since the scan before, and lists Git LFS files that are not pulled instead of skipping them silently.
+- **Duplicate question at review**: when a task moves to review, its reviewing agent reads the change and the folder notes and says whether it adds a system, helper or asset that already exists; the answer shows on the task (and as "May duplicate" on its card).
 
 ### GitHub
 - **Status on the cards**: branches, pull requests, checks, reviews and merge conflicts.

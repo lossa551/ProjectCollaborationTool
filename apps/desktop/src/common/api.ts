@@ -140,6 +140,8 @@ export interface AppState {
   noteDrafts: NoteDraft[];
   /** The agent that keeps folder notes up to date in this session; null when off. */
   notesAgent: string | null;
+  /** Tasks whose review-time duplicate question an agent on this PC is answering now. */
+  duplicateChecks: string[];
   /** The game engine on this PC. */
   engine: EngineState;
 }
@@ -261,6 +263,11 @@ export interface HandoffRequest {
   /** Title of the new chat; made from the task or the sender otherwise. */
   title?: string;
   handoff: Omit<Handoff, 'fromChatId' | 'fromName'>;
+  /**
+   * Continue fromChatId in a new chat (issue #88): the new chat also starts
+   * from that chat's files, so its agent picks up where the work is.
+   */
+  continue?: boolean;
 }
 
 export type ResultWith<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -467,6 +474,12 @@ export interface PctApi {
   verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void;
   /** Scans your project folder for bloat and shares the result with the session. */
   runBloatCheck(): Promise<Result>;
+  /**
+   * Asks an agent whether the task's change adds something the folder notes
+   * say already exists; the answer goes on the task as a review flag. Without
+   * an agent, the task's reviewing agent (or the notes agent) answers.
+   */
+  askDuplicateCheck(taskId: string, agentId: string | null): Promise<Result>;
   /** Scans your project folder for the Folder notes tab (cached until something in it changes, unless fresh). */
   scanFolderNotes(fresh: boolean): Promise<ResultWith<FolderNotesReport>>;
   /** Makes a task scoped to one folder's AGENTS.md: update it, or write the first one. */
@@ -571,6 +584,7 @@ export const Channel = {
   editMemory: 'pct:edit-memory',
   verifyCriterion: 'pct:verify-criterion',
   runBloatCheck: 'pct:run-bloat-check',
+  askDuplicateCheck: 'pct:ask-duplicate-check',
   scanFolderNotes: 'pct:scan-folder-notes',
   folderNoteTask: 'pct:folder-note-task',
   folderNotePaths: 'pct:folder-note-paths',

@@ -6,9 +6,11 @@ import {
   TaskStage,
   budgetsFor,
   checkpointAt,
+  contextIsLarge,
   describeConnection,
   totalUsage,
   type AgentProfile,
+  type ChatContext,
   type ChatInfo,
   type ChatMessage,
   type Task,
@@ -16,7 +18,7 @@ import {
 import type { AppState, WorktreeAction } from '../common/api';
 import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
-import { BudgetField, BudgetMeter, CostLine } from './Cost';
+import { BudgetField, BudgetMeter, CacheSection, CostLine } from './Cost';
 import { ask } from './Dialog';
 import { FirstCommitPrompt } from './FirstCommit';
 
@@ -25,6 +27,11 @@ import { FirstCommitPrompt } from './FirstCommit';
 // commands that need a person show up as approval cards anyone can decide.
 
 const STATE_LABEL = { idle: null, working: 'Working…', waiting: 'Waiting' } as const;
+
+/** What "Ask to sum up" posts, so the new chat's handoff can start from the agent's own summary. */
+const SUM_UP_REQUEST =
+  'Sum up this chat for a new chat that will carry on the work: the plan, the decisions made, what is done, what is left, ' +
+  'and the files to read first. Answer with the summary only, and do not use any tools.';
 
 const time = (at: number) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -200,6 +207,7 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
   const online = session.status === 'connected';
   const [text, setText] = useState('');
   const [branchFrom, setBranchFrom] = useState<ChatMessage | null>(null);
+  const [continuing, setContinuing] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const end = useRef<HTMLDivElement>(null);
   const parent = chat.branchedFrom ? session.chats.find((c) => c.id === chat.branchedFrom!.chatId) : undefined;
@@ -304,7 +312,39 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
           {agent.name} is not running. Start it in Settings, Agents; it answers what was posted here once it is up.
         </p>
       )}
-      {branchFrom ? (
+      {contextIsLarge(chat.context) && !continuing && (
+        <div className="banner small context-warning">
+          <span className="grow">
+            The context is about {formatTokens(chat.context!.tokens)} tokens, so every step re-sends a lot. A new chat on the same work
+            starts small: it gets a handoff and the files, not the conversation.
+          </span>
+          <button
+            className="secondary"
+            disabled={!online || !runner || chat.state !== 'idle'}
+            title={`Ask ${agent?.name ?? 'the agent'} for a summary to start the handoff from`}
+            onClick={() => window.pct.postChat(chat.id, SUM_UP_REQUEST)}
+          >
+            Ask to sum up
+          </button>
+          <button disabled={!online || chat.state !== 'idle'} onClick={() => setContinuing(true)}>
+            Continue in a new chat
+          </button>
+        </div>
+      )}
+      {continuing ? (
+        <div className="continue-panel">
+          <HandoffForm
+            state={state}
+            chat={chat}
+            task={session.tasks.find((t) => t.id === chat.taskId) ?? null}
+            continuing
+            onDone={(next) => {
+              setContinuing(false);
+              if (next) onSelect(next);
+            }}
+          />
+        </div>
+      ) : branchFrom ? (
         <BranchForm
           state={state}
           chat={chat}
@@ -750,7 +790,7 @@ export function ChatSidePanel({
 }) {
   const { session } = state;
   const task = session.tasks.find((t) => t.id === chat.taskId) ?? null;
-  const [handingOff, setHandingOff] = useState(false);
+  const [handingOff, setHandingOff] = useState<'handoff' | 'continue' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const online = session.status === 'connected';
   const context = chat.context;
@@ -767,8 +807,9 @@ export function ChatSidePanel({
           state={state}
           chat={chat}
           task={task}
+          continuing={handingOff === 'continue'}
           onDone={(next) => {
-            setHandingOff(false);
+            setHandingOff(null);
             if (next) onSelect(next);
           }}
         />
@@ -789,7 +830,8 @@ export function ChatSidePanel({
                     </li>
                   ))}
                 </ul>
-                <p className="small">About {formatTokens(context.tokens)} tokens in context.</p>
+                <ContextSize context={context} />
+                <RepeatedReads context={context} />
               </>
             ) : (
               <p className="muted small">Shown once the agent has started on this chat.</p>
@@ -797,6 +839,7 @@ export function ChatSidePanel({
           </section>
           <HeldLocks state={state} chat={chat} />
           <BudgetSection state={state} chat={chat} task={task} />
+          <CacheSection rows={session.usage.filter((r) => r.chatId === chat.id)} prices={session.prices} />
           <section>
             <h2>Task</h2>
             <select value={chat.taskId ?? ''} disabled={!online} onChange={(e) => window.pct.updateChat(chat.id, { taskId: e.target.value || null })}>
@@ -842,10 +885,18 @@ export function ChatSidePanel({
             </section>
           )}
           <section>
-            <button disabled={!online || session.agents.length === 0} onClick={() => setHandingOff(true)}>
+            <button disabled={!online || session.agents.length === 0} onClick={() => setHandingOff('handoff')}>
               Hand off to another agent
             </button>
             <p className="muted small">The next agent gets the plan, decisions, paths and acceptance criteria.</p>
+            <button
+              className="secondary"
+              disabled={!online || chat.state !== 'idle' || !session.messages[chat.id]?.length}
+              onClick={() => setHandingOff('continue')}
+            >
+              Continue in a new chat
+            </button>
+            <p className="muted small">Same work with a fresh, small context: a handoff and this chat's files, without the conversation.</p>
           </section>
           <SaveToMemory state={state} chat={chat} />
           {error && <p className="error small">{error}</p>}
@@ -941,6 +992,42 @@ function SaveToMemory({ state, chat }: { state: AppState; chat: ChatInfo }) {
   );
 }
 
+/** How big the context is, and how close to where a new chat is suggested. */
+function ContextSize({ context }: { context: ChatContext }) {
+  if (!context.warnAt) return <p className="small">About {formatTokens(context.tokens)} tokens in context.</p>;
+  const share = Math.min(1, context.tokens / context.warnAt);
+  const large = contextIsLarge(context);
+  return (
+    <div className="context-size small">
+      <span className={large ? 'budget-meter over' : share >= 0.8 ? 'budget-meter near' : 'budget-meter'}>
+        <span className="budget-track">
+          <span className="budget-fill" style={{ width: `${Math.round(share * 100)}%` }} />
+        </span>
+        <span className="small">
+          About {formatTokens(context.tokens)} of {formatTokens(context.warnAt)} tokens
+        </span>
+      </span>
+      <p className="small muted">{large ? 'Large: continuing in a new chat is cheaper from here.' : 'A new chat is suggested past this size.'}</p>
+    </div>
+  );
+}
+
+/** Repeated file reads: answered briefly by our own loop, or only counted for CLI agents (issue #91). */
+function RepeatedReads({ context }: { context: ChatContext }) {
+  const parts: string[] = [];
+  if (context.readsSaved > 0) parts.push(`${context.readsSaved} ${context.readsSaved === 1 ? 'read' : 'reads'} saved`);
+  if (context.readsRepeated > 0) parts.push(`${context.readsRepeated} ${context.readsRepeated === 1 ? 'file part' : 'file parts'} read again`);
+  if (parts.length === 0) return null;
+  const title = context.readsSaved > 0
+    ? 'Files the agent read again were answered with "unchanged" or only the changed lines, instead of a second copy.'
+    : 'This agent read the same part of a file more than once; each copy stays in its context.';
+  return (
+    <p className="small muted" title={title}>
+      {parts.join(' · ')}
+    </p>
+  );
+}
+
 function formatTokens(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n);
 }
@@ -951,11 +1038,14 @@ function HandoffForm({
   state,
   chat,
   task,
+  continuing = false,
   onDone,
 }: {
   state: AppState;
   chat: ChatInfo;
   task: Task | null;
+  /** Continue this chat in a new one (same agent and stage, its files too) instead of handing off (issue #88). */
+  continuing?: boolean;
   /** With the new chat's id after a handoff. */
   onDone: (chatId?: string) => void;
 }) {
@@ -964,16 +1054,24 @@ function HandoffForm({
   // Prefilled once, from the agent's last answer when the form opened.
   const [lastAgentText] = useState(() => [...messages].reverse().find((m) => m.author.kind === 'agent' && m.kind === 'text')?.text ?? '');
   const others = session.agents.filter((a) => a.id !== chat.agentId);
-  const [agentId, setAgentId] = useState(others[0]?.id ?? session.agents[0]?.id ?? '');
-  const [stage, setStage] = useState<TaskStage | ''>(task ? (NEXT_STAGE[task.stage] ?? task.stage) : '');
-  const [plan, setPlan] = useState(chat.handoff?.plan || lastAgentText);
+  const [agentId, setAgentId] = useState(
+    continuing && session.agents.some((a) => a.id === chat.agentId) ? chat.agentId : (others[0]?.id ?? session.agents[0]?.id ?? ''),
+  );
+  const [stage, setStage] = useState<TaskStage | ''>(task ? (continuing ? task.stage : (NEXT_STAGE[task.stage] ?? task.stage)) : '');
+  // Continuing: the agent's last answer is usually the summary someone just asked it for.
+  const [plan, setPlan] = useState(continuing ? lastAgentText || chat.handoff?.plan || '' : chat.handoff?.plan || lastAgentText);
   const [decisions, setDecisions] = useState(chat.handoff?.decisions.join('\n') ?? '');
   const [criteria, setCriteria] = useState(
     (task?.criteria.length ? task.criteria.map((c) => c.text) : (chat.handoff?.criteria ?? [])).join('\n'),
   );
   const [scope, setScope] = useState((task?.scope.length ? task.scope : (chat.handoff?.scope ?? [])).join('\n'));
-  const [readFirst, setReadFirst] = useState((task?.readFirst.length ? task.readFirst : (chat.handoff?.readFirst ?? [])).join('\n'));
-  const [notes, setNotes] = useState('');
+  const [readFirst, setReadFirst] = useState(() => {
+    const listed = task?.readFirst.length ? task.readFirst : (chat.handoff?.readFirst ?? []);
+    // Continuing: the files the chat changed so far are where the work is.
+    const changed = continuing ? (chat.worktree?.files ?? []).filter((f) => f.change !== 'deleted').map((f) => f.path) : [];
+    return [...new Set([...listed, ...changed])].slice(0, 30).join('\n');
+  });
+  const [notes, setNotes] = useState(continuing ? `Continues the chat "${chat.title}", which had grown large.${chat.worktree ? ' Its files are in your copy.' : ''}` : '');
   const [error, setError] = useState<string | null>(null);
   const split = (text: string) =>
     text
@@ -996,6 +1094,7 @@ function HandoffForm({
         readFirst: split(readFirst),
         notes: notes.trim(),
       },
+      continue: continuing,
     });
     if (!result.ok) setError(result.error);
     else onDone(result.value);
@@ -1004,7 +1103,12 @@ function HandoffForm({
   return (
     <form className="handoff-form" onSubmit={(e) => void submit(e)}>
       <header>
-        <h2>Hand off</h2>
+        <h2>{continuing ? 'Continue in a new chat' : 'Hand off'}</h2>
+        {continuing && (
+          <p className="muted small">
+            The new chat gets this handoff and this chat's files as they are now, but not the conversation. This chat stays as it is.
+          </p>
+        )}
       </header>
       <label className="field">
         <span>To</span>
@@ -1018,7 +1122,7 @@ function HandoffForm({
       </label>
       {task && (
         <label className="field">
-          <span>Move "{task.title}" to</span>
+          <span>{continuing ? `Stage of "${task.title}"` : `Move "${task.title}" to`}</span>
           <select value={stage} onChange={(e) => setStage(e.target.value as TaskStage)}>
             {TaskStage.options.map((s) => (
               <option key={s} value={s}>
@@ -1055,7 +1159,7 @@ function HandoffForm({
       {error && <p className="error small">{error}</p>}
       <div className="row">
         <button type="submit" disabled={!agentId}>
-          Hand off
+          {continuing ? 'Start the new chat' : 'Hand off'}
         </button>
         <button type="button" className="secondary" onClick={() => onDone()}>
           Cancel

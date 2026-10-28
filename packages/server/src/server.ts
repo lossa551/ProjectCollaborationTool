@@ -8,9 +8,10 @@ import {
   DEFAULT_PRICES,
   PROTOCOL_VERSION,
   addUsage,
+  withDefaultTiers,
   formatCost,
   usageKey,
-  commitDraftUsageId,
+  isOwnDraft,
   SOCKET_PATH,
   decodeBytes,
   encodeBytes,
@@ -138,7 +139,9 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   const docs = new SharedDocs(await storage.loadDocs(), (docId, state) => persist('shared document', storage.saveDoc(docId, state)));
   let bloat = await storage.loadBloat();
   const usage = new Map((await storage.listUsage()).map((row) => [usageKey(row), row] as const));
-  let prices = (await storage.loadPrices()) ?? DEFAULT_PRICES;
+  // Tables saved before long-prompt prices existed (#92) get the default ones.
+  const saved = await storage.loadPrices();
+  let prices = saved ? withDefaultTiers(saved) : DEFAULT_PRICES;
   /** Each participant's local checkout, while they are connected. */
   const workspaces = new Map<string, Workspace>();
 
@@ -390,7 +393,15 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           for (const text of result.descriptions) record(participant, text, result.task.id);
           break;
         }
-        case 'doc.sync': {
+        case 'task.duplicates': {
+          const result = board.duplicateCheck(message.taskId, message.check);
+          if (!result.ok) break;
+          void persist('task', storage.saveTask(result.task));
+          broadcast({ type: 'task.changed', task: result.task });
+          for (const text of result.descriptions) record(null, text, result.task.id);
+          break;
+        }
+                case 'doc.sync': {
           let stateVector: Uint8Array;
           try {
             stateVector = decodeBytes(message.stateVector);
@@ -606,15 +617,15 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           break;
         }
         case 'usage.record': {
-          // Only a chat's own agent reports what it used; drafts (commit messages) count as the agent's own.
+          // Only a chat's own agent reports what it used; drafts (commit messages, folder notes) count as the agent's own.
           const profileId = participant.agent?.profileId;
           const chat =
             chats.getChat(message.usage.chatId) ??
-            (profileId && message.usage.chatId === commitDraftUsageId(profileId) ? { agentId: profileId, taskId: message.usage.taskId ?? null } : null);
+            (profileId && isOwnDraft(message.usage.chatId, profileId) ? { agentId: profileId, taskId: message.usage.taskId ?? null } : null);
           if (!chat) break;
           if (profileId !== chat.agentId) return fail(conn, 'not_allowed', 'Only the chat’s agent reports its usage');
           const key = usageKey(message.usage);
-          const row: UsageRow = addUsage(usage.get(key), message.usage, chat);
+          const row: UsageRow = addUsage(usage.get(key), message.usage, chat, Date.now(), prices);
           usage.set(key, row);
           void persist('usage', storage.saveUsage(row));
           broadcast({ type: 'usage.changed', row });

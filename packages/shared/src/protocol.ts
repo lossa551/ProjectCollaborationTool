@@ -22,6 +22,7 @@ import {
   CHAT_TEXT_LIMIT,
   CRITERIA_LIMIT,
   CriterionState,
+  DuplicateCheck,
   CriterionText,
   Handoff,
   EMPTY_GITHUB_STATUS,
@@ -48,7 +49,7 @@ import { DocId, EncodedUpdate } from './docs.js';
 import { PriceTable, UsageReport, UsageRow } from './usage.js';
 
 /** Bumped whenever a message changes in a way older clients cannot read. */
-export const PROTOCOL_VERSION = 15;
+export const PROTOCOL_VERSION = 18;
 
 /** Path of the WebSocket endpoint on the session server. */
 export const SOCKET_PATH = '/ws';
@@ -141,6 +142,13 @@ export const TaskVerifyMessage = z.object({
   criterionId: z.string(),
   state: CriterionState,
   evidence: z.string().max(4000),
+});
+
+/** Records what an agent answered to the review-time duplicate question (issue #93). */
+export const TaskDuplicateCheckMessage = z.object({
+  type: z.literal('task.duplicates'),
+  taskId: z.string(),
+  check: DuplicateCheck.omit({ at: true }),
 });
 
 /** Starts syncing a shared document: what this client has, as a Yjs state vector. */
@@ -256,6 +264,11 @@ export const ChatBranchMessage = z.object({
   /** The agent that carries on; the parent chat's agent when left out. */
   agentId: z.string().optional(),
   title: ChatTitle,
+  /**
+   * Continue in a new chat instead (issue #88): the new chat gets this handoff
+   * and the parent's files at that message, but none of its messages.
+   */
+  handoff: Handoff.optional(),
 });
 
 export const ChatUpdateMessage = z.object({
@@ -365,6 +378,7 @@ export const ClientMessage = z.discriminatedUnion('type', [
   TaskUpdateMessage,
   TaskDeleteMessage,
   TaskVerifyMessage,
+  TaskDuplicateCheckMessage,
   DocSyncMessage,
   DocUpdateMessage,
   BloatReportMessage,

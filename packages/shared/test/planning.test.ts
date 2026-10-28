@@ -12,6 +12,7 @@ const task = (id: string, featureId: string | null, stage: Task['stage'], states
   featureId,
   criteria: states.map((state, i) => ({ id: `${id}-${i}`, text: `c${i}`, state, evidence: '', by: null, at: null })),
   budget: null,
+  duplicateCheck: null,
   createdAt: 0,
   updatedAt: 0,
   version: 1,
@@ -101,7 +102,7 @@ describe('project memory', () => {
       { title: 'Menu flickers', body: 'Only on Windows.', source: { kind: 'chat', id: 'chat-1' }, updatedAt: 3 },
       { title: 'Signals over polling', source: null },
     ]);
-    expect(renderMemory(readMemory(doc))).toBe(
+    expect(renderMemory(readMemory(doc)).text).toBe(
       'Architecture decisions:\n- Signals over polling\n  Use signals\n  for UI.\n\nKnown issues:\n- Menu flickers\n  Only on Windows.',
     );
   });

@@ -3,12 +3,15 @@ import {
   DEFAULT_PRICES,
   addUsage,
   budgetsFor,
+  cacheHint,
+  cacheShare,
   formatCost,
   formatTokens,
   priceFor,
   totalUsage,
   usageDay,
   weekStart,
+  withDefaultTiers,
   type UsageReport,
   type UsageRow,
 } from '@pct/shared';
@@ -80,5 +83,61 @@ describe('agent usage and cost', () => {
     expect(weekStart(new Date(2026, 10, 1, 9).getTime())).toBe('2026-10-26');
     expect([0, 0.004, 0.42, 12.3, 1234].map(formatCost)).toEqual(['$0', '<$0.01', '$0.42', '$12.30', '$1,234']);
     expect([950, 1234, 56_000, 1_200_000].map(formatTokens)).toEqual(['950', '1.2k', '56k', '1.2M']);
+  });
+
+  it('prices single Haiku 5.5 calls over 100k tokens at the long-prompt rate', () => {
+    const haiku = { model: 'claude-haiku-5-5', input: 150_000, output: 10_000, single: true };
+    const chat = { agentId: 'a1', taskId: null };
+    const long = addUsage(undefined, report(haiku), chat, 1, DEFAULT_PRICES);
+    expect(long.long).toMatchObject({ input: 150_000, output: 10_000 });
+    // 150k at $0.50/M + 10k at $2.50/M.
+    expect(totalUsage([long], DEFAULT_PRICES).cost).toBeCloseTo(0.1);
+    expect(totalUsage([long], DEFAULT_PRICES).longInput).toBe(150_000);
+
+    // A short call on the same row stays at the base rate: 50k at $0.10/M.
+    const both = addUsage(long, report({ ...haiku, input: 50_000, output: 0 }), chat, 2, DEFAULT_PRICES);
+    expect(both.long?.input).toBe(150_000);
+    expect(totalUsage([both], DEFAULT_PRICES).cost).toBeCloseTo(0.105);
+
+    // Cache reads count toward the prompt size.
+    const cached = addUsage(undefined, report({ ...haiku, input: 1000, output: 0, cacheRead: 120_000 }), chat, 1, DEFAULT_PRICES);
+    expect(cached.long?.cacheRead).toBe(120_000);
+
+    // A CLI run's totals are many calls, so they stay at the base rate.
+    const run = addUsage(undefined, report({ ...haiku, single: false }), chat, 1, DEFAULT_PRICES);
+    expect(run.long).toBeUndefined();
+    expect(totalUsage([run], DEFAULT_PRICES).cost).toBeCloseTo(0.02);
+
+    // Without the price table (old callers), nothing is split.
+    expect(addUsage(undefined, report(haiku), chat, 1).long).toBeUndefined();
+  });
+
+  it('adds the default long-prompt price only to unchanged saved rows', () => {
+    const base = DEFAULT_PRICES.find((p) => p.model === 'claude-haiku-5-5')!;
+    const { longPrompt: _, ...saved } = base;
+    expect(withDefaultTiers([saved])[0]!.longPrompt?.above).toBe(100_000);
+    expect(withDefaultTiers([{ ...saved, input: 0.2 }])[0]!.longPrompt).toBeUndefined();
+    const own = { ...base, longPrompt: { ...base.longPrompt!, above: 50_000 } };
+    expect(withDefaultTiers([own])[0]).toEqual(own);
+  });
+
+  it('shows the cache-write share and flags a cache that keeps breaking', () => {
+    const chat = { agentId: 'a1', taskId: null };
+    // First call writes the prompt, later calls read it and add a small tail.
+    let healthy = addUsage(undefined, report({ input: 100, output: 0, cacheWrite: 20_000, single: true }), chat, 1);
+    for (let i = 0; i < 5; i++) healthy = addUsage(healthy, report({ input: 100, output: 0, cacheRead: 20_000, cacheWrite: 500, single: true }), chat, 1);
+    const ok = totalUsage([healthy], DEFAULT_PRICES);
+    expect(ok.cacheRebuilds).toBe(1);
+    expect(cacheShare(ok)!.read).toBeGreaterThan(0.7);
+    expect(cacheHint(ok)).toBeNull();
+
+    let broken = addUsage(undefined, report({ input: 100, output: 0, cacheWrite: 20_000, single: true }), chat, 1);
+    for (let i = 0; i < 4; i++) broken = addUsage(broken, report({ input: 100, output: 0, cacheWrite: 20_000, single: true }), chat, 1);
+    const bad = totalUsage([broken], DEFAULT_PRICES);
+    expect(bad.cacheRebuilds).toBe(5);
+    expect(cacheShare(bad)!.write).toBeGreaterThan(0.9);
+    expect(cacheHint(bad)).toMatch(/rebuilt 5 times/);
+
+    expect(cacheShare(report({ input: 0, output: 5, cacheRead: 0, cacheWrite: 0 }))).toBeNull();
   });
 });

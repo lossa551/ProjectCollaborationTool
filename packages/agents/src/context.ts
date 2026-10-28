@@ -5,6 +5,7 @@ import {
   renderHandoff,
   renderFolderNotes,
   renderMemory,
+  MEMORY_EXPORT_PATH,
   type FolderNote,
   type MemoryEntry,
   type AgentProfile,
@@ -25,6 +26,10 @@ export interface ContextInput {
   startedBy: string;
   /** Project memory: decisions, conventions, known issues and plans. */
   memory: MemoryEntry[];
+  /** The chat's task's other chats: memory saved from them comes first (see memoryOrder). */
+  taskChatIds?: string[];
+  /** The agent has the read_memory tool (our own loop); CLI agents read docs/project-memory.md instead. */
+  readsMemory?: boolean;
   /** AGENTS.md notes for the folders the task touches, shallowest first (see notesForPaths). */
   folderNotes: FolderNote[];
   /** The chat's own copy of the project (branch and what it started from); null when it works in the project folder. */
@@ -85,7 +90,7 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults, worktree, engine }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, taskChatIds, readsMemory, folderNotes, recordsResults, worktree, engine }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
@@ -106,6 +111,11 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
         'approve them. If an action is blocked or denied, ' +
         'do not try to reach the same result another way: say what you need and why. Keep changes to what the task asks for, ' +
         'and avoid adding new systems, dependencies or files the task does not need. Paths are relative to the repository root.',
+      // Our own loop answers repeated reads briefly (reads.ts); a CLI agent's reads can only be watched, so it is asked instead.
+      recordsResults
+        ? ''
+        : 'Read long files in parts, starting with the part you need, and do not read a file again unless it changed since ' +
+          'you read it: your earlier copy is still in your context, and every copy is sent again with each step.',
       agent.allowedPaths.length > 0 ? `You may change only these paths:\n${agent.allowedPaths.map((p) => `- ${p}`).join('\n')}` : '',
     ]
       .filter(Boolean)
@@ -155,12 +165,24 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
     }
     out.push({ label: 'Game engine', detail: engine.bridge ?? 'Godot project', text: lines.join('\n') });
   }
-  const remembered = renderMemory(memory);
-  if (remembered) {
+  const remembered = renderMemory(memory, {
+    focus: {
+      chatIds: [chat.id, ...(taskChatIds ?? [])],
+      paths: [...(task?.scope ?? []), ...(task?.readFirst ?? []), ...(chat.handoff?.scope ?? []), ...(chat.handoff?.readFirst ?? [])],
+    },
+    readHint: readsMemory
+      ? 'read one with read_memory when it concerns your work'
+      : `their full text is in ${MEMORY_EXPORT_PATH}; read it there when one concerns your work, if the file is there`,
+  });
+  if (remembered.text) {
+    const shown = remembered.included.length + remembered.listed.length;
+    const parts = [`${shown} ${shown === 1 ? 'entry' : 'entries'}`];
+    if (remembered.listed.length) parts.push(`${remembered.listed.length} by title only`);
+    if (remembered.archived) parts.push(`${remembered.archived} archived left out`);
     out.push({
       label: 'Project memory',
-      detail: `${memory.length} ${memory.length === 1 ? 'entry' : 'entries'}`,
-      text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered}`,
+      detail: parts.join(', '),
+      text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered.text}`,
     });
   }
   const notes = renderFolderNotes(folderNotes);
@@ -184,16 +206,78 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
 }
 
 export function systemPrompt(input: ContextInput): string {
-  return pieces(input)
-    .map((p) => p.text)
-    .join('\n\n');
+  return joinPieces(pieces(input));
+}
+
+const joinPieces = (parts: Piece[]) => parts.map((p) => p.text).join('\n\n');
+
+/**
+ * The system prompt as it stands, kept for a whole turn of our own loop (issue #90): the provider caches
+ * everything up to the newest message, so a prompt that changed mid-turn would make it write the whole
+ * conversation to the cache again. What changes meanwhile goes to the agent with contextUpdate instead.
+ */
+export interface FrozenPrompt {
+  text: string;
+  /** Each piece's text by label, as the agent was last told it. */
+  told: Map<string, string>;
+}
+
+export function freezePrompt(input: ContextInput): FrozenPrompt {
+  const parts = pieces(input);
+  return { text: joinPieces(parts), told: new Map(parts.map((p) => [p.label, p.text])) };
+}
+
+/**
+ * The pieces that changed since the agent was last told them, as a note to append after the next tool
+ * results; null when nothing did. Marks them as told, so each change is said once.
+ */
+export function contextUpdate(frozen: FrozenPrompt, input: ContextInput): string | null {
+  const now = pieces(input);
+  const changed = now.filter((p) => frozen.told.get(p.label) !== p.text);
+  const gone = [...frozen.told.keys()].filter((label) => !now.some((p) => p.label === label));
+  if (changed.length === 0 && gone.length === 0) return null;
+  frozen.told = new Map(now.map((p) => [p.label, p.text]));
+  return [
+    `[Update from the app: ${[...changed.map((p) => p.label), ...gone].join(', ').toLowerCase()} changed while you worked. ` +
+      'This replaces what your instructions said about it.]',
+    ...changed.map((p) => p.text),
+    ...gone.map((label) => `${label}: no longer applies.`),
+  ].join('\n\n');
 }
 
 /** The context panel's list: the pieces above, files the agent read, and the conversation. */
-export function describeContext(input: ContextInput, extra: { filesRead: string[]; conversation: string }): ChatContext {
+export function describeContext(
+  input: ContextInput,
+  extra: {
+    filesRead: string[];
+    conversation: string;
+    /** Prompt tokens the provider counted for the agent's last call, when there was one. */
+    measured?: number | null;
+    /** Old tool results and inputs shortened so far (see trimHistory). */
+    trimmed?: number;
+    /** Repeated reads answered briefly (our own loop), and repeated reads seen (CLI agents), see reads.ts. */
+    readsSaved?: number;
+    readsRepeated?: number;
+    /** When to suggest continuing in a new chat; null for agents that keep their own context. */
+    warnAt?: number | null;
+  },
+): ChatContext {
   const items = pieces(input).map((p) => ({ label: p.label, detail: p.detail, tokens: estimateTokens(p.text) }));
   for (const file of extra.filesRead.slice(-150)) items.push({ label: 'File', detail: file, tokens: 0 });
   const conversation = estimateTokens(extra.conversation);
-  items.push({ label: 'Conversation', detail: 'Messages and tool results so far', tokens: conversation });
-  return { items, tokens: items.reduce((sum, item) => sum + item.tokens, 0) };
+  const trimmed = extra.trimmed ?? 0;
+  items.push({
+    label: 'Conversation',
+    detail: `Messages and tool results so far${trimmed ? ` (${trimmed} old ${trimmed === 1 ? 'result' : 'results'} shortened)` : ''}`,
+    tokens: conversation,
+  });
+  const estimated = items.reduce((sum, item) => sum + item.tokens, 0);
+  return {
+    items,
+    tokens: extra.measured || estimated,
+    warnAt: extra.warnAt ?? null,
+    trimmed,
+    readsSaved: extra.readsSaved ?? 0,
+    readsRepeated: extra.readsRepeated ?? 0,
+  };
 }

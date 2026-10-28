@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, type AgentProfile, type SessionState } from '@pct/shared';
+import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, notesDraftUsageId, type AgentProfile, type SessionState } from '@pct/shared';
 import { startServer, type RunningServer } from '@pct/server';
 import { AgentRunner, type AgentRunnerOptions, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
 
@@ -120,6 +120,78 @@ describe('agent runner', () => {
     expect(model.requests[0]!.system).toContain('[c1] Not tested: Second jump works');
     const chat = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.context?.items.some((i) => i.label === 'Project memory') === true);
     expect(chat.chats[0]!.context!.items.map((i) => i.label)).toContain('Task');
+  });
+
+  it('keeps its instructions for the whole turn and is told what changed meanwhile', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { martin, agentClient, profile, model } = await setup([
+      { text: '', toolCalls: [{ id: 't1', name: 'list_files', input: { path: '' } }], stop: 'tool_use' },
+      { text: '', toolCalls: [{ id: 't2', name: 'list_files', input: { path: '' } }], stop: 'tool_use' },
+      { text: 'Done.', toolCalls: [], stop: 'end' },
+    ]);
+    // Hold the first call: the turn has begun, its prompt is set.
+    let started!: () => void;
+    const begun = new Promise<void>((resolve) => (started = resolve));
+    const complete = model.complete.bind(model);
+    model.complete = async (request) => {
+      if (model.requests.length === 0) {
+        started();
+        await gate;
+      }
+      return complete(request);
+    };
+    const taskId = martin.createTask('Double jump', { criteria: [{ id: 'c1', text: 'Second jump works' }] });
+    await waitFor(agentClient, (s) => s.tasks.length === 1);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump', taskId });
+    await waitFor(agentClient, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Check the jump' });
+    await begun;
+    // Mid-turn: memory and the task's criteria change.
+    martin.editMemory({ op: 'create', id: 'memory-000001', kind: 'convention', title: 'Tabs in GDScript' });
+    martin.verifyCriterion(taskId, 'c1', 'verified', 'played it');
+    await waitFor(agentClient, (s) => s.memory.length === 1 && s.tasks[0]?.criteria[0]?.state === 'verified');
+    release();
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text.includes('Done.')));
+
+    const [a, b, c] = model.requests;
+    expect(b!.system).toBe(a!.system);
+    expect(c!.system).toBe(a!.system);
+    expect(a!.system).not.toContain('Tabs in GDScript');
+    expect(b!.tools).toEqual(a!.tools);
+    const note = (b!.messages.at(-1) as { note?: string }).note!;
+    expect(note).toContain('task, project memory changed while you worked');
+    expect(note).toContain('[c1] Verified: Second jump works');
+    expect(note).toContain('Tabs in GDScript');
+    // Said once: the next step's results carry no note, and the earlier one stays as it was.
+    expect((c!.messages.at(-1) as { note?: string }).note).toBeUndefined();
+    expect(c!.messages.slice(0, b!.messages.length)).toEqual(b!.messages);
+
+    // The next turn starts from the current state.
+    martin.postChat(chatId, { kind: 'text', text: 'Thanks' });
+    await waitFor(agentClient, () => model.requests.length === 4);
+    expect(model.requests[3]!.system).toContain('Tabs in GDScript');
+    expect(model.requests[3]!.system).toContain('[c1] Verified: Second jump works');
+  });
+
+  it('leaves archived memory out of its instructions and reads an entry on demand', async () => {
+    const { martin, agentClient, profile, model } = await setup([
+      { text: '', toolCalls: [{ id: 't1', name: 'read_memory', input: { title: 'old save format' } }], stop: 'tool_use' },
+      { text: 'Read it.', toolCalls: [], stop: 'end' },
+    ]);
+    martin.editMemory({ op: 'create', id: 'memory-000001', kind: 'convention', title: 'Tabs in GDScript' });
+    martin.editMemory({ op: 'create', id: 'memory-000002', kind: 'plan', title: 'Old save format', body: 'Saves were JSON until 0.2.' });
+    martin.editMemory({ op: 'set', id: 'memory-000002', archived: true });
+    await waitFor(agentClient, (s) => s.memory.some((e) => e.archived));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Saves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'How did saves work?' });
+
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text.includes('Read it.')));
+    expect(model.requests[0]!.system).toContain('Tabs in GDScript');
+    expect(model.requests[0]!.system).not.toContain('Old save format');
+    expect(JSON.stringify(model.requests[1]!.messages)).toContain('Plan (archived): Old save format\\nSaves were JSON until 0.2.');
+    expect(state.chats.find((c) => c.id === chatId)!.context!.items.find((i) => i.label === 'Project memory')!.detail).toBe('1 entry, 1 archived left out');
   });
 
   it('gets the folder notes and files to read for its task', async () => {
@@ -344,6 +416,70 @@ describe('agent runner', () => {
       { role: 'assistant', text: 'Use a grid.', toolCalls: [] },
       { role: 'user', text: 'Martin: Make it bigger' },
     ]);
+  });
+
+  it('shortens old tool results in a long chat, and suggests a new chat once the context is large', async () => {
+    const small = { input: 20_000, output: 100, cacheRead: 0, cacheWrite: 0 };
+    const large = { input: 2_000, output: 100, cacheRead: 100_000, cacheWrite: 8_000 };
+    const read = (i: number): ModelTurn => ({
+      text: '',
+      // A different file each time: a second read of the same one would only say it is unchanged.
+      toolCalls: [{ id: `r${i}`, name: 'read_file', input: { path: `src/big${i}.gd` } }],
+      stop: 'tool_use',
+      usage: i < 10 ? small : large,
+    });
+    const { martin, profile, model, root } = await setup([...Array.from({ length: 13 }, (_, i) => read(i + 1)), { text: 'Read it all.', toolCalls: [], stop: 'end', usage: large }]);
+    mkdirSync(joinPath(root, 'src'), { recursive: true });
+    for (let i = 1; i <= 13; i++) writeFileSync(joinPath(root, `src/big${i}.gd`), Array.from({ length: 200 }, (_, i) => `var line_${i} = ${i}`).join('\n'));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Long read' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Read the big file a lot' });
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Read it all.' && !m.streaming));
+
+    const results = (i: number) => model.requests[i]!.messages.flatMap((m) => (m.role === 'tool' ? m.results : []));
+    // Up to 11 steps everything is sent whole; at 12, the 6 oldest are cleared in one go and the last 6 stay.
+    expect(results(11).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
+    expect(results(12).slice(0, 6).map((r) => r.content)).toEqual(
+      Array.from({ length: 6 }, (_, i) => `[Old result cleared to keep the context small: read src/big${i + 1}.gd, 200 lines. Run the tool again if you need it.]`),
+    );
+    expect(results(12).slice(6).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
+    // The next request starts the same way, so the provider's cache still matches.
+    expect(model.requests[13]!.messages.slice(0, model.requests[12]!.messages.length)).toEqual(model.requests[12]!.messages);
+
+    // Past 100k tokens (as the provider counted them), it says so once.
+    const warnings = state.messages[chatId]!.filter((m) => m.kind === 'notice' && m.text.includes('Continue in a new chat'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.text).toContain('about 110k tokens');
+    const idle = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    expect(idle.chats.find((c) => c.id === chatId)!.context).toMatchObject({ tokens: 110_000, warnAt: 100_000, trimmed: 6 });
+  });
+
+  it('answers a repeated read briefly and sends only what changed after an edit', async () => {
+    const read = (id: string): ModelTurn => ({ text: '', toolCalls: [{ id, name: 'read_file', input: { path: 'src/player.gd' } }], stop: 'tool_use' });
+    const { martin, profile, model, root } = await setup([
+      read('r1'),
+      read('r2'),
+      { text: '', toolCalls: [{ id: 'e1', name: 'edit_file', input: { path: 'src/player.gd', old_text: 'var speed = 20', new_text: 'var speed = 25' } }], stop: 'tool_use' },
+      read('r3'),
+      { text: 'Faster now.', toolCalls: [], stop: 'end' },
+    ]);
+    mkdirSync(joinPath(root, 'src'), { recursive: true });
+    writeFileSync(joinPath(root, 'src/player.gd'), Array.from({ length: 40 }, (_, i) => `var speed = ${i}`).join('\n'));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Speed' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Make the player faster' });
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Faster now.' && !m.streaming));
+
+    const result = (id: string) => model.requests.at(-1)!.messages.flatMap((m) => (m.role === 'tool' ? m.results : [])).find((r) => r.id === id)!;
+    expect(result('r1').content).toMatch(/^ {4}1 {2}var speed = 0\n/);
+    expect(result('r2').content).toBe('src/player.gd is unchanged since you read it (40 lines); the copy earlier in this conversation is current.');
+    expect(result('r3').content).toContain('src/player.gd changed since you read it (now 40 lines, was 40): lines 21-21 are new, replacing old lines 21-21.');
+    expect(result('r3').content).toContain('   21  var speed = 25');
+    expect(result('r3').content.split('\n')).toHaveLength(8);
+    const idle = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    expect(idle.chats.find((c) => c.id === chatId)!.context).toMatchObject({ readsSaved: 2, readsRepeated: 0 });
   });
 
   it('undoes files a command changed outside the agent’s paths unless a person keeps them', async () => {
@@ -672,6 +808,42 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     expect(martin.getState().messages[chatId]!.find((m) => m.id === first!.id)!.checkpoint!.undone).toBeNull();
   });
 
+  it('continues a chat in a new one with its files and a handoff, but not its conversation', async () => {
+    const { martin, profile, root, model } = await setup([
+      write('t1', 'src/jump.gd', 'jump\n'),
+      { text: 'Jump done.', toolCalls: [], stop: 'end' },
+      write('t2', 'src/dash.gd', 'dash\n'),
+      { text: 'Dash done.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Moves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    const [first] = await checkpoints(martin, chatId, 1);
+    const last = martin.getState().messages[chatId]!.at(-1)!;
+
+    const handoff = { fromChatId: chatId, fromName: 'Builder', stage: null, plan: 'Jump is done; add a dash next.', decisions: ['Jump height 2'], criteria: [], scope: [], readFirst: ['src/jump.gd'], notes: '' };
+    const nextId = martin.branchChat({ fromChatId: chatId, fromMessageId: last.id, title: 'Moves (continued)', handoff });
+    martin.postChat(nextId, { kind: 'handoff', text: 'Handoff from Builder.\n\nPlan:\nJump is done; add a dash next.' });
+    const state = await waitFor(martin, (s) => (s.messages[nextId] ?? []).some((m) => m.text === 'Dash done.' && !m.streaming));
+    const next = state.chats.find((c) => c.id === nextId)!;
+    expect(next.handoff).toMatchObject({ plan: 'Jump is done; add a dash next.', decisions: ['Jump height 2'] });
+    expect(next.branchedFrom!.files).toMatchObject({ commit: first!.checkpoint!.commit, turn: 1 });
+    // Only the notice and the handoff came along, and the agent was sent nothing of the old conversation.
+    const kinds = state.messages[nextId]!.map((m) => m.kind);
+    expect(kinds.slice(0, 2)).toEqual(['notice', 'handoff']);
+    expect(state.messages[nextId]![0]!.text).toContain('Martin continued "Moves" in this new chat');
+    expect(state.messages[nextId]!.some((m) => m.text === 'Jump done.')).toBe(false);
+    expect(model.requests.at(-2)!.messages).toEqual([{ role: 'user', text: 'Handoff from Builder.\n\nPlan:\nJump is done; add a dash next.' }]);
+    expect(model.requests.at(-2)!.system).toContain('Jump is done; add a dash next.');
+    // Its copy has the first chat's jump, and its own dash on top.
+    await checkpoints(martin, nextId, 1);
+    const copy = martin.getState().chats.find((c) => c.id === nextId)!.worktree!;
+    expect(readFileSync(joinPath(copy.folder, 'src/jump.gd'), 'utf8')).toBe('jump\n');
+    expect(readFileSync(joinPath(copy.folder, 'src/dash.gd'), 'utf8')).toBe('dash\n');
+  });
+
   it('turns down an undo while the agent is not running', async () => {
     const { martin, profile, root } = await setup([write('t1', 'src/jump.gd', 'jump\n'), { text: 'Done.', toolCalls: [], stop: 'end' }]);
     commitProject(root);
@@ -739,6 +911,16 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     const state = await waitFor(martin, (s) => s.usage.length === 1);
     expect(state.usage[0]).toMatchObject({ chatId: commitDraftUsageId(profile.id), agentId: profile.id, taskId, calls: 1, input: 3000, output: 80 });
     expect(state.chats).toHaveLength(0);
+  });
+
+  it('counts a folder note draft apart from commit drafts', async () => {
+    const usage = { input: 12_000, output: 400, cacheRead: 0, cacheWrite: 0 };
+    const { martin, profile, model } = await setup([{ text: '# Player\n\nMovement and jumps.', toolCalls: [], stop: 'end', usage, model: 'claude-haiku-5-5' }]);
+    const text = await runners[0]!.draft('Write the note for src/player', null, new AbortController().signal, 'notes');
+    expect(text).toBe('# Player\n\nMovement and jumps.');
+    expect(model.requests[0]!.system).toContain('folder notes');
+    const state = await waitFor(martin, (s) => s.usage.length === 1);
+    expect(state.usage[0]).toMatchObject({ chatId: notesDraftUsageId(profile.id), agentId: profile.id, taskId: null, model: 'claude-haiku-5-5' });
   });
 });
 

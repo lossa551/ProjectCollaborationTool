@@ -3,6 +3,7 @@ import type {
   AgentProfile,
   ChatAgentState,
   ChatContext,
+  DuplicateCheck,
   ChatInfo,
   ChatMessage,
   ChatWorktree,
@@ -25,7 +26,7 @@ import type {
 import { DEFAULT_LOCK_RULES, EMPTY_GITHUB_STATUS } from './model.js';
 import type { BloatReport } from './bloat.js';
 import { DEFAULT_PRICES, addUsage, usageKey, type PriceTable, type UsageReport, type UsageRow } from './usage.js';
-import { commitDraftUsageId } from './commit-message.js';
+import { isOwnDraft } from './drafts.js';
 import { DOC_IDS, Y, decodeBytes, encodeBytes, isEmptyUpdate, type DocId } from './docs.js';
 import { applyMemoryOp, readMemory, type MemoryEntry, type MemoryOp } from './memory.js';
 import { DEFAULT_MILESTONES, applyPlanOp, readIssueMarks, readMilestones, readPlanning, type IssueMarks, type Milestone, type PlanItem, type PlanOp } from './planning.js';
@@ -321,6 +322,11 @@ export class SessionClient {
     this.sendTask({ type: 'task.verify', taskId, criterionId, state, evidence });
   }
 
+  /** Records what an agent answered to the review-time duplicate question; needs the server. */
+  recordDuplicateCheck(taskId: string, check: Omit<DuplicateCheck, 'at'>): void {
+    this.send({ type: 'task.duplicates', taskId, check });
+  }
+
   /**
    * Changes the planning space. Works offline too: the change is kept in the
    * local copy and merged when the server is back. Returns false when the
@@ -426,10 +432,10 @@ export class SessionClient {
     const profileId = this.state.you?.agent?.profileId;
     const chat =
       this.state.chats.find((c) => c.id === usage.chatId) ??
-      (profileId && usage.chatId === commitDraftUsageId(profileId) ? { agentId: profileId, taskId: usage.taskId ?? null } : undefined);
+      (profileId && isOwnDraft(usage.chatId, profileId) ? { agentId: profileId, taskId: usage.taskId ?? null } : undefined);
     if (chat) {
       const key = usageKey(usage);
-      const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat);
+      const row = addUsage(this.state.usage.find((r) => usageKey(r) === key), usage, chat, Date.now(), this.state.prices);
       this.setState({ ...this.state, usage: upsertUsage(this.state.usage, row) });
     }
     this.send({ type: 'usage.record', usage });
@@ -490,8 +496,11 @@ export class SessionClient {
     return id;
   }
 
-  /** Starts a new chat with the messages of another chat up to and including one of them. */
-  branchChat(options: { fromChatId: string; fromMessageId: string; title: string; agentId?: string }): string {
+  /**
+   * Starts a new chat with the messages of another chat up to and including one
+   * of them; with a handoff, it starts from the handoff and the files instead.
+   */
+  branchChat(options: { fromChatId: string; fromMessageId: string; title: string; agentId?: string; handoff?: Handoff }): string {
     const id = crypto.randomUUID();
     this.send({ type: 'chat.branch', id, ...options });
     return id;
@@ -872,6 +881,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           featureId: message.featureId ?? null,
           criteria: (message.criteria ?? []).map(({ id, text }) => newCriterion(id, text)),
           budget: null,
+          duplicateCheck: null,
           createdAt: now,
           updatedAt: now,
           version: 0,

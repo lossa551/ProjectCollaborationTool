@@ -63,6 +63,11 @@ async function remote(args: string[], options: RunOptions): Promise<string> {
 
 const tryRun = (args: string[], cwd: string) => run(args, { cwd }).then((out) => out.trim(), () => null);
 
+/** The commit checked out, or null before the first commit. */
+export function headCommit(cwd: string): Promise<string | null> {
+  return tryRun(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'], cwd).then((sha) => sha || null);
+}
+
 /** Tags the checked-out commit (locally; push tags to share it). Returns the tag name. */
 export async function tagCommit(cwd: string, name: string, message: string): Promise<string> {
   if ((await tryRun(['check-ref-format', `refs/tags/${name}`], cwd)) === null) throw new GitError('That is not a valid tag name.', 'failed');
@@ -434,6 +439,22 @@ async function newFileDiff(cwd: string, path: string): Promise<string> {
     // A folder (an untracked submodule or nested repository) or a file that went away.
     return header;
   }
+}
+
+/**
+ * What a branch changed since it left its base, as a unified diff: the local
+ * branch or origin's, against the first base that exists (origin's first).
+ * Null when the branch or every base is missing here.
+ */
+export async function branchDiff(cwd: string, branch: string, bases: string[]): Promise<string | null> {
+  const first = async (refs: string[]) => {
+    for (const ref of refs) if (await hasRef(cwd, ref)) return ref;
+    return null;
+  };
+  const head = await first([`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]);
+  const base = await first(bases.filter((b) => b !== branch).flatMap((b) => [`refs/remotes/origin/${b}`, `refs/heads/${b}`]));
+  if (!head || !base) return null;
+  return tryRun(['-c', 'core.quotepath=off', 'diff', '--no-color', '--no-ext-diff', '-U3', `${base}...${head}`], cwd);
 }
 
 /** Your uncommitted changes, for an agent drafting the commit message. */

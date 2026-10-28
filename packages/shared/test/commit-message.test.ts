@@ -12,6 +12,7 @@ const task = (id: string, branch: string | null, stage: Task['stage'], updatedAt
   featureId: null,
   criteria: [],
   budget: null,
+  duplicateCheck: null,
   createdAt: 0,
   updatedAt,
   version: 1,

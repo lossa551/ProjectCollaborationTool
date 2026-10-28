@@ -9,6 +9,7 @@ import {
   newIdentity,
   type AgentProfile,
   type CliTool,
+  type DraftKind,
 } from '@pct/shared';
 import { AgentRunner, createModel, type EngineSettings } from '@pct/agents';
 import type { LocalAgent } from '../common/api';
@@ -134,7 +135,7 @@ export class LocalAgents {
   }
 
   /** Has a running agent answer one prompt (a commit message or folder note draft), once it is connected. */
-  async draft(profileId: string, prompt: string, taskId: string | null, signal: AbortSignal, purpose?: string): Promise<string> {
+  async draft(profileId: string, prompt: string, taskId: string | null, signal: AbortSignal, kind?: DraftKind): Promise<string> {
     const entry = this.running.get(profileId);
     if (!entry) throw new Error('That agent is not running on this PC.');
     const ready = (state: ReturnType<SessionClient['getState']>) => state.status === 'connected' && state.you !== null;
@@ -151,7 +152,7 @@ export class LocalAgents {
       });
     }));
     if (!connected) throw new Error(entry.state.error ?? 'The agent could not connect to the session.');
-    return entry.runner.draft(prompt, taskId, signal, purpose);
+    return entry.runner.draft(prompt, taskId, signal, kind);
   }
 
   /** Stops an agent. Unless forget is set, one that failed stays listed for a while so its error shows. */
