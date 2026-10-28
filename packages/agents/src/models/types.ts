@@ -20,7 +20,8 @@ export type LoopMessage =
   | { role: 'user'; text: string }
   /** raw: the provider's own content (e.g. thinking blocks), passed back unchanged to the same provider. */
   | { role: 'assistant'; text: string; toolCalls: ToolCall[]; raw?: unknown }
-  | { role: 'tool'; results: ToolResult[] };
+  /** note: what the app tells the agent along with the results, e.g. a task change during the turn (see contextUpdate). */
+  | { role: 'tool'; results: ToolResult[]; note?: string };
 
 export interface ToolSpec {
   name: string;

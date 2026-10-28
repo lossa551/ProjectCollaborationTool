@@ -33,6 +33,14 @@ describe('trimming old tool results', () => {
     expect(JSON.stringify(history)).toBe(after);
   });
 
+  it('keeps the app’s notes on old results', () => {
+    const history: LoopMessage[] = [{ role: 'user', text: 'Martin: fix the jump' }];
+    for (let i = 1; i <= 4; i++) history.push(...readStep(`t${i}`, `src/f${i}.gd`, 100));
+    history[2] = { ...(history[2] as Extract<LoopMessage, { role: 'tool' }>), note: 'Task changed.' };
+    expect(trimHistory(history, 2, 2)).toBe(2);
+    expect(history[2]).toMatchObject({ role: 'tool', note: 'Task changed.' });
+  });
+
   it('shortens big inputs of old calls, in the provider’s own blocks too, and leaves short results alone', () => {
     const content = big(300);
     const history: LoopMessage[] = [

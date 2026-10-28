@@ -122,6 +122,58 @@ describe('agent runner', () => {
     expect(chat.chats[0]!.context!.items.map((i) => i.label)).toContain('Task');
   });
 
+  it('keeps its instructions for the whole turn and is told what changed meanwhile', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { martin, agentClient, profile, model } = await setup([
+      { text: '', toolCalls: [{ id: 't1', name: 'list_files', input: { path: '' } }], stop: 'tool_use' },
+      { text: '', toolCalls: [{ id: 't2', name: 'list_files', input: { path: '' } }], stop: 'tool_use' },
+      { text: 'Done.', toolCalls: [], stop: 'end' },
+    ]);
+    // Hold the first call: the turn has begun, its prompt is set.
+    let started!: () => void;
+    const begun = new Promise<void>((resolve) => (started = resolve));
+    const complete = model.complete.bind(model);
+    model.complete = async (request) => {
+      if (model.requests.length === 0) {
+        started();
+        await gate;
+      }
+      return complete(request);
+    };
+    const taskId = martin.createTask('Double jump', { criteria: [{ id: 'c1', text: 'Second jump works' }] });
+    await waitFor(agentClient, (s) => s.tasks.length === 1);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump', taskId });
+    await waitFor(agentClient, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Check the jump' });
+    await begun;
+    // Mid-turn: memory and the task's criteria change.
+    martin.editMemory({ op: 'create', id: 'memory-000001', kind: 'convention', title: 'Tabs in GDScript' });
+    martin.verifyCriterion(taskId, 'c1', 'verified', 'played it');
+    await waitFor(agentClient, (s) => s.memory.length === 1 && s.tasks[0]?.criteria[0]?.state === 'verified');
+    release();
+    await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text.includes('Done.')));
+
+    const [a, b, c] = model.requests;
+    expect(b!.system).toBe(a!.system);
+    expect(c!.system).toBe(a!.system);
+    expect(a!.system).not.toContain('Tabs in GDScript');
+    expect(b!.tools).toEqual(a!.tools);
+    const note = (b!.messages.at(-1) as { note?: string }).note!;
+    expect(note).toContain('task, project memory changed while you worked');
+    expect(note).toContain('[c1] Verified: Second jump works');
+    expect(note).toContain('Tabs in GDScript');
+    // Said once: the next step's results carry no note, and the earlier one stays as it was.
+    expect((c!.messages.at(-1) as { note?: string }).note).toBeUndefined();
+    expect(c!.messages.slice(0, b!.messages.length)).toEqual(b!.messages);
+
+    // The next turn starts from the current state.
+    martin.postChat(chatId, { kind: 'text', text: 'Thanks' });
+    await waitFor(agentClient, () => model.requests.length === 4);
+    expect(model.requests[3]!.system).toContain('Tabs in GDScript');
+    expect(model.requests[3]!.system).toContain('[c1] Verified: Second jump works');
+  });
+
   it('leaves archived memory out of its instructions and reads an entry on demand', async () => {
     const { martin, agentClient, profile, model } = await setup([
       { text: '', toolCalls: [{ id: 't1', name: 'read_memory', input: { title: 'old save format' } }], stop: 'tool_use' },

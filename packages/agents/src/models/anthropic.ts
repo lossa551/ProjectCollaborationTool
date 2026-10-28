@@ -23,7 +23,10 @@ function toParams(messages: LoopMessage[]): Anthropic.MessageParam[] {
         // All results of one turn go back in a single user message.
         return {
           role: 'user',
-          content: m.results.map((r) => ({ type: 'tool_result' as const, tool_use_id: r.id, content: r.content, is_error: r.isError })),
+          content: [
+            ...m.results.map((r) => ({ type: 'tool_result' as const, tool_use_id: r.id, content: r.content, is_error: r.isError })),
+            ...(m.note ? [{ type: 'text' as const, text: m.note }] : []),
+          ],
         };
     }
   });
