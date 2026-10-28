@@ -24,8 +24,10 @@ Versions look like `0.MINOR.PATCH`.
 - **1.0 is kept for the first real game project made with the app.** Until
   then we stay on 0.x.
 
-Planned next bump: **0.2.0 when game engine support lands**, starting with
-Godot and Summer Engine (#10). Not before.
+**0.2.0 is game engine support**: Godot and Summer Engine (#10) plus Unreal
+(#11). It is set on `beta` and reaches `main` with the beta-to-main promotion
+(PR #79), so the first stable 0.2.x ships once Unreal has been tested. The
+next bump after that is 0.3.0.
 
 ## Beta branch
 

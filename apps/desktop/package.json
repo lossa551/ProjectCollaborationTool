@@ -1,7 +1,7 @@
 {
   "name": "@pct/desktop",
   "productName": "Foreus",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Windows desktop app (Electron). Always a client of a session server, and can host one on this PC.",
   "author": "lossa551",
