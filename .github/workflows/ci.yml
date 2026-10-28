@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
 
 jobs:
@@ -26,8 +26,8 @@ jobs:
       - run: npm test
       - run: npm run build
 
-  # Builds the Windows installer so it can be tried from any PR: download it
-  # from the run's artifacts. Publishing happens in release.yml.
+  # Builds the Windows installer so it can be tried from any PR or from beta:
+  # download it from the run's artifacts. Publishing happens in release.yml.
   installer:
     runs-on: windows-latest
     env:
@@ -39,6 +39,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # A build from a PR is a beta: its version sorts below the next release,
+      # so the app stays on it until you press Update (see docs/releasing.md).
+      - name: Mark the build as a beta
+        shell: bash
+        run: |
+          base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
+          npm version "$base.0-beta.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
       - run: npm run package -w @pct/desktop
       - uses: actions/upload-artifact@v4
         with:

@@ -25,8 +25,11 @@ export function startUpdater(onChange: (state: UpdateState) => void, onReady: (v
   listener = onChange;
   if (!app.isPackaged) return;
 
+  // A beta build (from a PR, version 0.x.0-beta.N) does not replace itself on
+  // its own: it only goes back to the released version when you press Update.
+  const beta = app.getVersion().includes('-');
   autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = !beta;
   autoUpdater.on('checking-for-update', () => set({ status: 'checking' }));
   autoUpdater.on('update-not-available', () => set({ status: 'up-to-date' }));
   autoUpdater.on('update-available', (info) => set({ status: 'downloading', version: info.version, percent: 0 }));
@@ -43,6 +46,7 @@ export function startUpdater(onChange: (state: UpdateState) => void, onReady: (v
     else set({ status: 'error', message: error.message });
   });
 
+  if (beta) return;
   void checkForUpdate();
   setInterval(() => void checkForUpdate(), CHECK_EVERY_MS).unref();
 }
