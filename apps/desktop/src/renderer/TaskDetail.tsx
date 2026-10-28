@@ -30,6 +30,7 @@ import { CriteriaSection } from './Criteria';
 import { PullBadge } from './GitHub';
 import { IssueChips } from './Issues';
 import { LockForm, LockList } from './Locks';
+import { ask } from './Dialog';
 
 /** The folder notes in your project folder, read again when a workspace changes. */
 function useNotePaths(workspaces: Record<string, Workspace>): string[] {
@@ -340,13 +341,14 @@ export function TaskDetail({
         <LockForm key={task.id} tasks={tasks} rules={lockRules} editable={online} taskId={task.id} />
       </section>
       <p className="muted small">
-        Created {new Date(task.createdAt).toLocaleString()} · changed {task.version - 1} times
+        Created {new Date(task.createdAt).toLocaleString()}
+        {task.version > 1 && ` · changed ${task.version - 1} ${task.version === 2 ? 'time' : 'times'}`}
       </p>
       {editable && (
         <button
           className="danger"
-          onClick={() => {
-            if (confirm(`Delete "${task.title}"?`)) {
+          onClick={async () => {
+            if (await ask(`Delete "${task.title}"?`, { confirm: 'Delete task', danger: true })) {
               window.pct.deleteTask(task.id);
               onClose();
             }

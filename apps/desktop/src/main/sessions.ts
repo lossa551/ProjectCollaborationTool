@@ -1,17 +1,19 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { type Invite, decodeInvite } from '@pct/shared';
 
 // The sessions you hosted or joined on this PC, for the "Resume a session"
 // list on the start screen. Each hosted session has its own SQLite file, so
 // hosting a new one never replaces the last. Joined sessions keep their
-// invite code. The file holds invite codes, which are credentials, so like
+// invite code and are told apart by session id, so two projects hosted on
+// the same PC each keep their own entry. The file holds invite codes, which are credentials, so like
 // the session cache it stays readable only by you.
 
 export type SessionRole = 'host' | 'join';
 
 export interface SavedSession {
-  /** Local key: the hosted session's file name, or a hash of the joined server's address. */
+  /** Local key: the hosted session's file name, or a random id for a joined session. */
   key: string;
   role: SessionRole;
   /** The session's id once known; it ties the entry to your project folder. */
@@ -21,6 +23,8 @@ export interface SavedSession {
   invite: string | null;
   /** The linked GitHub repository, as owner/name. */
   repo: string | null;
+  /** The port a hosted session last listened on, so its invite code stays the same. */
+  port?: number;
   lastUsedAt: number;
 }
 
@@ -75,9 +79,29 @@ export class SessionHistory {
     return randomUUID();
   }
 
-  /** The key of a joined session, from its server address. */
-  joinKey(url: string): string {
-    return `join-${createHash('sha256').update(url).digest('hex').slice(0, 16)}`;
+  /** A key for a joined session not saved yet. */
+  newJoinKey(): string {
+    return `join-${randomUUID()}`;
+  }
+
+  /**
+   * The saved entry for the session an invite code leads to: the one with
+   * its session id, or for codes without one, the one saved with the same
+   * address and secret. One PC can host several sessions at one address.
+   */
+  findJoined(invite: Invite): SavedSession | null {
+    const joined = this.list().filter((s) => s.role === 'join');
+    if (invite.sessionId) {
+      const same = joined.find((s) => s.sessionId === invite.sessionId);
+      if (same) return same;
+    }
+    return (
+      joined.find((s) => {
+        if (invite.sessionId && s.sessionId) return false;
+        const saved = s.invite ? decodeInvite(s.invite) : null;
+        return saved?.url === invite.url && saved.secret === invite.secret;
+      }) ?? null
+    );
   }
 
   /** Adds or updates an entry and marks it as just used. */
@@ -90,7 +114,7 @@ export class SessionHistory {
   }
 
   /** Changes details (name, repo, session id) without marking it as used. */
-  update(key: string, changes: Partial<Pick<SavedSession, 'sessionId' | 'name' | 'invite' | 'repo'>>) {
+  update(key: string, changes: Partial<Pick<SavedSession, 'sessionId' | 'name' | 'invite' | 'repo' | 'port'>>) {
     const current = this.get(key);
     if (!current) return;
     const next = { ...current, ...changes };
@@ -156,6 +180,7 @@ function isSavedSession(value: unknown): value is SavedSession {
     typeof s.name === 'string' &&
     (s.invite === null || typeof s.invite === 'string') &&
     (s.repo === null || typeof s.repo === 'string') &&
+    (s.port === undefined || (typeof s.port === 'number' && Number.isInteger(s.port) && s.port > 0 && s.port < 65536)) &&
     typeof s.lastUsedAt === 'number'
   );
 }

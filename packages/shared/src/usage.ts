@@ -31,6 +31,10 @@ export const DEFAULT_PRICES: PriceTable = [
   { model: 'claude-opus-5-5', input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   { model: 'claude-opus-5', input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   { model: 'claude-opus-4', input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  // Opus 4.0 (also its dated name claude-opus-4-2025…) and 4.1 cost three times more than later Opus 4 models.
+  { model: 'claude-opus-4-0', input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  { model: 'claude-opus-4-1', input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
+  { model: 'claude-opus-4-2025', input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },
   { model: 'claude-sonnet-5', input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   { model: 'claude-sonnet-4', input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
   { model: 'claude-haiku-5-5', input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },

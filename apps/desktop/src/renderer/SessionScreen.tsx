@@ -17,23 +17,36 @@ import { PriceSettings } from './Cost';
 import { PlanningScreen } from './Planning';
 import { SetupScreen } from './Setup';
 import { keepFor } from './kept';
+import { useClickOutside, useEscape } from './Dialog';
 import { recall, remember } from './storage';
 import { TaskDetail } from './TaskDetail';
 import { UpdateButton, VersionSettings } from './UpdateButton';
 
 // Nav from issue #34: Home first, agent setup behind the Settings gear, and
-// GitHub, locks and overlaps together under Code.
-type View = 'home' | 'board' | 'planning' | 'agents' | 'code' | 'memory' | 'settings' | 'setup';
+// GitHub, locks and overlaps together under Code. Agent chats are "Chats" so
+// they are not mistaken for setting agents up (issue #64).
+type View = 'home' | 'board' | 'planning' | 'chats' | 'code' | 'memory' | 'settings' | 'setup';
 const NAV: { label: string; view: View }[] = [
   { label: 'Home', view: 'home' },
   { label: 'Board', view: 'board' },
   { label: 'Planning', view: 'planning' },
-  { label: 'Agents', view: 'agents' },
+  { label: 'Chats', view: 'chats' },
   { label: 'Code', view: 'code' },
   { label: 'Memory', view: 'memory' },
 ];
 
 export type CodeTab = 'github' | 'issues' | 'locks' | 'overlaps';
+export type SettingsTab = 'agents' | 'engine' | 'prices' | 'notifications' | 'versions';
+const SETTINGS_TABS: { label: string; tab: SettingsTab }[] = [
+  { label: 'Agents', tab: 'agents' },
+  { label: 'Game engine', tab: 'engine' },
+  { label: 'Model prices', tab: 'prices' },
+  { label: 'Notifications', tab: 'notifications' },
+  { label: 'Versions', tab: 'versions' },
+];
+
+/** One title bar popover at a time (issue #64). */
+type Popover = 'menu' | 'invite' | 'snapshot' | null;
 
 const STATUS_LABEL = {
   idle: 'Not connected',
@@ -98,10 +111,14 @@ export function SessionScreen({ state }: { state: AppState }) {
   const editable = state.canEditTasks;
   const youId = session.you?.id ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [inviteOpen, setInviteOpen] = useState(false);
-  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  const [popover, setPopover] = useState<Popover>(null);
   const [view, setView] = useState<View>('home');
   const [codeTab, setCodeTab] = useState<CodeTab>('github');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('agents');
+  const openSettings = (tab: SettingsTab = 'agents') => {
+    setSettingsTab(tab);
+    setView('settings');
+  };
   const [planFocus, setPlanFocus] = useState<{ id: string | null; filter: FeatureState | null }>({ id: null, filter: null });
   const [chatId, setChatId] = useState<string | null>(null);
   const [newChatAgentId, setNewChatAgentId] = useState<string | null>(null);
@@ -112,7 +129,7 @@ export function SessionScreen({ state }: { state: AppState }) {
     setNewChatAgentId(null);
     setChatId(id);
     setSelectedId(null);
-    setView('agents');
+    setView('chats');
   };
   const selected = session.tasks.find((t) => t.id === selectedId) ?? null;
   const overlaps = useMemo(
@@ -173,7 +190,8 @@ export function SessionScreen({ state }: { state: AppState }) {
     setCodeTab(tab);
     setView('code');
   };
-  const showSide = !!selected || (view === 'agents' && !!openChat);
+  const showSide = !!selected || (view === 'chats' && !!openChat);
+  useEscape(() => setSelectedId(null), !!selected);
 
   return (
     <div className={`shell${showSide && !(sideHidden && !selected) ? '' : ' no-side'}`}>
@@ -197,29 +215,26 @@ export function SessionScreen({ state }: { state: AppState }) {
             );
           })}
         </div>
-        {hosting && (
-          <button className="secondary" onClick={() => setSnapshotOpen((open) => !open)} title="Save the board, planning and memory as they are now, say before a big change">
-            Snapshot
-          </button>
-        )}
-        {hosting && (
-          <button className="secondary" onClick={() => setInviteOpen((open) => !open)}>
-            Invite
-          </button>
-        )}
         <button
           className={view === 'settings' ? 'secondary gear active' : 'secondary gear'}
-          onClick={() => setView('settings')}
-          title="Settings: agents, API keys and notifications"
+          onClick={() => openSettings()}
+          title="Settings: agents, API keys, model prices and notifications"
           aria-label="Settings"
         >
           ⚙
         </button>
-        <button className="secondary" onClick={() => void window.pct.leave()}>
-          {hosting ? 'Stop hosting' : 'Leave'}
-        </button>
-        {hosting && inviteOpen && <InvitePopover hosting={hosting} onClose={() => setInviteOpen(false)} />}
-        {hosting && snapshotOpen && <SnapshotPopover canTag={!!state.workspace?.folder && !state.workspace.error} onClose={() => setSnapshotOpen(false)} />}
+        {hosting ? (
+          <SessionMenu
+            hosting={hosting}
+            popover={popover}
+            onPopover={setPopover}
+            canTag={!!state.workspace?.folder && !state.workspace.error}
+          />
+        ) : (
+          <button className="secondary" onClick={() => void window.pct.leave()}>
+            Leave
+          </button>
+        )}
       </header>
 
       <nav className="sidebar">
@@ -234,7 +249,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           >
             {item.label}
             {item.view === 'home' && needs.length > 0 && <span className="nav-count">{needs.length}</span>}
-            {item.view === 'agents' && approvals > 0 && <span className="nav-count">{approvals}</span>}
+            {item.view === 'chats' && approvals > 0 && <span className="nav-count">{approvals}</span>}
           </button>
         ))}
         <WorkspaceCard local={state.workspace} tasks={session.tasks} onOpenTask={setSelectedId} onSetup={() => setView('setup')} />
@@ -253,8 +268,8 @@ export function SessionScreen({ state }: { state: AppState }) {
               setPlanFocus({ id: null, filter });
               setView('planning');
             }}
-            onInvite={() => setInviteOpen(true)}
-            onSettings={() => setView('settings')}
+            onInvite={() => setPopover('invite')}
+            onSettings={openSettings}
             onSetup={() => setView('setup')}
             onCode={openCode}
           />
@@ -272,22 +287,44 @@ export function SessionScreen({ state }: { state: AppState }) {
         ) : view === 'memory' ? (
           <MemoryScreen state={state} onOpenTask={setSelectedId} onOpenChat={showChat} />
         ) : view === 'settings' ? (
-          <div className="agents-screen">
-            <AgentsScreen
-              state={state}
-              onOpenChat={(agentId) => {
-                const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
-                setChatId(existing?.id ?? null);
-                setNewChatAgentId(existing ? null : agentId);
-                setView('agents');
-              }}
-            />
-            <EngineSettings state={state} />
-            <PriceSettings state={state} />
-            <NotificationSettings state={state} />
-            <VersionSettings />
+          <div className="agents-screen settings-screen">
+            <header className="screen-header">
+              <h1>Settings</h1>
+            </header>
+            <div className="tabs" role="tablist">
+              {SETTINGS_TABS.map((t) => (
+                <button
+                  key={t.tab}
+                  role="tab"
+                  aria-selected={settingsTab === t.tab}
+                  className={settingsTab === t.tab ? 'nav active' : 'nav'}
+                  onClick={() => setSettingsTab(t.tab)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {settingsTab === 'agents' ? (
+              <AgentsScreen
+                state={state}
+                onOpenChat={(agentId) => {
+                  const existing = [...session.chats].sort((a, b) => b.updatedAt - a.updatedAt).find((c) => c.agentId === agentId);
+                  setChatId(existing?.id ?? null);
+                  setNewChatAgentId(existing ? null : agentId);
+                  setView('chats');
+                }}
+              />
+            ) : settingsTab === 'engine' ? (
+              <EngineSettings state={state} />
+            ) : settingsTab === 'prices' ? (
+              <PriceSettings state={state} />
+            ) : settingsTab === 'notifications' ? (
+              <NotificationSettings state={state} />
+            ) : (
+              <VersionSettings />
+            )}
           </div>
-        ) : view === 'agents' ? (
+        ) : view === 'chats' ? (
           <ChatScreen
             state={state}
             chatId={chatId}
@@ -296,7 +333,7 @@ export function SessionScreen({ state }: { state: AppState }) {
               setNewChatAgentId(null);
               setChatId(id);
             }}
-            onSetup={() => setView('settings')}
+            onSetup={() => openSettings('agents')}
           />
         ) : view === 'board' ? (
           <Board
@@ -373,7 +410,7 @@ export function SessionScreen({ state }: { state: AppState }) {
           prices={session.prices}
           onClose={() => setSelectedId(null)}
         />
-      ) : view === 'agents' && openChat ? (
+      ) : view === 'chats' && openChat ? (
         sideHidden ? (
           <button className="side-show" onClick={() => setSideHidden(false)} title="Show the chat's context, handoff and locks">
             ‹
@@ -382,6 +419,62 @@ export function SessionScreen({ state }: { state: AppState }) {
           <ChatSidePanel state={state} chat={openChat} onSelect={setChatId} onCollapse={() => setSideHidden(true)} />
         )
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * The host's session actions in one menu (issue #64): Invite, Snapshot and
+ * Stop hosting. Only one of its popovers is open at a time; Escape or a click
+ * outside closes it.
+ */
+function SessionMenu({
+  hosting,
+  popover,
+  onPopover,
+  canTag,
+}: {
+  hosting: HostingInfo;
+  popover: Popover;
+  onPopover: (popover: Popover) => void;
+  canTag: boolean;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const close = () => onPopover(null);
+  useEscape(close, popover !== null);
+  useClickOutside(ref, close, popover !== null);
+  return (
+    <div ref={ref} className="session-menu">
+      <button
+        className={popover ? 'secondary active' : 'secondary'}
+        aria-haspopup="menu"
+        aria-expanded={popover === 'menu'}
+        onClick={() => onPopover(popover ? null : 'menu')}
+      >
+        Session ▾
+      </button>
+      {popover === 'menu' && (
+        <div className="popover card menu" role="menu">
+          <button role="menuitem" className="menu-item" onClick={() => onPopover('invite')} autoFocus>
+            Invite…<span className="muted small">Code for your friend to join</span>
+          </button>
+          <button role="menuitem" className="menu-item" onClick={() => onPopover('snapshot')}>
+            Snapshot…<span className="muted small">Save the board, planning and memory as they are now</span>
+          </button>
+          <button
+            role="menuitem"
+            className="menu-item bad"
+            onClick={() => {
+              close();
+              void window.pct.leave();
+            }}
+          >
+            Stop hosting<span className="muted small">Ends the session for everyone until you host again</span>
+          </button>
+        </div>
+      )}
+      {popover === 'invite' && <InvitePopover hosting={hosting} onClose={close} />}
+      {popover === 'snapshot' && <SnapshotPopover canTag={canTag} onClose={close} />}
     </div>
   );
 }

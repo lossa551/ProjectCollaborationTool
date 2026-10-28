@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppState } from '../common/api';
 import { ConnectScreen } from './ConnectScreen';
+import { DialogHost } from './Dialog';
 import { SessionScreen } from './SessionScreen';
 
 export function App() {
@@ -16,7 +17,12 @@ export function App() {
   if (!state) return null;
   const { status } = state.session;
   const inSession = status === 'connected' || status === 'reconnecting' || status === 'connecting';
-  return inSession ? <SessionScreen state={state} /> : <ConnectScreen error={state.session.error?.message ?? null} />;
+  return (
+    <>
+      {inSession ? <SessionScreen state={state} /> : <ConnectScreen error={state.session.error?.message ?? null} />}
+      <DialogHost />
+    </>
+  );
 }
 
 /** Marks you idle when the window is in the background. */

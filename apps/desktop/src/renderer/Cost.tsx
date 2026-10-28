@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   DEFAULT_PRICES,
   ModelPrice,
@@ -82,27 +82,48 @@ export function BudgetField({
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(budget === null ? '' : String(budget));
+  const [invalid, setInvalid] = useState(false);
   useEffect(() => setValue(budget === null ? '' : String(budget)), [budget]);
 
   const save = (event: FormEvent) => {
     event.preventDefault();
     const amount = Number(value.replace(',', '.').replace('$', '').trim());
-    if (!Number.isFinite(amount) || amount <= 0) return;
+    if (!value.trim() || !Number.isFinite(amount) || Math.round(amount * 100) <= 0) return setInvalid(true);
     onChange(Math.round(amount * 100) / 100);
     setEditing(false);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setInvalid(false);
+    setValue(budget === null ? '' : String(budget));
   };
 
   if (editing) {
     return (
-      <form className="budget-form row" onSubmit={save}>
-        <span className="muted">$</span>
-        <input autoFocus inputMode="decimal" value={value} placeholder="5.00" onChange={(e) => setValue(e.target.value)} aria-label="Budget in dollars" />
-        <button type="submit" disabled={disabled}>
-          Set
-        </button>
-        <button type="button" className="secondary" onClick={() => setEditing(false)}>
-          Cancel
-        </button>
+      <form className="budget-form" onSubmit={save}>
+        <div className="row">
+          <span className="muted">$</span>
+          <input
+            autoFocus
+            inputMode="decimal"
+            value={value}
+            placeholder="5.00"
+            onChange={(e) => {
+              setValue(e.target.value);
+              setInvalid(false);
+            }}
+            onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), cancel())}
+            aria-label="Budget in dollars"
+            aria-invalid={invalid}
+          />
+          <button type="submit" disabled={disabled}>
+            Set
+          </button>
+          <button type="button" className="secondary" onClick={cancel}>
+            Cancel
+          </button>
+        </div>
+        {invalid && <p className="error small">Enter an amount above 0, e.g. 5 or 2.50.</p>}
       </form>
     );
   }
@@ -159,9 +180,26 @@ const PRICE_COLUMNS: { key: Exclude<keyof ModelPrice, 'model'>; label: string }[
 export function PriceSettings({ state }: { state: AppState }) {
   const { session } = state;
   const online = session.status === 'connected';
-  const [drafts, setDrafts] = useState(() => session.prices.map(toDraft));
   const saved = JSON.stringify(session.prices.map(toDraft));
-  useEffect(() => setDrafts(JSON.parse(saved) as PriceDraft[]), [saved]);
+  // The saved table the drafts started from. When someone else saves while you
+  // are editing, your edits stay and a notice says so (issue #63).
+  const [base, setBase] = useState(saved);
+  const [drafts, setDrafts] = useState(() => JSON.parse(saved) as PriceDraft[]);
+  const yourSave = useRef<string | null>(null);
+  const editing = JSON.stringify(drafts) !== base;
+  useEffect(() => {
+    if (saved === base) return;
+    if (!editing || saved === yourSave.current) {
+      yourSave.current = null;
+      setBase(saved);
+      setDrafts(JSON.parse(saved) as PriceDraft[]);
+    }
+  }, [saved]);
+  const changedElsewhere = saved !== base && editing;
+  const useTheirs = () => {
+    setBase(saved);
+    setDrafts(JSON.parse(saved) as PriceDraft[]);
+  };
   const table = fromDrafts(drafts);
   const changed = table !== null && JSON.stringify(table) !== JSON.stringify(session.prices);
   const used = new Set(session.usage.filter((r) => r.source === 'priced').map((r) => r.model));
@@ -174,7 +212,8 @@ export function PriceSettings({ state }: { state: AppState }) {
           <h2>Model prices</h2>
           <p className="muted small">
             US dollars per million tokens, used to estimate what agents cost. A row counts for every model whose name
-            starts with it, so <code>claude-opus-4</code> covers all Opus 4 versions. Claude Code reports its own cost and
+            starts with it and the longest match wins, so <code>claude-opus-4</code> covers Opus 4 versions without a row of
+            their own. Claude Code reports its own cost and
             local Ollama models are free. Shared with everyone in the session; check your provider’s price page when
             unsure.
           </p>
@@ -218,6 +257,14 @@ export function PriceSettings({ state }: { state: AppState }) {
         </tbody>
       </table>
       {table === null && <p className="error small">Prices must be numbers of 0 or more.</p>}
+      {changedElsewhere && (
+        <p className="warning small">
+          Someone else changed the price table while you were editing. Saving replaces their change with yours.{' '}
+          <button className="link small" onClick={useTheirs}>
+            Use theirs instead
+          </button>
+        </p>
+      )}
       <UnpricedModels used={used} prices={table ?? session.prices} />
       <div className="row">
         <button
@@ -231,7 +278,14 @@ export function PriceSettings({ state }: { state: AppState }) {
           Start from the default prices
         </button>
         <span className="grow" />
-        <button disabled={!online || !changed} onClick={() => table && window.pct.setPrices(table)}>
+        <button
+          disabled={!online || !changed}
+          onClick={() => {
+            if (!table) return;
+            yourSave.current = JSON.stringify(table.map(toDraft));
+            window.pct.setPrices(table);
+          }}
+        >
           Save prices
         </button>
       </div>

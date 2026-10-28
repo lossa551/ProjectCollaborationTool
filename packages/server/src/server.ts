@@ -764,13 +764,20 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     }
   }, heartbeatMs);
 
-  await new Promise<void>((resolve, reject) => {
-    http.once('error', reject);
-    http.listen(options.port ?? 7420, options.host ?? '0.0.0.0', () => {
-      http.off('error', reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      http.once('error', reject);
+      http.listen(options.port ?? 7420, options.host ?? '0.0.0.0', () => {
+        http.off('error', reject);
+        resolve();
+      });
     });
-  });
+  } catch (error) {
+    // A busy port: leave nothing running, so the caller can try another.
+    clearInterval(heartbeat);
+    wss.close();
+    throw error;
+  }
   const port = (http.address() as AddressInfo).port;
   github.start();
   const scheme = options.tls ? 'wss' : 'ws';

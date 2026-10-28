@@ -226,7 +226,7 @@ function TaskCard({
         </span>
       ))}
       <span className="task-meta">
-        <TaskPeople task={task} ownerOnline={ownerOnline} agents={[...new Set(working.map(agentName))]} />
+        <TaskPeople task={task} ownerOnline={ownerOnline} agents={agentsOnTask(working, agentName)} />
         {locks.length > 0 && (
           <span className={locks.some((l) => l.abandoned) ? 'warning' : 'muted'} title={locks.map((l) => l.path).join('\n')}>
             {locks.length} {locks.length === 1 ? 'lock' : 'locks'}
@@ -254,17 +254,51 @@ function TaskCard({
   );
 }
 
-/** Who is accountable and which agent is on it: "Martin · Builder working", not "Unassigned" while an agent works. */
-function TaskPeople({ task, ownerOnline, agents }: { task: Task; ownerOnline: boolean; agents: string[] }) {
-  const working = agents.length > 0 && <span className="agent-working">{agents.join(', ')} working</span>;
-  if (!task.owner) return working ? <span className="owner">{working}</span> : <span className="muted">Unassigned</span>;
+/** Each busy agent once; waiting for you wins over working when it has several chats on the task. */
+function agentsOnTask(working: ChatInfo[], agentName: (chat: ChatInfo) => string): AgentOnTask[] {
+  const byName = new Map<string, boolean>();
+  for (const chat of working) byName.set(agentName(chat), (byName.get(agentName(chat)) ?? false) || chat.state === 'waiting');
+  return [...byName].map(([name, waiting]) => ({ name, waiting }));
+}
+
+type AgentOnTask = { name: string; waiting: boolean };
+
+/**
+ * Who is accountable and which agent is on it: "Martin · Builder working", not
+ * "Unassigned" while an agent works. An agent waiting for approval (or past its
+ * budget) says so, and an agent that owns the task is not named twice.
+ */
+function TaskPeople({ task, ownerOnline, agents }: { task: Task; ownerOnline: boolean; agents: AgentOnTask[] }) {
+  const parts = agents.map((agent) => {
+    const name = task.owner?.kind === 'agent' && task.owner.name === agent.name ? '' : `${agent.name} `;
+    return agent.waiting ? (
+      <span key={agent.name} className="agent-waiting">
+        {name}waiting for you
+      </span>
+    ) : (
+      <span key={agent.name} className="agent-working">
+        {name}working
+      </span>
+    );
+  });
+  const busy = parts.length > 0 && (
+    <>
+      {parts.map((part, i) => (
+        <span key={i}>
+          {i > 0 && ', '}
+          {part}
+        </span>
+      ))}
+    </>
+  );
+  if (!task.owner) return busy ? <span className="owner">{busy}</span> : <span className="muted">Unassigned</span>;
   return (
     <span className="owner">
       <Avatar name={task.owner.name} kind={task.owner.kind} status={ownerOnline ? 'active' : 'offline'} small />
       {task.owner.name}
       {!ownerOnline && <span className="muted"> (offline)</span>}
-      {working && <span className="muted"> · </span>}
-      {working}
+      {busy && <span className="muted"> · </span>}
+      {busy}
     </span>
   );
 }
@@ -291,7 +325,7 @@ function AddTask({ stage }: { stage: TaskStage }) {
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}
+        onKeyDown={(e) => e.key === 'Escape' && (e.preventDefault(), setOpen(false))}
         onBlur={() => !title.trim() && setOpen(false)}
         placeholder="Task title, then Enter"
         maxLength={200}

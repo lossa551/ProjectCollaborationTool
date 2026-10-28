@@ -13,6 +13,7 @@ import type { AppState } from '../common/api';
 import { folderLabel } from '../common/folder-notes';
 import { FolderNotesScreen } from './FolderNotes';
 import { LiveText } from './LiveText';
+import { ask } from './Dialog';
 
 // Screen 6: project memory and the bloat check. Memory is what everyone,
 // people and agents, should know about the project; every agent gets it as
@@ -206,7 +207,9 @@ function MemoryCard({
                 {' · '}
                 <button
                   className="link small bad"
-                  onClick={() => confirm(`Remove "${entry.title}" from project memory?`) && window.pct.editMemory({ op: 'delete', id: entry.id })}
+                  onClick={async () =>
+                    (await ask(`Remove "${entry.title}" from project memory?`, { confirm: 'Remove', danger: true })) && window.pct.editMemory({ op: 'delete', id: entry.id })
+                  }
                 >
                   Remove
                 </button>

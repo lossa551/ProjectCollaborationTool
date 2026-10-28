@@ -24,9 +24,10 @@ import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
 import { NODE_URL, describeEditor } from './Engine';
 import { PullBadge } from './GitHub';
-import { confirmCloseIssue } from './Issues';
+import { LinkPicker, confirmCloseIssue } from './Issues';
 import { RiskBadge } from './Roadmap';
 import { recall, remember } from './storage';
+import { ask, tell, useEscape } from './Dialog';
 
 // Home (issue #34): the screen a session opens on. What needs you, who is doing
 // what, how far the features are, and what changed while you were away. It
@@ -90,7 +91,7 @@ export function HomeScreen({
   go: (target: NeedTarget) => void;
   onFeatures: (filter: FeatureState | null) => void;
   onInvite: () => void;
-  onSettings: () => void;
+  onSettings: (tab?: 'agents' | 'engine') => void;
   onSetup: () => void;
   onCode: (tab: 'github' | 'issues' | 'locks') => void;
 }) {
@@ -122,11 +123,16 @@ function NeedsYou({ needs, online, go }: { needs: NeedItem[]; online: boolean; g
     if (!item.act) return go(item.target);
     if (item.act.type === 'close-issue') {
       const { number, comment } = item.act;
-      void confirmCloseIssue({ number, title: item.detail ?? '' }, comment).then((error) => error && alert(error));
+      void confirmCloseIssue({ number, title: item.detail ?? '' }, comment).then((error) => {
+        if (error) void tell('The issue was not closed', error);
+      });
       return;
     }
     if (item.act.type === 'release-lock') return window.pct.releaseLock(item.act.lockId);
-    if (confirm(`${item.text}. Recover the lock? Their unsaved work on it may be lost.`)) window.pct.recoverLock(item.act.lockId);
+    const { lockId } = item.act;
+    void ask(`${item.text}. Recover the lock?`, { detail: 'Their unsaved work on it may be lost.', confirm: 'Recover', danger: true }).then(
+      (ok) => ok && window.pct.recoverLock(lockId),
+    );
   };
   return (
     <section className="home-panel needs">
@@ -314,10 +320,12 @@ function WhoIsDoing({ state, go }: { state: AppState; go: (target: NeedTarget) =
 
 function Digest({ state, since, onMarkSeen, go }: { state: AppState; since: number | null; onMarkSeen: () => void; go: (target: NeedTarget) => void }) {
   const { session } = state;
-  const groups = useMemo(
-    () => (since === null ? [] : sinceLastHere(session, since, session.you?.name ?? null)),
-    [session, since],
-  );
+  const groups = useMemo(() => {
+    if (since === null) return [];
+    // New issues still to triage are in the Issues to triage panel; not listed twice (issue #65).
+    const triage = session.github.repo ? new Set(untriagedIssues(session).map((i) => i.number)) : new Set<number>();
+    return sinceLastHere(session, since, session.you?.name ?? null, { leaveOutIssues: triage });
+  }, [session, since]);
   return (
     <section className="home-panel digest">
       <h2>
@@ -410,6 +418,9 @@ function Issues({ state, since, onCode }: { state: AppState; since: number | nul
     () => untriagedIssues(session).sort((a, b) => b.createdAt - a.createdAt),
     [session.github, session.planning, session.tasks, session.issueMarks],
   );
+  // The issue whose link picker is open, in place on its row (issue #65).
+  const [picking, setPicking] = useState<number | null>(null);
+  useEscape(() => setPicking(null), picking !== null);
   if (!github.repo || github.issues.length === 0) return null;
   const fresh = since === null ? [] : newIssues(session, since);
   return (
@@ -429,10 +440,29 @@ function Issues({ state, since, onCode }: { state: AppState; since: number | nul
               <span className="grow ellipsis" title={issue.title}>
                 <span className="muted">#{issue.number}</span> {issue.title}
               </span>
-              {fresh.includes(issue) && <span className="feature-badge feature-unverified">New</span>}
-              <button className="secondary small" onClick={() => onCode('issues')}>
-                Link
-              </button>
+              {picking === issue.number ? (
+                <LinkPicker
+                  state={state}
+                  exclude={[]}
+                  onPick={(kind, id) => {
+                    window.pct.editPlanning({ op: 'issue', number: issue.number, link: { kind, id, linked: true } });
+                    setPicking(null);
+                  }}
+                  onCancel={() => setPicking(null)}
+                />
+              ) : (
+                <>
+                  {fresh.includes(issue) && <span className="feature-badge feature-unverified">New</span>}
+                  <button
+                    className="secondary small"
+                    disabled={!state.canEditTasks}
+                    onClick={() => setPicking(issue.number)}
+                    title="Link it to a feature or task"
+                  >
+                    Link…
+                  </button>
+                </>
+              )}
             </li>
           ))}
         </ul>
@@ -479,7 +509,10 @@ function Locks({ state, go, onCode }: { state: AppState; go: (target: NeedTarget
               <button
                 className="secondary small"
                 disabled={!online}
-                onClick={() => confirm(`Recover ${lock.path} from ${lock.holder.name}? Their unsaved work on it may be lost.`) && window.pct.recoverLock(lock.id)}
+                onClick={async () =>
+                  (await ask(`Recover ${lock.path} from ${lock.holder.name}?`, { detail: 'Their unsaved work on it may be lost.', confirm: 'Recover', danger: true })) &&
+                  window.pct.recoverLock(lock.id)
+                }
               >
                 Recover
               </button>
@@ -498,7 +531,7 @@ function Locks({ state, go, onCode }: { state: AppState; go: (target: NeedTarget
 }
 
 /** The game engine at a glance: is the editor open, what agents get, and the one click that is missing. */
-function EnginePanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+function EnginePanel({ state, onSettings }: { state: AppState; onSettings: (tab: 'engine') => void }) {
   const { engine } = state;
   if (engine.unreal && !engine.godotProject) return <UnrealPanel state={state} onSettings={onSettings} />;
   return <GodotPanel state={state} onSettings={onSettings} />;
@@ -533,7 +566,7 @@ function AgentsRow({ state }: { state: AppState }) {
 
 const BRIDGE_NAMES = { godot: 'the Godot MCP server', summer: 'Summer Engine', unreal: 'EngineWire in the Unreal Editor' };
 
-function GodotPanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+function GodotPanel({ state, onSettings }: { state: AppState; onSettings: (tab: 'engine') => void }) {
   const { engine, session } = state;
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ error: boolean; text: string } | null>(null);
@@ -556,7 +589,7 @@ function GodotPanel({ state, onSettings }: { state: AppState; onSettings: () => 
       <h2>
         Game engine
         <span className="muted">{editor?.projectOpen ? `${name} open` : editor ? `${name} running` : 'editor closed'}</span>
-        <button className="link small" onClick={onSettings}>
+        <button className="link small" onClick={() => onSettings('engine')}>
           Settings
         </button>
       </h2>
@@ -592,7 +625,7 @@ function GodotPanel({ state, onSettings }: { state: AppState; onSettings: () => 
             <span className="grow">
               Godot not found yet<span className="muted small"> · open your project in Godot once, or choose it, so agents can run the tests</span>
             </span>
-            <button className="secondary small" onClick={onSettings}>
+            <button className="secondary small" onClick={() => onSettings('engine')}>
               Choose
             </button>
           </li>
@@ -604,7 +637,7 @@ function GodotPanel({ state, onSettings }: { state: AppState; onSettings: () => 
 }
 
 /** Unreal (issue #11): the editor, EngineWire, the engine for the tests, and who holds the assets. */
-function UnrealPanel({ state, onSettings }: { state: AppState; onSettings: () => void }) {
+function UnrealPanel({ state, onSettings }: { state: AppState; onSettings: (tab: 'engine') => void }) {
   const { engine, session } = state;
   const unreal = engine.unreal!;
   const [busy, setBusy] = useState(false);
@@ -631,7 +664,7 @@ function UnrealPanel({ state, onSettings }: { state: AppState; onSettings: () =>
       <h2>
         Game engine
         <span className="muted">{open ? 'Unreal Editor open' : engine.editor?.kind === 'unreal' ? 'Unreal Editor running' : 'editor closed'}</span>
-        <button className="link small" onClick={onSettings}>
+        <button className="link small" onClick={() => onSettings('engine')}>
           Settings
         </button>
       </h2>
@@ -687,22 +720,39 @@ function ActivityFeed({ state, go }: { state: AppState; go: (target: NeedTarget)
   const taskIds = new Set(session.tasks.map((t) => t.id));
   return (
     <section className="home-panel activity">
-      <h2>Activity</h2>
+      <h2 title="Changes while the session runs: tasks, planning, locks, and what the host's app noticed on GitHub">Activity</h2>
       <ol>
         {entries.map((entry) => {
           const clickable = entry.taskId !== null && taskIds.has(entry.taskId);
-          return (
-            <li key={entry.id} className={clickable ? 'clickable' : undefined} onClick={() => clickable && go({ screen: 'task', taskId: entry.taskId! })}>
+          const line = (
+            <>
               <span>
                 {entry.actorName && <strong>{entry.actorName} </strong>}
                 {entry.text}
               </span>
               <time className="muted">{time(entry.at)}</time>
+            </>
+          );
+          // A button, so Tab reaches it and Enter opens the task (issue #66).
+          return (
+            <li key={entry.id}>
+              {clickable ? (
+                <button className="activity-row" onClick={() => go({ screen: 'task', taskId: entry.taskId! })} title="Open the task">
+                  {line}
+                </button>
+              ) : (
+                <div className="activity-row">{line}</div>
+              )}
             </li>
           );
         })}
       </ol>
-      {entries.length === 0 && <p className="muted">Nothing yet.</p>}
+      {entries.length === 0 && (
+        <p className="muted">
+          Nothing yet. Changes to tasks, planning and locks show here as they happen. What happened on GitHub while the session was closed is under Since you
+          were last here.
+        </p>
+      )}
     </section>
   );
 }
@@ -725,7 +775,7 @@ function SetupChecklist({
 }: {
   state: AppState;
   onInvite: () => void;
-  onSettings: () => void;
+  onSettings: (tab?: 'agents' | 'engine') => void;
   onSetup: () => void;
   onCode: (tab: 'github') => void;
 }) {
@@ -799,7 +849,7 @@ function SetupChecklist({
     label: 'Add your first agent',
     hint: 'A model API, a local model or a command-line agent like Claude Code.',
     done: session.agents.length > 0,
-    action: { label: 'Add agent', run: onSettings },
+    action: { label: 'Add agent', run: () => onSettings('agents') },
   });
   if (workspace?.folder) {
     steps.push({

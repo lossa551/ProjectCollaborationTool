@@ -22,6 +22,7 @@ import type { AppState } from '../common/api';
 import { PlanIssues } from './Issues';
 import { LiveText } from './LiveText';
 import { RoadmapView } from './Roadmap';
+import { ask } from './Dialog';
 
 // Screen 4: the planning space. Features, ideas and notes that everyone edits
 // live. A feature is written up together, then approved: that creates its
@@ -316,8 +317,8 @@ function PlanEditor({
       <button
         className="danger"
         disabled={!editable}
-        onClick={() => {
-          if (!confirm(`Delete "${item.title}" for everyone? Its tasks stay on the board.`)) return;
+        onClick={async () => {
+          if (!(await ask(`Delete "${item.title}" for everyone?`, { detail: 'Its tasks stay on the board.', confirm: 'Delete', danger: true }))) return;
           window.pct.editPlanning({ op: 'delete', id: item.id });
           onDeleted();
         }}
