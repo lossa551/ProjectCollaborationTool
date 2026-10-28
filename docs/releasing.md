@@ -39,8 +39,33 @@ requests target `beta`.
   `beta` to `main` and merge it. That push to `main` ships it as a normal
   release; bump MINOR in the same PR if it finishes a milestone.
 
-There is no beta channel for the app itself: everyone on the app gets every
-release from `main`.
+There is no beta channel in the app's updates: everyone gets every release
+from `main`. To try `beta` on your PC, use one of these.
+
+**Beta installer (no tools needed).** Every push to `beta` and every pull
+request builds a Windows installer. On GitHub open Actions → CI, pick the
+latest run on `beta`, and download `windows-installer` under Artifacts (you
+must be signed in). Unzip it and run it. It installs over Foreus and uses the
+same data folder, so your sessions and settings carry over. Its version reads
+`0.x.0-beta.N` in Settings → Versions. A beta build does not update itself;
+press Update when you want the released version back.
+
+**From the clone (for quick changes).** Quit Foreus first (tray icon → Quit):
+both use the same data folder and only one can run at a time.
+
+```
+cd C:\Users\lossa\ProjectCollaborationTool
+git fetch origin
+git checkout beta
+git pull
+npm ci
+npm run desktop
+```
+
+Go back with `git checkout main` and start the installed Foreus again.
+
+Beta and released builds can be mixed in one session as long as the protocol
+version (Settings → Versions) is the same on both PCs.
 
 ## Release notes
 
