@@ -9,6 +9,8 @@ import {
   WORKSPACE_FILE_LIMIT,
   AGENT_ERROR_PREFIX,
   CONTEXT_WARN_TOKENS,
+  MEMORY_KIND_SINGULAR,
+  findMemory,
   approvalActivity,
   describeLayoutProblems,
   epicLayoutProblems,
@@ -79,6 +81,7 @@ import {
   EditFileInput,
   ListFilesInput,
   ReadFileInput,
+  ReadMemoryInput,
   runTestsTool,
   RecordTestResultInput,
   RunCommandInput,
@@ -247,6 +250,7 @@ const TOOL_ACTIVITY: Record<string, string> = {
   edit_file: 'Editing',
   run_command: 'Running',
   record_test_result: 'Recording a test result:',
+  read_memory: 'Reading project memory:',
   run_tests: 'Running the tests',
 };
 
@@ -258,6 +262,7 @@ const TOOL_LABEL: Record<string, string> = {
   edit_file: 'Edit',
   run_command: 'Run',
   record_test_result: 'Test result',
+  read_memory: 'Project memory',
   run_tests: 'Tests',
 };
 
@@ -1046,6 +1051,8 @@ export class AgentRunner {
       task,
       startedBy: this.options.startedBy,
       memory: this.client.getState().memory,
+      taskChatIds: chat.taskId ? this.client.getState().chats.filter((c) => c.taskId === chat.taskId && c.id !== chat.id).map((c) => c.id) : [],
+      readsMemory: agent.connection.type === 'api',
       folderNotes: this.runs.get(chat.id)?.folderNotes ?? [],
       worktree: this.runs.get(chat.id)?.worktree ?? null,
       recordsResults: agent.connection.type === 'api',
@@ -1496,6 +1503,18 @@ export class AgentRunner {
         show(`${result}: ${criterion.text}`, 'done', input.value.evidence);
         this.client.verifyCriterion(task.id, criterion.id, input.value.result, input.value.evidence);
         return ok(`Recorded "${criterion.text}" as ${input.value.result}.`);
+      }
+      case 'read_memory': {
+        const input = parseInput(ReadMemoryInput, call.input);
+        if (!input.ok) return error(input.error);
+        const found = findMemory(this.client.getState().memory, input.value.title);
+        if (!found.length) return error(`No project memory entry is called "${input.value.title}".`);
+        show(found.map((e) => e.title).join(', '), 'done');
+        return ok(
+          found
+            .map((e) => `${MEMORY_KIND_SINGULAR[e.kind]}${e.archived ? ' (archived)' : ''}: ${e.title}\n${e.body.trim() || '(no details)'}`)
+            .join('\n\n'),
+        );
       }
       case 'run_tests': {
         const input = parseInput(RunTestsInput, call.input);

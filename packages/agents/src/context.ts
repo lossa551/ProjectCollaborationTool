@@ -5,6 +5,7 @@ import {
   renderHandoff,
   renderFolderNotes,
   renderMemory,
+  MEMORY_EXPORT_PATH,
   type FolderNote,
   type MemoryEntry,
   type AgentProfile,
@@ -25,6 +26,10 @@ export interface ContextInput {
   startedBy: string;
   /** Project memory: decisions, conventions, known issues and plans. */
   memory: MemoryEntry[];
+  /** The chat's task's other chats: memory saved from them comes first (see memoryOrder). */
+  taskChatIds?: string[];
+  /** The agent has the read_memory tool (our own loop); CLI agents read docs/project-memory.md instead. */
+  readsMemory?: boolean;
   /** AGENTS.md notes for the folders the task touches, shallowest first (see notesForPaths). */
   folderNotes: FolderNote[];
   /** The chat's own copy of the project (branch and what it started from); null when it works in the project folder. */
@@ -85,7 +90,7 @@ interface Piece {
   text: string;
 }
 
-function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResults, worktree, engine }: ContextInput): Piece[] {
+function pieces({ agent, chat, task, startedBy, memory, taskChatIds, readsMemory, folderNotes, recordsResults, worktree, engine }: ContextInput): Piece[] {
   const out: Piece[] = [];
   out.push({
     label: 'Role and rules',
@@ -155,12 +160,24 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
     }
     out.push({ label: 'Game engine', detail: engine.bridge ?? 'Godot project', text: lines.join('\n') });
   }
-  const remembered = renderMemory(memory);
-  if (remembered) {
+  const remembered = renderMemory(memory, {
+    focus: {
+      chatIds: [chat.id, ...(taskChatIds ?? [])],
+      paths: [...(task?.scope ?? []), ...(task?.readFirst ?? []), ...(chat.handoff?.scope ?? []), ...(chat.handoff?.readFirst ?? [])],
+    },
+    readHint: readsMemory
+      ? 'read one with read_memory when it concerns your work'
+      : `their full text is in ${MEMORY_EXPORT_PATH}; read it there when one concerns your work, if the file is there`,
+  });
+  if (remembered.text) {
+    const shown = remembered.included.length + remembered.listed.length;
+    const parts = [`${shown} ${shown === 1 ? 'entry' : 'entries'}`];
+    if (remembered.listed.length) parts.push(`${remembered.listed.length} by title only`);
+    if (remembered.archived) parts.push(`${remembered.archived} archived left out`);
     out.push({
       label: 'Project memory',
-      detail: `${memory.length} ${memory.length === 1 ? 'entry' : 'entries'}`,
-      text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered}`,
+      detail: parts.join(', '),
+      text: `Project memory, agreed by the team. Follow these decisions and conventions, and keep the known issues in mind:\n\n${remembered.text}`,
     });
   }
   const notes = renderFolderNotes(folderNotes);
