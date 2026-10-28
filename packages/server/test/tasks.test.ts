@@ -147,4 +147,20 @@ describe('task board', () => {
       'Martin moved "Particles" to Testing',
     ]);
   });
+
+  it('shares the review-time duplicate answer as a flag on the task', async () => {
+    server = await startServer({ port: 0, host: '127.0.0.1' });
+    const martin = await join('Martin');
+    const friend = await join('Friend');
+    martin.createTask('Chest storage', { scope: ['scripts/world/**'] });
+    const task = (await waitFor(friend, (s) => s.tasks.length === 1)).tasks[0]!;
+    expect(task.duplicateCheck).toBeNull();
+
+    martin.recordDuplicateCheck(task.id, { verdict: 'duplicate', answer: '  Repeats Inventory in scripts/player/.  ', by: 'Reviewer', files: 2 });
+    const seen = await waitFor(friend, (s) => s.tasks[0]?.duplicateCheck !== null);
+    expect(seen.tasks[0]!.duplicateCheck).toMatchObject({ verdict: 'duplicate', answer: 'Repeats Inventory in scripts/player/.', by: 'Reviewer', files: 2 });
+    expect(seen.tasks[0]!.version).toBe(2);
+    const withFeed = await waitFor(friend, (s) => s.activity.some((a) => a.text.startsWith('Reviewer says')));
+    expect(withFeed.activity.map((a) => a.text)).toContain('Reviewer says "Chest storage" may add something that already exists');
+  });
 });

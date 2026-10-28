@@ -8,24 +8,29 @@ import { priceFor, tokenCost, type PriceTable, type UsageRow } from './usage.js'
 // cost view can show them apart. Small, frequent work like this should run on
 // the cheapest model there is, so the pickers default to it.
 
-export type DraftKind = 'commit' | 'notes';
+/** review: the review-time duplicate question (issue #93). */
+export type DraftKind = 'commit' | 'notes' | 'review';
 
 /** Folder note drafts' model calls are counted under this id, like commit drafts under commitDraftUsageId. */
 export const notesDraftUsageId = (profileId: string) => `folder-notes:${profileId}`;
 
+/** Answers to the review-time duplicate question are counted under this id. */
+export const reviewDraftUsageId = (profileId: string) => `duplicate-check:${profileId}`;
+
 export const draftUsageId = (kind: DraftKind, profileId: string) =>
-  kind === 'notes' ? notesDraftUsageId(profileId) : commitDraftUsageId(profileId);
+  kind === 'notes' ? notesDraftUsageId(profileId) : kind === 'review' ? reviewDraftUsageId(profileId) : commitDraftUsageId(profileId);
 
 /** Which kind of draft a usage id belongs to, or null for a chat. */
 export function draftKindOf(chatId: string): DraftKind | null {
   if (chatId.startsWith('commit-message:')) return 'commit';
   if (chatId.startsWith('folder-notes:')) return 'notes';
+  if (chatId.startsWith('duplicate-check:')) return 'review';
   return null;
 }
 
 /** True when the id is one of this agent's draft ids, so its usage counts as the agent's own. */
 export const isOwnDraft = (chatId: string, profileId: string) =>
-  chatId === commitDraftUsageId(profileId) || chatId === notesDraftUsageId(profileId);
+  chatId === commitDraftUsageId(profileId) || chatId === notesDraftUsageId(profileId) || chatId === reviewDraftUsageId(profileId);
 
 /** The usage rows of one agent's drafts of a kind. */
 export const draftRows = (rows: UsageRow[], kind: DraftKind, profileId: string) => {

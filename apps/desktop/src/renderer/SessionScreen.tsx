@@ -408,6 +408,8 @@ export function SessionScreen({ state }: { state: AppState }) {
           online={online}
           usage={session.usage}
           prices={session.prices}
+          duplicateChecking={state.duplicateChecks.includes(selected.id)}
+          notesAgent={state.notesAgent}
           onClose={() => setSelectedId(null)}
         />
       ) : view === 'chats' && openChat ? (

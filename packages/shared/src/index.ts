@@ -8,6 +8,7 @@ export * from './docs.js';
 export * from './planning.js';
 export * from './memory.js';
 export * from './bloat.js';
+export * from './duplicate-check.js';
 export * from './folder-notes.js';
 export * from './overview.js';
 export * from './roadmap.js';

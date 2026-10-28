@@ -245,6 +245,7 @@ const BRIDGE_SHORT: Record<EngineServer['kind'], string> = { godot: 'Godot', sum
 const DRAFT_PURPOSES: Record<DraftKind, string> = {
   commit: 'git commit messages',
   notes: 'short folder notes (AGENTS.md) that tell other agents what a folder is for',
+  review: 'a short review answer about a change',
 };
 
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';

@@ -167,7 +167,7 @@ function AgentSpend({ agent, state }: { agent: AgentProfile; state: AppState }) 
   const now = Date.now();
   const today = usageDay(now);
   const monday = weekStart(now);
-  const drafts = (['notes', 'commit'] as const)
+  const drafts = (['notes', 'commit', 'review'] as const)
     .map((kind) => ({ kind, ...draftTotals(state, kind, agent.id, now) }))
     .filter((d) => d.week.calls > 0);
   return (
@@ -182,7 +182,7 @@ function AgentSpend({ agent, state }: { agent: AgentProfile; state: AppState }) 
       </dd>
       {drafts.map((d) => (
         <Fragment key={d.kind}>
-          <dt>{d.kind === 'notes' ? 'Folder notes' : 'Commit messages'}</dt>
+          <dt>{d.kind === 'notes' ? 'Folder notes' : d.kind === 'review' ? 'Duplicate checks' : 'Commit messages'}</dt>
           <dd title="Drafts written outside any chat, counted in the totals above">
             <CostShort total={d.today} /> <span className="muted">today ·</span> <CostShort total={d.week} />{' '}
             <span className="muted">this week</span>

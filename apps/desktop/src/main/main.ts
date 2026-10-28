@@ -1,6 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import {
   AgentSaveMessage,
@@ -52,6 +53,13 @@ import {
   planSetup,
   setupFiles,
   withPresetLocks,
+  markNewSince,
+  duplicateQuestionPrompt,
+  parseDuplicateAnswer,
+  pullForBranch,
+  taskChangedFiles,
+  type BloatTrigger,
+  type Task,
   type CliTool,
 } from '@pct/shared';
 import { SCHEMA_VERSION, SqliteStorage, findShareableAddress, inspectBackup, startServer, tokenFromGitHubCli, type RunningServer } from '@pct/server';
@@ -109,7 +117,7 @@ import { EngineWatch, engineSettingsFor, findGodotOnPath, findUnrealOnPc } from 
 import { addEngineWire } from './unreal';
 import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateChannel, getUpdateState, setUpdateChannel, startUpdater } from './updater';
-import { GitError, clone, commitPaths, firstCommit, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
+import { GitError, branchDiff, clone, commitPaths, firstCommit, hasCommit, headCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { cutOffSentence, stopConfirmDetail, whoWouldBeCutOff } from '../common/background';
@@ -181,6 +189,7 @@ const appState = (): AppState => ({
   commitDraft,
   noteDrafts,
   notesAgent: currentNotesAgent(),
+  duplicateChecks: [...duplicateChecks],
   engine: engineNow(),
 });
 const pushState = () => window?.webContents.send(Channel.state, appState());
@@ -1379,7 +1388,7 @@ function approvePlan(input: unknown): Result {
 
 let bloatRunning = false;
 
-async function bloatCheck(): Promise<Result> {
+async function bloatCheck(trigger: BloatTrigger = 'manual'): Promise<Result> {
   const state = client.getState();
   if (state.status !== 'connected') return { ok: false, error: 'The result is shared with the session; it needs the session server.' };
   const folder = workspace?.folder;
@@ -1387,13 +1396,123 @@ async function bloatCheck(): Promise<Result> {
   if (bloatRunning) return { ok: false, error: 'A bloat check is already running.' };
   bloatRunning = true;
   try {
-    const report = await runBloatCheck(folder, state.you?.name ?? 'Someone', workspace?.workspace?.branch ?? null);
-    client.shareBloat(report);
+    const report = await runBloatCheck(folder, state.you?.name ?? 'Someone', workspace?.workspace?.branch ?? null, trigger);
+    // Compared with the report everyone has now, so the page can show what is new.
+    client.shareBloat(markNewSince(report, client.getState().bloat));
     return { ok: true };
   } catch (error) {
     return failure(error);
   } finally {
     bloatRunning = false;
+  }
+}
+
+// Scheduled bloat checks (issue #93): when main or beta (or master) moves in
+// your project folder, typically after a merge and a pull, and once a day
+// while the folder is open. Only this PC's folder is read; a commit already
+// in the shared report is not scanned again, and each head is scanned once
+// here, so two people on different branches do not take turns rescanning.
+const BLOAT_AUTO_BRANCHES = new Set(['main', 'master', 'beta']);
+const BLOAT_DAILY_MS = 24 * 60 * 60_000;
+const BLOAT_AUTO_CHECK_MS = 10 * 60_000;
+let bloatAutoScanned: string | null = null;
+
+async function autoBloatCheck() {
+  const state = client.getState();
+  const folder = workspace?.folder;
+  if (state.status !== 'connected' || !folder || workspace?.error || bloatRunning) return;
+  const branch = workspace?.workspace?.branch ?? null;
+  const commit = await headCommit(folder);
+  const last = state.bloat;
+  if (branch && commit && BLOAT_AUTO_BRANCHES.has(branch)) {
+    const key = `${folder}\n${branch}\n${commit}`;
+    if (bloatAutoScanned !== key) {
+      bloatAutoScanned = key;
+      if (last?.commit !== commit) {
+        await bloatCheck('merge');
+        return;
+      }
+    }
+  }
+  if (!last || Date.now() - last.ranAt >= BLOAT_DAILY_MS) await bloatCheck('daily');
+}
+
+setTimeout(() => {
+  void autoBloatCheck();
+  setInterval(() => void autoBloatCheck(), BLOAT_AUTO_CHECK_MS);
+}, 60_000);
+
+// The review-time duplicate question (issue #93): when you move a task to
+// review here, its reviewing agent (the feature's review pick on the roadmap,
+// else the folder notes agent) reads the change and the folder notes and
+// says whether the change adds something that already exists. One model
+// call; the answer goes on the task for everyone.
+const duplicateChecks = new Set<string>();
+
+/** The agent that answers for this task when nobody picks one. */
+function reviewAgentFor(task: Task): string | null {
+  const state = client.getState();
+  const exists = (id: string | null | undefined) => !!id && state.agents.some((a) => a.id === id);
+  const pick = task.featureId ? state.planning.find((i) => i.id === task.featureId)?.assign.review : undefined;
+  if (pick?.kind === 'agent' && exists(pick.id)) return pick.id;
+  const notes = currentNotesAgent();
+  return exists(notes) ? notes : null;
+}
+
+/** The task's change as a diff: its branch here, its agents' copies on this PC, and your uncommitted work on its branch. */
+async function taskDiff(folder: string, task: Task): Promise<string> {
+  const state = client.getState();
+  const parts: string[] = [];
+  for (const chat of state.chats) {
+    const copy = chat.worktree;
+    if (chat.taskId !== task.id || !copy || copy.owner.id !== state.you?.id || !existsSync(copy.folder)) continue;
+    parts.push(await worktreeDiff(copy.folder, { branch: copy.base, commit: copy.baseCommit }).catch(() => ''));
+  }
+  if (task.branch) {
+    const bases = [pullForBranch(state.github, task.branch)?.base, state.github.defaultBranch, 'main', 'master'].filter((b): b is string => !!b);
+    parts.push((await branchDiff(folder, task.branch, bases)) ?? '');
+    if (workspace?.workspace?.branch === task.branch) parts.push((await uncommittedChanges(folder).catch(() => null))?.diff ?? '');
+  }
+  return parts.filter((p) => p.trim()).join('\n');
+}
+
+async function askDuplicateCheck(taskId: unknown, agentInput: unknown): Promise<Result> {
+  const state = client.getState();
+  const task = state.tasks.find((t) => t.id === taskId);
+  if (!task) return { ok: false, error: 'That task no longer exists.' };
+  if (state.status !== 'connected') return { ok: false, error: 'The answer is shared with the session; it needs the session server.' };
+  const folder = workspace?.folder;
+  if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first (bottom left): the folder notes are read from it.' };
+  const agentId = typeof agentInput === 'string' && agentInput ? agentInput : reviewAgentFor(task);
+  const profile = state.agents.find((a) => a.id === agentId);
+  if (!profile) return { ok: false, error: 'Pick an agent to ask.' };
+  if (duplicateChecks.has(task.id)) return { ok: false, error: 'An agent is already looking at this task.' };
+  duplicateChecks.add(task.id);
+  pushState();
+  let started = false;
+  try {
+    const files = taskChangedFiles(task, state.workspaces, state.github, state.chats);
+    const diff = await taskDiff(folder, task);
+    if (files.length === 0 && !diff.trim()) return { ok: false, error: 'This task has no changes to look at yet.' };
+    const notePaths = await folderNotePaths();
+    const notes = (await Promise.all(notePaths.map(async (path) => ({ path, text: await readFile(join(folder, path), 'utf8').catch(() => '') })))).filter((n) => n.text.trim());
+    if (!localAgents.isRunning(profile.id)) {
+      const result = await startAgent(profile.id);
+      if (!result.ok) return result;
+      started = true;
+    }
+    const prompt = duplicateQuestionPrompt({ task, files, diff, notes });
+    const answer = parseDuplicateAnswer(await localAgents.draft(profile.id, prompt, task.id, new AbortController().signal, 'review'));
+    client.recordDuplicateCheck(task.id, { ...answer, by: profile.name, files: files.length });
+    return { ok: true };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    // Started only for this answer: stopped again, unless someone opened a chat with it meanwhile.
+    const chatting = client.getState().chats.some((c) => c.agentId === profile.id && c.state !== 'idle');
+    if (started && !chatting) void localAgents.stop(profile.id);
+    duplicateChecks.delete(task.id);
+    pushState();
   }
 }
 
@@ -1878,7 +1997,15 @@ ipcMain.on(Channel.createTask, (_event, title: unknown, stage: unknown) => {
 });
 ipcMain.on(Channel.updateTask, (_event, taskId: unknown, changes: unknown) => {
   const parsed = TaskUpdateMessage.safeParse({ type: 'task.update', taskId, changes });
-  if (parsed.success) client.updateTask(parsed.data.taskId, parsed.data.changes);
+  if (!parsed.success) return;
+  const before = client.getState().tasks.find((t) => t.id === parsed.data.taskId);
+  client.updateTask(parsed.data.taskId, parsed.data.changes);
+  // Moved to review here: its reviewing agent, if it has one, answers the duplicate question.
+  if (parsed.data.changes.stage === 'review' && before && before.stage !== 'review' && reviewAgentFor(before)) {
+    void askDuplicateCheck(before.id, null).then((result) => {
+      if (!result.ok) console.error(`Duplicate check on "${before.title}" did not run: ${result.error}`);
+    });
+  }
 });
 ipcMain.on(Channel.deleteTask, (_event, taskId: unknown) => {
   if (typeof taskId === 'string') client.deleteTask(taskId);
@@ -2114,7 +2241,8 @@ ipcMain.on(Channel.verifyCriterion, (_event, taskId: unknown, criterionId: unkno
   const parsed = TaskVerifyMessage.safeParse({ type: 'task.verify', taskId, criterionId, state, evidence });
   if (parsed.success) client.verifyCriterion(parsed.data.taskId, parsed.data.criterionId, parsed.data.state, parsed.data.evidence);
 });
-ipcMain.handle(Channel.runBloatCheck, () => bloatCheck());
+ipcMain.handle(Channel.runBloatCheck, () => bloatCheck('manual'));
+ipcMain.handle(Channel.askDuplicateCheck, (_event, taskId: unknown, agentId: unknown) => askDuplicateCheck(taskId, agentId));
 ipcMain.handle(Channel.scanFolderNotes, (_event, fresh: unknown) => scanNotes(fresh));
 ipcMain.handle(Channel.folderNoteTask, (_event, folder: unknown) => folderNoteTask(folder));
 ipcMain.handle(Channel.folderNotePaths, () => folderNotePaths());

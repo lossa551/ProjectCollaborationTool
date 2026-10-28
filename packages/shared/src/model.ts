@@ -88,6 +88,26 @@ export type Criterion = z.infer<typeof Criterion>;
 /** A spending limit in US dollars; the agent pauses and asks to go on when it is reached. */
 export const Budget = z.number().positive().max(1_000_000);
 
+/**
+ * The review-time question (issue #93): an agent read the change and the
+ * folder notes and said whether the change adds a system, helper or asset the
+ * notes say already exists.
+ */
+export const DuplicateVerdict = z.enum(['duplicate', 'clear', 'unsure']);
+export type DuplicateVerdict = z.infer<typeof DuplicateVerdict>;
+
+export const DuplicateCheck = z.object({
+  verdict: DuplicateVerdict,
+  /** The agent's answer: what it found, and where the existing one is. */
+  answer: z.string().max(2000),
+  /** The agent that answered. */
+  by: z.string().max(64),
+  at: z.number(),
+  /** How many changed files it looked at. */
+  files: z.number().int().min(0),
+});
+export type DuplicateCheck = z.infer<typeof DuplicateCheck>;
+
 export const Task = z.object({
   id: z.string(),
   title: TaskTitle,
@@ -105,6 +125,8 @@ export const Task = z.object({
   criteria: z.array(Criterion).max(CRITERIA_LIMIT).default([]),
   /** What all the task's agent chats together may spend; null for no limit. */
   budget: Budget.nullable().default(null),
+  /** The last review-time duplicate question about this task's change. */
+  duplicateCheck: DuplicateCheck.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
   /** Bumped on every change; lets offline edits detect conflicts later. */

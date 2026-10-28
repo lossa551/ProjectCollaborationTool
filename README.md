@@ -42,7 +42,8 @@ and agent chat. Design notes live in [docs/design](docs/design).
 - **Acceptance criteria and test results** on each task, so you can see what is ready, blocked or still unverified.
 - **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents. Agents get it within a 4k-token budget (conventions and decisions first, entries about their task before the rest); entries past it go by title and are read on demand. The Memory page shows what every agent call carries, and finished plans or fixed issues can be **archived**: kept in the record, no longer sent.
 - **Folder notes** that an agent drafts and keeps up to date for you to review. The notes agent (setup, or Settings, Agents) starts on the cheapest agent you have, shows what its notes cost today and this week, and warns when it is an expensive model. Each agent's cost lists its folder notes and commit message drafts apart.
-- **Bloat check** that lists duplicate files, unused assets, unneeded dependencies and large files.
+- **Bloat check** that lists duplicate files, copied-and-tweaked code (with the share in common), unused assets, unused Godot add-ons and Unreal plugins, unneeded dependencies and large files. It runs by itself when main or beta gets new commits in your folder and once a day, marks what is new since the scan before, and lists Git LFS files that are not pulled instead of skipping them silently.
+- **Duplicate question at review**: when a task moves to review, its reviewing agent reads the change and the folder notes and says whether it adds a system, helper or asset that already exists; the answer shows on the task (and as "May duplicate" on its card).
 
 ### GitHub
 - **Status on the cards**: branches, pull requests, checks, reviews and merge conflicts.

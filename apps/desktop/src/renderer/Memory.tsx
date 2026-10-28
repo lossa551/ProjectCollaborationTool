@@ -11,6 +11,8 @@ import {
   renderMemory,
   filesOutsideScope,
   taskChangedFiles,
+  duplicateKey,
+  type BloatTrigger,
   type MemoryEntry,
   type MemorySource,
 } from '@pct/shared';
@@ -346,6 +348,8 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
       onOpenTask(result.value);
     } else setError(result.error);
   };
+  const fresh = new Set(report?.newKeys ?? []);
+  const newBadge = (key: string) => (fresh.has(key) ? <span className="badge badge-new">New</span> : null);
   const noteButton = (id: string, title: string, body: string) =>
     noted.has(id) ? (
       <span className="muted small">Noted</span>
@@ -361,16 +365,24 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
         <div className="grow">
           {report ? (
             <p className="small">
-              Last run by {report.ranBy} {report.branch ? `on ${report.branch} ` : ''}
+              Last run {TRIGGER_TEXT[report.trigger]}by {report.ranBy} {report.branch ? `on ${report.branch} ` : ''}
               {new Date(report.ranAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}, {report.scanned.toLocaleString()} files
               {report.truncated && ' (the project has more; only the first ones were checked)'}.
+              {report.previousAt !== null && (
+                <>
+                  {' '}
+                  {report.newKeys.length === 0
+                    ? 'Nothing new since the scan before.'
+                    : `${report.newKeys.length} new since the scan of ${new Date(report.previousAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}.`}
+                </>
+              )}
             </p>
           ) : (
             <p className="small">Not run yet in this session.</p>
           )}
           <p className="muted small">
-            Reads your project folder (files git ignores are left out). Findings are hints for a person to look at; nothing is changed or
-            deleted.
+            Reads your project folder (files git ignores are left out). It also runs by itself when main or beta gets new commits in your
+            folder, and once a day while the folder is open. Findings are hints for a person to look at; nothing is changed or deleted.
           </p>
         </div>
         <button onClick={() => void run()} disabled={!canRun || running}>
@@ -398,13 +410,19 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
           <BloatSection
             title="Duplicate systems"
             count={report.duplicates.length}
-            empty="No copied files or code files with the same name in different folders."
+            empty="No copied files, mostly-alike code, or code files with the same name in different folders."
           >
             {report.duplicates.map((d) => {
-              const id = `dup:${d.paths.join('|')}`;
-              const what = d.reason === 'identical' ? 'Identical files' : 'Same name in different folders';
+              const id = duplicateKey(d);
+              const what =
+                d.reason === 'identical'
+                  ? 'Identical files'
+                  : d.reason === 'similar'
+                    ? `Mostly the same code (${Math.round((d.similarity ?? 0) * 100)}% in common)`
+                    : 'Same name in different folders';
               return (
                 <li key={id}>
+                  {newBadge(id)}
                   <span className="small">{what}: </span>
                   <code className="small">{d.paths.join(', ')}</code>{' '}
                   {noteButton(id, `${what}: ${d.paths.map((p) => p.split('/').pop()).join(', ')}`, d.paths.join('\n'))}
@@ -415,6 +433,7 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
           <BloatSection title="Assets nothing refers to" count={report.unusedAssets.length} empty="Every image, sound, model and font is referred to somewhere.">
             {report.unusedAssets.map((path) => (
               <li key={path}>
+                {newBadge(`asset:${path}`)}
                 <code className="small">{path}</code> {noteButton(`asset:${path}`, `Possibly unused asset: ${path}`, path)}
               </li>
             ))}
@@ -427,6 +446,7 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
             >
               {report.unusedGameFiles.map((path) => (
                 <li key={path}>
+                  {newBadge(`game:${path}`)}
                   <code className="small">{path}</code> {noteButton(`game:${path}`, `Possibly unused: ${path}`, path)}
                 </li>
               ))}
@@ -436,6 +456,7 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
             <BloatSection title="Unreal assets not where Epic says, or not named by Epic’s conventions" count={report.epicLayout.length} empty="">
               {report.epicLayout.map((item) => (
                 <li key={item.path}>
+                  {newBadge(`epic:${item.path}`)}
                   <code className="small">{item.path}</code> <span className="muted small">{item.problem}</span>{' '}
                   {noteButton(`epic:${item.path}`, `Not by Epic's layout: ${item.path}`, `${item.path}: ${item.problem}`)}
                 </li>
@@ -449,6 +470,7 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
           >
             {report.unusedDependencies.map((d) => (
               <li key={`${d.manifest}:${d.name}`}>
+                {newBadge(`dep:${d.manifest}:${d.name}`)}
                 <code className="small">{d.name}</code>
                 <span className="muted small">
                   {' '}
@@ -459,6 +481,18 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
               </li>
             ))}
           </BloatSection>
+          {report.unusedPlugins.length > 0 && (
+            <BloatSection title="Add-ons and plugins nothing uses" count={report.unusedPlugins.length} empty="">
+              {report.unusedPlugins.map((p) => (
+                <li key={p.path}>
+                  {newBadge(`plugin:${p.path}`)}
+                  <code className="small">{p.path}</code>
+                  <span className="muted small"> · {p.engine === 'godot' ? 'Godot add-on' : 'Unreal plugin'} · {p.detail} </span>
+                  {noteButton(`plugin:${p.path}`, `Possibly unused ${p.engine === 'godot' ? 'add-on' : 'plugin'}: ${p.name}`, `${p.path}: ${p.detail}.`)}
+                </li>
+              ))}
+            </BloatSection>
+          )}
           <BloatSection
             title="Folder notes and large files"
             count={report.folderNotes.length}
@@ -471,6 +505,7 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
                 f.kind === 'stale-note' ? 'Out-of-date folder note' : f.kind === 'missing-note' ? 'Folder with no note' : 'Very large text file';
               return (
                 <li key={id}>
+                  {newBadge(id)}
                   <span className="small">{what}: </span>
                   <code className="small">{f.kind === 'missing-note' ? folderLabel(f.path) : f.path}</code>
                   <span className="muted small"> · {f.detail} </span>
@@ -485,15 +520,49 @@ function BloatCheck({ state, onOpenTask }: { state: AppState; onOpenTask: (taskI
               );
             })}
           </BloatSection>
+          {(report.notPulledCount > 0 || report.skipped.length > 0) && (
+            <section className="card">
+              <h2>Not checked</h2>
+              {report.skipped.map((line) => (
+                <p key={line} className="warning small">
+                  {line}
+                </p>
+              ))}
+              {report.notPulledCount > 0 && (
+                <>
+                  <p className="small">
+                    {report.notPulledCount.toLocaleString()} {report.notPulledCount === 1 ? 'file is a Git LFS pointer' : 'files are Git LFS pointers'}: not
+                    pulled on the PC that ran the check, so nothing about {report.notPulledCount === 1 ? 'it' : 'them'} was checked.
+                  </p>
+                  <ul className="bloat-list">
+                    {report.notPulled.map((path) => (
+                      <li key={path}>
+                        <code className="small">{path}</code>
+                      </li>
+                    ))}
+                    {report.notPulledCount > report.notPulled.length && (
+                      <li className="muted small">and {(report.notPulledCount - report.notPulled.length).toLocaleString()} more</li>
+                    )}
+                  </ul>
+                </>
+              )}
+            </section>
+          )}
           <p className="muted small">
-            Assets are matched by file name in code, scenes and configs; Unreal’s binary assets are not checked yet. A dependency counts as
-            used when it is imported or run from a script.
+            Outside Godot and Unreal projects, assets are matched by file name in code, scenes and configs. Mostly-alike code is compared with
+            comments, strings and numbers left out. A dependency counts as used when it is imported or run from a script.
           </p>
         </>
       )}
     </section>
   );
 }
+
+const TRIGGER_TEXT: Record<BloatTrigger, string> = {
+  manual: '',
+  merge: 'after new commits ',
+  daily: 'as the daily check ',
+};
 
 function BloatSection({ title, count, empty, children }: { title: string; count: number; empty: string; children: ReactNode }) {
   return (

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { clone, firstCommit, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, uncommittedChanges } from '../src/main/git';
+import { branchDiff, clone, firstCommit, headCommit, mergeBranch, parseStatus, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, uncommittedChanges } from '../src/main/git';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -264,5 +264,25 @@ describe('firstCommit', () => {
     expect(said).toContain('pushed it to GitHub');
     expect(sh(other, 'remote', 'get-url', 'origin')).toBe(origin);
     expect(sh(origin, 'log', '--format=%s', 'trunk')).toBe('First commit');
+  });
+
+  it('diffs a branch against where it left its base, local or on origin', async () => {
+    const { seed, mine } = await setup();
+    // A branch someone else pushed: only origin has it here.
+    sh(seed, 'checkout', '-qb', 'task/chests');
+    writeFileSync(join(seed, 'chest.gd'), 'class_name ChestStorage\n');
+    sh(seed, 'add', '.');
+    sh(seed, 'commit', '-qm', 'chests');
+    sh(seed, 'push', '-q', 'origin', 'task/chests');
+    sh(mine, 'fetch', '-q', 'origin');
+    // main moving on afterwards is not part of the branch's change.
+    writeFileSync(join(mine, 'game.gd'), 'v2\n');
+    sh(mine, 'commit', '-qam', 'later on main');
+
+    const diff = await branchDiff(mine, 'task/chests', ['main']);
+    expect(diff).toContain('+class_name ChestStorage');
+    expect(diff).not.toContain('game.gd');
+    expect(await branchDiff(mine, 'task/none', ['main'])).toBeNull();
+    expect(await headCommit(mine)).toMatch(/^[0-9a-f]{40}$/);
   });
 });

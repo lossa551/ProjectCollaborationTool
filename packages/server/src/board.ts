@@ -5,6 +5,7 @@ import {
   formatCost,
   mergeCriteria,
   type CriterionState,
+  type DuplicateCheck,
   type Participant,
   type Task,
   type TaskChanges,
@@ -59,6 +60,7 @@ export class TaskBoard {
       featureId: input.featureId ?? null,
       criteria: mergeCriteria([], uniqueIds(input.criteria ?? [])),
       budget: null,
+      duplicateCheck: null,
       createdAt: now,
       updatedAt: now,
       version: 1,
@@ -189,6 +191,21 @@ export class TaskBoard {
     this.tasks.set(taskId, next);
     const what = result.state === 'untested' ? 'marked as not tested' : `recorded ${CRITERION_STATE_LABELS[result.state].toLowerCase()}`;
     return { ok: true, task: next, descriptions: [`${what}: "${criterion.text}" on "${next.title}"`], conflicts: [] };
+  }
+
+  /** Records the answer to the review-time duplicate question; the latest answer wins. */
+  duplicateCheck(taskId: string, check: Omit<DuplicateCheck, 'at'>, now = Date.now()): BoardResult {
+    const current = this.tasks.get(taskId);
+    if (!current) return { ok: false, message: 'That task no longer exists' };
+    const next: Task = { ...current, duplicateCheck: { ...check, answer: check.answer.trim(), at: now }, updatedAt: now, version: current.version + 1 };
+    this.tasks.set(taskId, next);
+    const what =
+      check.verdict === 'duplicate'
+        ? 'may add something that already exists'
+        : check.verdict === 'clear'
+          ? 'adds nothing that already exists'
+          : 'could not be checked for duplicates';
+    return { ok: true, task: next, descriptions: [`${check.by} says "${next.title}" ${what}`], conflicts: [] };
   }
 
   delete(taskId: string): BoardResult {

@@ -10,6 +10,7 @@ import {
   draftKindOf,
   draftRows,
   isOwnDraft,
+  reviewDraftUsageId,
   notesDraftUsageId,
   type AgentConnection,
   type AgentProfile,
@@ -40,6 +41,7 @@ describe('draft usage ids', () => {
   it('keeps notes and commit drafts apart, both the agent’s own', () => {
     expect(draftKindOf(notesDraftUsageId('a'))).toBe('notes');
     expect(draftKindOf(commitDraftUsageId('a'))).toBe('commit');
+    expect(draftKindOf(reviewDraftUsageId('a'))).toBe('review');
     expect(draftKindOf('chat-1')).toBeNull();
     expect(isOwnDraft(notesDraftUsageId('a'), 'a')).toBe(true);
     expect(isOwnDraft(commitDraftUsageId('a'), 'a')).toBe(true);

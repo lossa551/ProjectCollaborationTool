@@ -69,6 +69,7 @@ const task = (id: string, branch: string | null, scope: string[] = []): Task => 
   featureId: null,
   criteria: [],
   budget: null,
+  duplicateCheck: null,
   createdAt: 0,
   updatedAt: 0,
   version: 1,
