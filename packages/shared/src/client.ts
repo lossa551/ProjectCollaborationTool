@@ -3,6 +3,7 @@ import type {
   AgentProfile,
   ChatAgentState,
   ChatContext,
+  DuplicateCheck,
   ChatInfo,
   ChatMessage,
   ChatWorktree,
@@ -319,6 +320,11 @@ export class SessionClient {
   /** Records a test result for an acceptance criterion. */
   verifyCriterion(taskId: string, criterionId: string, state: CriterionState, evidence: string): void {
     this.sendTask({ type: 'task.verify', taskId, criterionId, state, evidence });
+  }
+
+  /** Records what an agent answered to the review-time duplicate question; needs the server. */
+  recordDuplicateCheck(taskId: string, check: Omit<DuplicateCheck, 'at'>): void {
+    this.send({ type: 'task.duplicates', taskId, check });
   }
 
   /**
@@ -875,6 +881,7 @@ function applyLocally(tasks: Task[], message: TaskMessage): Task[] {
           featureId: message.featureId ?? null,
           criteria: (message.criteria ?? []).map(({ id, text }) => newCriterion(id, text)),
           budget: null,
+          duplicateCheck: null,
           createdAt: now,
           updatedAt: now,
           version: 0,

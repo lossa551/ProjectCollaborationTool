@@ -70,6 +70,7 @@ const api: PctApi = {
   editMemory: (op) => ipcRenderer.send(Channel.editMemory, op),
   verifyCriterion: (taskId, criterionId, state, evidence) => ipcRenderer.send(Channel.verifyCriterion, taskId, criterionId, state, evidence),
   runBloatCheck: () => ipcRenderer.invoke(Channel.runBloatCheck),
+  askDuplicateCheck: (taskId, agentId) => ipcRenderer.invoke(Channel.askDuplicateCheck, taskId, agentId),
   scanFolderNotes: (fresh) => ipcRenderer.invoke(Channel.scanFolderNotes, fresh),
   folderNoteTask: (folder) => ipcRenderer.invoke(Channel.folderNoteTask, folder),
   folderNotePaths: () => ipcRenderer.invoke(Channel.folderNotePaths),

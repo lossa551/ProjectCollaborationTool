@@ -393,7 +393,15 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           for (const text of result.descriptions) record(participant, text, result.task.id);
           break;
         }
-        case 'doc.sync': {
+        case 'task.duplicates': {
+          const result = board.duplicateCheck(message.taskId, message.check);
+          if (!result.ok) break;
+          void persist('task', storage.saveTask(result.task));
+          broadcast({ type: 'task.changed', task: result.task });
+          for (const text of result.descriptions) record(null, text, result.task.id);
+          break;
+        }
+                case 'doc.sync': {
           let stateVector: Uint8Array;
           try {
             stateVector = decodeBytes(message.stateVector);

@@ -9,6 +9,7 @@ import {
   pullForBranch,
   taskChangedFiles,
   type AgentProfile,
+  type DuplicateVerdict,
   type ChatInfo,
   type PlanItem,
   type GitHubStatus,
@@ -76,9 +77,15 @@ export function TaskDetail({
   online,
   usage,
   prices,
+  duplicateChecking,
+  notesAgent,
   onClose,
 }: {
   task: Task;
+  /** An agent on this PC is answering the duplicate question for this task now. */
+  duplicateChecking: boolean;
+  /** The folder notes agent, the reviewing agent when the feature names none. */
+  notesAgent: string | null;
   /** What agents used, to show the task's cost. */
   usage: UsageRow[];
   prices: PriceTable;
@@ -322,6 +329,7 @@ export function TaskDetail({
           </ul>
         </section>
       )}
+      <DuplicateFlag task={task} feature={feature} agents={agents} notesAgent={notesAgent} checking={duplicateChecking} online={online} />
       <TaskCost task={task} chats={chats} agents={agents} usage={usage} prices={prices} editable={editable} onOpenChat={onOpenChat} />
       <section>
         <h3 className="section-title">Locks</h3>
@@ -358,6 +366,89 @@ export function TaskDetail({
         </button>
       )}
     </aside>
+  );
+}
+
+const VERDICT_TEXT: Record<DuplicateVerdict, string> = {
+  duplicate: 'may add something that already exists',
+  clear: 'adds nothing the folder notes say already exists',
+  unsure: 'could not tell',
+};
+
+/**
+ * The review-time duplicate question (issue #93): asked by itself when the
+ * task moves to review with a reviewing agent, or from here at any time.
+ */
+function DuplicateFlag({
+  task,
+  feature,
+  agents,
+  notesAgent,
+  checking,
+  online,
+}: {
+  task: Task;
+  feature: PlanItem | undefined;
+  agents: AgentProfile[];
+  notesAgent: string | null;
+  checking: boolean;
+  online: boolean;
+}) {
+  const pick = feature?.assign.review;
+  const reviewer = pick?.kind === 'agent' && agents.some((a) => a.id === pick.id) ? pick.id : agents.some((a) => a.id === notesAgent) ? notesAgent : null;
+  const [agentId, setAgentId] = useState<string>(reviewer ?? agents[0]?.id ?? '');
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!agents.some((a) => a.id === agentId)) setAgentId(reviewer ?? agents[0]?.id ?? '');
+  }, [agents, agentId, reviewer]);
+  const check = task.duplicateCheck;
+  // Before review there is usually nothing to look at yet.
+  if (!check && !checking && (task.stage === 'planning' || task.stage === 'implementing')) return null;
+  const run = async () => {
+    setError(null);
+    const result = await window.pct.askDuplicateCheck(task.id, agentId || null);
+    if (!result.ok) setError(result.error);
+  };
+  return (
+    <section>
+      <h3 className="section-title">Duplicate check</h3>
+      {checking ? (
+        <p className="muted small">An agent is reading the change and the folder notes…</p>
+      ) : check ? (
+        <div className={check.verdict === 'duplicate' ? 'warning small' : 'small'}>
+          <p>
+            {check.by} says this change {VERDICT_TEXT[check.verdict]}
+            <span className="muted">
+              {' '}
+              · {check.files} {check.files === 1 ? 'file' : 'files'} ·{' '}
+              {new Date(check.at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+            </span>
+          </p>
+          {check.answer && <p className="duplicate-answer">{check.answer}</p>}
+        </div>
+      ) : (
+        <p className="muted small">
+          {reviewer
+            ? 'Not asked yet. The reviewing agent is asked by itself when the task moves to review on this PC.'
+            : 'Ask an agent whether this change adds a system, helper or asset the folder notes say already exists.'}
+        </p>
+      )}
+      {online && agents.length > 0 && !checking && (
+        <div className="row small">
+          <select value={agentId} onChange={(e) => setAgentId(e.target.value)} aria-label="Agent to ask">
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+          <button className="secondary" onClick={() => void run()} disabled={!agentId}>
+            {check ? 'Ask again' : 'Ask'}
+          </button>
+        </div>
+      )}
+      {error && <p className="error small">{error}</p>}
+    </section>
   );
 }
 

@@ -47,6 +47,7 @@ const task = (id: string, extra: Partial<Task> = {}): Task => ({
   featureId: null,
   criteria: [],
   budget: null,
+  duplicateCheck: null,
   createdAt: 0,
   updatedAt: 0,
   version: 1,

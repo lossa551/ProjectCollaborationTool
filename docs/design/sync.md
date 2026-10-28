@@ -187,3 +187,19 @@ instead of invite secrets, and running agents server-side if wanted.
   requests. Findings can be noted as known issues in memory.
 - Not yet: Unreal's binary assets in the unused-asset check, and references
   between scenes and scripts (with the engine integrations).
+- **Bloat check gaps closed (issue #93, 2026-10-28).** Near-duplicate code:
+  each code file becomes 6-token shingles with comments, strings and numbers
+  taken out; MinHash (16 bands of 4) finds candidate pairs and pairs sharing
+  60% or more are reported as "similar" with the share. Unused Godot add-ons
+  (not enabled in `project.godot` and nothing outside them loads their files
+  or classes) and Unreal plugins (turned off in the `.uproject`, or off by
+  default and not turned on, and no enabled plugin needs them) are their own
+  section. Git LFS pointers are listed as not pulled, and a check that could
+  not run says why. Up to 150k files are read (text kept up to 512 MB).
+  Scans also run by themselves: when main, master or beta moves to a commit
+  the shared report does not have (once per head on each PC), and when the
+  shared report is a day old. Each report carries the keys of findings the
+  previous one did not have, shown as "New". At review, moving a task to
+  review asks its reviewing agent (the feature's review pick, else the folder
+  notes agent) one question with the change and the folder notes; the answer
+  is stored on the task (`task.duplicates`, protocol 17).

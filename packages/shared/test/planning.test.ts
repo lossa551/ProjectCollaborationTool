@@ -12,6 +12,7 @@ const task = (id: string, featureId: string | null, stage: Task['stage'], states
   featureId,
   criteria: states.map((state, i) => ({ id: `${id}-${i}`, text: `c${i}`, state, evidence: '', by: null, at: null })),
   budget: null,
+  duplicateCheck: null,
   createdAt: 0,
   updatedAt: 0,
   version: 1,

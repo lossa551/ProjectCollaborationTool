@@ -41,4 +41,21 @@ describe('bloat check on a project folder', () => {
     ]);
     expect(report).toMatchObject({ ranBy: 'Martin', branch: 'main', truncated: false });
   });
+
+  it('lists Git LFS pointers as not pulled and records the commit and trigger', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pct-bloat-'));
+    dirs.push(root);
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    mkdirSync(join(root, 'Content/Maps'), { recursive: true });
+    writeFileSync(join(root, 'Game.uproject'), '{}');
+    writeFileSync(join(root, 'Content/Maps/L_Main.umap'), 'version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 123456\n');
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@example.com', 'commit', '-qm', 'start'], { cwd: root });
+
+    const report = await runBloatCheck(root, 'Martin', 'main', 'merge');
+    expect(report.notPulled).toEqual(['Content/Maps/L_Main.umap']);
+    expect(report.trigger).toBe('merge');
+    expect(report.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(report.skipped[0]).toContain('Git LFS pointer');
+  });
 });

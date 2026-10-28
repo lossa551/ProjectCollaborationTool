@@ -3284,3 +3284,16 @@ button.secondary.active {
 .first-commit p {
   margin: 0;
 }
+
+/* Review-time duplicate question on a task (issue #93). */
+.duplicate-answer {
+  white-space: pre-wrap;
+  margin: 4px 0 0;
+}
+
+/* A bloat finding the scan before did not have. */
+.badge-new {
+  color: var(--accent);
+  border-color: var(--accent);
+  margin-right: 6px;
+}
