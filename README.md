@@ -40,7 +40,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 - **Planning space** for notes, feature ideas, requirements, dependencies and tasks, tracked from plan to done.
 - **Roadmap** with milestones (Now, Next, Later or your own), dates and risk warnings.
 - **Acceptance criteria and test results** on each task, so you can see what is ready, blocked or still unverified.
-- **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents.
+- **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents. Agents get it within a 4k-token budget (conventions and decisions first, entries about their task before the rest); entries past it go by title and are read on demand. The Memory page shows what every agent call carries, and finished plans or fixed issues can be **archived**: kept in the record, no longer sent.
 - **Folder notes** that an agent drafts and keeps up to date for you to review.
 - **Bloat check** that lists duplicate files, unused assets, unneeded dependencies and large files.
 

@@ -3,7 +3,12 @@ import {
   MEMORY_KIND_LABELS,
   MEMORY_KIND_SINGULAR,
   MEMORY_TEXT_LIMIT,
+  MEMORY_TOKEN_BUDGET,
   MemoryKind,
+  estimateTokens,
+  formatTokens,
+  memoryEntryTokens,
+  renderMemory,
   filesOutsideScope,
   taskChangedFiles,
   type MemoryEntry,
@@ -20,7 +25,7 @@ import { ask } from './Dialog';
 // context. The bloat check points at things that make the project bigger
 // than it needs to be.
 
-type Tab = MemoryKind | 'bloat' | 'folder-notes';
+type Tab = MemoryKind | 'archived' | 'bloat' | 'folder-notes';
 
 const HINTS: Record<MemoryKind, string> = {
   decision: 'How the project is built and why, so nobody (and no agent) undoes it by accident.',
@@ -29,9 +34,16 @@ const HINTS: Record<MemoryKind, string> = {
   plan: 'What is being worked on now and what comes next.',
 };
 
+const ARCHIVED_HINT =
+  'Entries kept for the record but no longer given to agents, such as finished plans and fixed issues. They stay in the exported file, and agents can still look them up.';
+
 export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppState; onOpenTask: (taskId: string) => void; onOpenChat: (chatId: string) => void }) {
   const [tab, setTab] = useState<Tab>('decision');
   const { memory } = state.session;
+  // What an agent with no task carries; a chat's own order can differ a little (see memoryOrder).
+  const given = useMemo(() => renderMemory(memory), [memory]);
+  const titleOnly = useMemo(() => new Set(given.listed.map((e) => e.id)), [given]);
+  const archivedCount = memory.filter((e) => e.archived).length;
 
   return (
     <div className="memory-screen">
@@ -39,12 +51,21 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
         <div>
           <h1>Project memory</h1>
           <p className="muted">Shared with everyone in the session, and given to every agent with its instructions.</p>
+          {given.text && (
+            <p className="muted small memory-tokens">
+              Every agent call carries about <strong>{formatTokens(estimateTokens(given.text))} tokens</strong> of memory (budget{' '}
+              {formatTokens(MEMORY_TOKEN_BUDGET)}).
+              {given.listed.length > 0 &&
+                ` ${given.listed.length} ${given.listed.length === 1 ? 'entry goes' : 'entries go'} by title only past it; agents read ${given.listed.length === 1 ? 'it' : 'them'} when needed.`}
+              {' '}Archive what agents no longer need.
+            </p>
+          )}
         </div>
         <MemoryExport state={state} />
       </header>
       <div className="tabs">
         {MemoryKind.options.map((kind) => {
-          const count = memory.filter((e) => e.kind === kind).length;
+          const count = memory.filter((e) => e.kind === kind && !e.archived).length;
           return (
             <button key={kind} className={tab === kind ? 'nav active' : 'nav'} onClick={() => setTab(kind)}>
               {MEMORY_KIND_LABELS[kind]}
@@ -52,6 +73,10 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
             </button>
           );
         })}
+        <button className={tab === 'archived' ? 'nav active' : 'nav'} onClick={() => setTab('archived')}>
+          Archived
+          {archivedCount > 0 && <span className="muted"> {archivedCount}</span>}
+        </button>
         <button className={tab === 'bloat' ? 'nav active' : 'nav'} onClick={() => setTab('bloat')}>
           Bloat check
         </button>
@@ -64,7 +89,7 @@ export function MemoryScreen({ state, onOpenTask, onOpenChat }: { state: AppStat
       ) : tab === 'bloat' ? (
         <BloatCheck state={state} onOpenTask={onOpenTask} />
       ) : (
-        <MemoryList key={tab} kind={tab} state={state} onOpenChat={onOpenChat} />
+        <MemoryList key={tab} kind={tab} state={state} titleOnly={titleOnly} onOpenChat={onOpenChat} />
       )}
     </div>
   );
@@ -94,15 +119,26 @@ function MemoryExport({ state }: { state: AppState }) {
   );
 }
 
-function MemoryList({ kind, state, onOpenChat }: { kind: MemoryKind; state: AppState; onOpenChat: (chatId: string) => void }) {
-  const entries = state.session.memory.filter((e) => e.kind === kind);
+function MemoryList({
+  kind,
+  state,
+  titleOnly,
+  onOpenChat,
+}: {
+  kind: MemoryKind | 'archived';
+  state: AppState;
+  titleOnly: Set<string>;
+  onOpenChat: (chatId: string) => void;
+}) {
+  const archived = kind === 'archived';
+  const entries = state.session.memory.filter((e) => (archived ? e.archived : e.kind === kind && !e.archived));
   const editable = state.canEditTasks;
   const [title, setTitle] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
 
   const add = (event: FormEvent) => {
     event.preventDefault();
-    if (!title.trim()) return;
+    if (archived || !title.trim()) return;
     const id = crypto.randomUUID();
     window.pct.editMemory({ op: 'create', id, kind, title: title.trim() });
     setTitle('');
@@ -111,13 +147,15 @@ function MemoryList({ kind, state, onOpenChat }: { kind: MemoryKind; state: AppS
 
   return (
     <section className="memory-list">
-      <p className="muted small">{HINTS[kind]}</p>
-      <form className="row" onSubmit={add}>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`New ${MEMORY_KIND_SINGULAR[kind].toLowerCase()}`} maxLength={200} disabled={!editable} />
-        <button type="submit" disabled={!editable || !title.trim()}>
-          Add
-        </button>
-      </form>
+      <p className="muted small">{archived ? ARCHIVED_HINT : HINTS[kind]}</p>
+      {!archived && (
+        <form className="row" onSubmit={add}>
+          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`New ${MEMORY_KIND_SINGULAR[kind].toLowerCase()}`} maxLength={200} disabled={!editable} />
+          <button type="submit" disabled={!editable || !title.trim()}>
+            Add
+          </button>
+        </form>
+      )}
       {entries.length === 0 && <p className="muted">Nothing here yet.</p>}
       <ul>
         {[...entries].reverse().map((entry) => (
@@ -126,6 +164,8 @@ function MemoryList({ kind, state, onOpenChat }: { kind: MemoryKind; state: AppS
             entry={entry}
             open={entry.id === openId}
             editable={editable}
+            titleOnly={titleOnly.has(entry.id)}
+            showKind={archived}
             textEdits={state.textEdits}
             chatExists={entry.source?.kind === 'chat' && state.session.chats.some((c) => c.id === entry.source!.id)}
             onToggle={() => setOpenId(entry.id === openId ? null : entry.id)}
@@ -141,6 +181,8 @@ function MemoryCard({
   entry,
   open,
   editable,
+  titleOnly,
+  showKind,
   textEdits,
   chatExists,
   onToggle,
@@ -149,6 +191,8 @@ function MemoryCard({
   entry: MemoryEntry;
   open: boolean;
   editable: boolean;
+  titleOnly: boolean;
+  showKind: boolean;
   textEdits: number;
   chatExists: boolean;
   onToggle: () => void;
@@ -194,8 +238,27 @@ function MemoryCard({
         </button>
       )}
       <p className="muted small memory-meta">
+        {showKind && `${MEMORY_KIND_SINGULAR[entry.kind]} · `}
         {entry.createdBy}, {new Date(entry.updatedAt).toLocaleDateString()}
         <Source source={entry.source} chatExists={chatExists} onOpenChat={onOpenChat} />
+        {!entry.archived && (
+          <span title={titleOnly ? 'Past the memory budget: agents get its title and read the rest when they need it' : 'What this entry adds to every agent call'}>
+            {' · '}
+            {titleOnly ? 'title only for agents' : `${formatTokens(memoryEntryTokens(entry))} tokens`}
+          </span>
+        )}
+        {editable && (
+          <>
+            {' · '}
+            <button
+              className="link small"
+              title={entry.archived ? 'Give it to agents again' : 'Keep it in the record, but stop giving it to agents with every call'}
+              onClick={() => window.pct.editMemory({ op: 'set', id: entry.id, archived: !entry.archived })}
+            >
+              {entry.archived ? 'Restore' : 'Archive'}
+            </button>
+          </>
+        )}
         {open && (
           <>
             {' · '}

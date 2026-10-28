@@ -122,6 +122,26 @@ describe('agent runner', () => {
     expect(chat.chats[0]!.context!.items.map((i) => i.label)).toContain('Task');
   });
 
+  it('leaves archived memory out of its instructions and reads an entry on demand', async () => {
+    const { martin, agentClient, profile, model } = await setup([
+      { text: '', toolCalls: [{ id: 't1', name: 'read_memory', input: { title: 'old save format' } }], stop: 'tool_use' },
+      { text: 'Read it.', toolCalls: [], stop: 'end' },
+    ]);
+    martin.editMemory({ op: 'create', id: 'memory-000001', kind: 'convention', title: 'Tabs in GDScript' });
+    martin.editMemory({ op: 'create', id: 'memory-000002', kind: 'plan', title: 'Old save format', body: 'Saves were JSON until 0.2.' });
+    martin.editMemory({ op: 'set', id: 'memory-000002', archived: true });
+    await waitFor(agentClient, (s) => s.memory.some((e) => e.archived));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Saves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'How did saves work?' });
+
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text.includes('Read it.')));
+    expect(model.requests[0]!.system).toContain('Tabs in GDScript');
+    expect(model.requests[0]!.system).not.toContain('Old save format');
+    expect(JSON.stringify(model.requests[1]!.messages)).toContain('Plan (archived): Old save format\\nSaves were JSON until 0.2.');
+    expect(state.chats.find((c) => c.id === chatId)!.context!.items.find((i) => i.label === 'Project memory')!.detail).toBe('1 entry, 1 archived left out');
+  });
+
   it('gets the folder notes and files to read for its task', async () => {
     const { martin, profile, model, root } = await setup([{ text: 'Read them.', toolCalls: [], stop: 'end' }]);
     execFileSync('git', ['init', '-q'], { cwd: root });

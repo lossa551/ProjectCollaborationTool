@@ -101,7 +101,7 @@ describe('project memory', () => {
       { title: 'Menu flickers', body: 'Only on Windows.', source: { kind: 'chat', id: 'chat-1' }, updatedAt: 3 },
       { title: 'Signals over polling', source: null },
     ]);
-    expect(renderMemory(readMemory(doc))).toBe(
+    expect(renderMemory(readMemory(doc)).text).toBe(
       'Architecture decisions:\n- Signals over polling\n  Use signals\n  for UI.\n\nKnown issues:\n- Menu flickers\n  Only on Windows.',
     );
   });

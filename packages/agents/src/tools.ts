@@ -20,6 +20,8 @@ export const RecordTestResultInput = z.object({
   evidence: z.string().min(1).max(4000),
 });
 
+export const ReadMemoryInput = z.object({ title: z.string().min(1).max(200) });
+
 const object = (properties: Record<string, unknown>, required: string[]) => ({
   type: 'object',
   properties,
@@ -83,6 +85,12 @@ export const AGENT_TOOLS: ToolSpec[] = [
       },
       ['criterion_id', 'result', 'evidence'],
     ),
+  },
+  {
+    name: 'read_memory',
+    description:
+      'Read the full text of a project memory entry that your instructions list by title only (archived entries too). Give its title as listed.',
+    schema: object({ title: { type: 'string', description: 'The entry’s title, or part of it.' } }, ['title']),
   },
 ];
 
