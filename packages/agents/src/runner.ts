@@ -25,6 +25,7 @@ import {
   type AgentProfile,
   type ApprovalState,
   type ChatAgentState,
+  type ChatBranch,
   type ChatInfo,
   type ChatMessage,
   type ChatTool,
@@ -92,6 +93,7 @@ import {
   commitAll,
   createWorktree,
   defaultWorktreeFolder,
+  hasCommit,
   headCommit,
   isAncestor,
   pickBase,
@@ -439,6 +441,8 @@ export class AgentRunner {
           if (!firstLoad || i < lastAgent || Math.max(m.at, branchedAt) < cutoff) run.handled.add(m.id);
         });
         if (message.messages.some((m) => isPrompt(m) && !run.handled.has(m.id))) this.schedule(message.chatId);
+        // A chat branched with its files gets its copy right away, so people can look at it before anyone writes.
+        else if (firstLoad && chat.branchedFrom?.files && !chat.worktree) void this.prepareCopy(message.chatId);
         break;
       }
       case 'chat.message': {
@@ -598,6 +602,9 @@ export class AgentRunner {
     const agent = this.profile();
     const bridge = agent ? this.options.engine?.(agent)?.server?.kind : undefined;
     if (!run.worktree && !chat.worktree && bridge && LIVE_EDITOR_BRIDGES.has(bridge)) {
+      if (!run.files && chat.branchedFrom?.files) {
+        this.notice(chat.id, 'The files were not branched: this agent works in the project folder, which its editor has open.');
+      }
       return (run.files = this.files);
     }
     const known = run.worktree ?? (chat.worktree?.owner.id === this.owner().id ? chat.worktree : null);
@@ -621,8 +628,16 @@ export class AgentRunner {
     const branch = known?.branch ?? agentBranchName(task?.title ?? chat.title, chat.id);
     const folder = known?.folder ?? (setting?.folder ?? defaultWorktreeFolder)(root, branch);
     const reused = known !== null && (await worktreeReady(folder, branch));
-    const base = known ? { base: known.base, ref: known.baseCommit } : await pickBase(root, [task?.branch]);
-    const { baseCommit } = await createWorktree({ root, folder, branch, from: base.ref });
+    // A branched chat starts from its parent's files at the message it was branched from.
+    const fork = !known ? await this.forkPoint(chat) : null;
+    const base = known
+      ? { base: known.base, ref: known.baseCommit }
+      : fork
+        ? { base: fork.base, ref: fork.commit }
+        : await pickBase(root, [task?.branch]);
+    const created = await createWorktree({ root, folder, branch, from: base.ref });
+    // Its changes to merge are counted from where the parent's copy started, so its turns so far count too.
+    const baseCommit = fork && (await hasCommit(root, fork.baseCommit)) ? fork.baseCommit : created.baseCommit;
     run.files = new ProjectFiles(resolvePath(folder));
     run.worktree = {
       branch,
@@ -641,7 +656,16 @@ export class AgentRunner {
       // A Godot project's import cache comes along, so the engine does not import every asset again.
       await seedGodotCache(root, folder).catch((error: unknown) => this.log(`could not copy the Godot cache: ${String(error)}`));
     }
-    if (!known) {
+    if (fork) {
+      const parent = chat.branchedFrom!;
+      const point = fork.turn ? `the end of turn ${fork.turn} of "${parent.title}" (${fork.commit.slice(0, 7)})` : `where "${parent.title}" started, before any of its turns`;
+      this.notice(
+        chat.id,
+        `${this.profile()?.name ?? 'The agent'} works in its own copy of the project on branch ${branch}, started from the files at ${point}. ` +
+          `Later changes in "${parent.title}" are not in it, and changes here do not touch that chat's copy or ${this.options.startedBy}'s project folder.`,
+      );
+      await this.adoptCheckpoints(chat.id, folder, branch, fork.commit);
+    } else if (!known) {
       const from = base.base ? `${base.base} at ${baseCommit.slice(0, 7)}` : baseCommit.slice(0, 7);
       this.notice(
         chat.id,
@@ -654,6 +678,61 @@ export class AgentRunner {
     }
     await this.reportWorktree(chat.id);
     return run.files;
+  }
+
+  /**
+   * Where a branched chat's copy starts: its parent's files at the message it
+   * was branched from. Null when it is not branched, or the parent had no
+   * copy, or the commit is not on this PC (said in the chat).
+   */
+  private async forkPoint(chat: ChatInfo): Promise<NonNullable<ChatBranch['files']> | null> {
+    const fork = chat.branchedFrom?.files;
+    if (!fork) return null;
+    if (await hasCommit(this.options.root, fork.commit)) return fork;
+    const where = fork.owner.id === this.owner().id ? 'is gone from this PC' : `is on ${fork.owner.name}'s PC`;
+    this.notice(
+      chat.id,
+      `The files could not be branched: ${fork.branch} at ${fork.commit.slice(0, 7)} ${where}. ` +
+        'This copy starts from the task branch (or the project folder’s branch) instead.',
+    );
+    return null;
+  }
+
+  /**
+   * The parent's checkpoints copied into a branched chat are in its new copy
+   * too (they are commits it started from), so they move to its branch and can
+   * be undone or gone back to from here.
+   */
+  private async adoptCheckpoints(chatId: string, folder: string, branch: string, start: string) {
+    for (const m of this.checkpoints(chatId)) {
+      const checkpoint = m.checkpoint!;
+      if (checkpoint.branch === branch) continue;
+      try {
+        if (!(await isAncestor(folder, checkpoint.commit, start))) continue;
+      } catch {
+        continue;
+      }
+      this.client.postChat(chatId, { id: m.id, kind: 'checkpoint', text: m.text, checkpoint: { ...checkpoint, branch } });
+    }
+  }
+
+  /** Makes the chat's copy without a turn. */
+  private async prepareCopy(chatId: string) {
+    const run = this.run(chatId);
+    const chat = this.chat(chatId);
+    if (!chat || run.busy) return;
+    run.busy = true;
+    try {
+      await this.workspaceFor(chat, run);
+    } catch (error) {
+      this.notice(chatId, `Could not make the agent's copy of the project: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      run.busy = false;
+      if (run.again && !this.stopped) {
+        run.again = false;
+        void this.turn(chatId);
+      }
+    }
   }
 
   /** Commits anything uncommitted in the chat's copy. */

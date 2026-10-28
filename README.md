@@ -33,7 +33,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 ### Review and undo
 - **Review an agent's changes**: see the diff, merge it into your branch, push and open a pull request, or discard it.
 - **Undo an agent turn** or go back to an earlier point in the chat; every turn that changes files is a checkpoint.
-- **Branch a chat** to try another direction from any message.
+- **Branch a chat** to try another direction from any message: the conversation and the agent's files both go back to that point, while the original chat keeps going.
 
 ### Planning and memory
 - **Planning space** for notes, feature ideas, requirements, dependencies and tasks, tracked from plan to done.

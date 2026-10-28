@@ -96,9 +96,15 @@ directly inside the shared session.
   agent.
 - **Branch from here** on any message starts a new chat with the conversation
   up to that message (same agent or another one); the original chat is left
-  as it is. Only the conversation is branched for now; once agents have their
-  own worktrees and per-turn checkpoints (#32, #33) the branch also starts
-  from the files as they were at that message (#41).
+  as it is. When the chat has its own copy of the project, the files are
+  branched too (#41): the branch chat gets a new copy on its own agent branch,
+  started at the checkpoint of that message (for an agent message, the end of
+  its turn; else the last checkpoint before it, or where the parent's copy
+  started). The parent's copied checkpoints move to the new branch, so they
+  can be undone or gone back to from the branch without touching the original.
+  The copy is made right away, on the PC of the person running the branch's
+  agent; if the checkpoint is only on another PC, the chat says so and the copy
+  starts from the task branch instead.
 - Each agent turn that changed files ends with a **checkpoint** in the chat
   (#33): the turn is committed in the agent's copy (chat title + turn number)
   and the checkpoint lists its files. Anyone in the session can press **Undo
