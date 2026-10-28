@@ -17,7 +17,7 @@ import {
   parseSetupConfig,
   unrealLayout,
   budgetsFor,
-  commitDraftUsageId,
+  draftUsageId,
   formatCost,
   priceFor,
   tokenCost,
@@ -44,6 +44,7 @@ import {
   type UsageSource,
   type UndoMode,
   type SetupConfig,
+  type DraftKind,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { contextUpdate, describeContext, freezePrompt, systemPrompt, type ContextInput } from './context.js';
@@ -240,6 +241,13 @@ const GODOT_NO_PROJECT = new Set(['get_debug_output', 'stop_project', 'get_godot
 /** How tool lines name each engine. */
 const BRIDGE_SHORT: Record<EngineServer['kind'], string> = { godot: 'Godot', summer: 'Summer', unreal: 'Unreal' };
 
+/** What the agent is told it writes in a draft. */
+const DRAFT_PURPOSES: Record<DraftKind, string> = {
+  commit: 'git commit messages',
+  notes: 'short folder notes (AGENTS.md) that tell other agents what a folder is for',
+  review: 'a short review answer about a change',
+};
+
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
 /** Longest folder note passed on; notes are meant to be 10 to 30 lines. */
@@ -320,13 +328,14 @@ export class AgentRunner {
 
   /**
    * Answers one prompt outside any chat, with no tools: used to draft a
-   * commit message. What the call uses counts for this agent and the task.
+   * commit message or a folder note. What the call uses counts for this
+   * agent (and the task), under the id of its kind of draft.
    */
-  async draft(prompt: string, taskId: string | null, signal: AbortSignal, purpose = 'git commit messages'): Promise<string> {
+  async draft(prompt: string, taskId: string | null, signal: AbortSignal, kind: DraftKind = 'commit'): Promise<string> {
     const agent = this.profile();
     if (!agent) throw new Error('This agent no longer exists.');
-    // Every draft (commit messages, folder notes) counts as the agent's own usage.
-    const usageId = commitDraftUsageId(agent.id);
+    const usageId = draftUsageId(kind, agent.id);
+    const purpose = DRAFT_PURPOSES[kind];
     const record = (model: string, source: UsageSource, usage: TokenUsage, cost: number | null, single = false) =>
       this.client.recordUsage({ chatId: usageId, model, source, ...usage, cost, day: usageDay(Date.now()), taskId, single });
     const connection = agent.connection;

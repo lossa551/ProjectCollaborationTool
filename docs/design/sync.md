@@ -202,4 +202,4 @@ instead of invite secrets, and running agents server-side if wanted.
   previous one did not have, shown as "New". At review, moving a task to
   review asks its reviewing agent (the feature's review pick, else the folder
   notes agent) one question with the change and the folder notes; the answer
-  is stored on the task (`task.duplicates`, protocol 17).
+  is stored on the task (`task.duplicates`, protocol 18).

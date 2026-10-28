@@ -18,6 +18,7 @@ export * from './notify.js';
 export * from './usage.js';
 export * from './board.js';
 export * from './commit-message.js';
+export * from './drafts.js';
 export * from './setup.js';
 export * from './godot-plugin.js';
 export * from './unreal.js';

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import {
   API_PROVIDERS,
   ApiProvider,
@@ -20,6 +20,7 @@ import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
 import { CostShort } from './Cost';
 import { ask } from './Dialog';
+import { NotesAgentSettings, draftTotals } from './NotesAgent';
 
 // Screen 5: each agent's connection, responsibilities, allowed paths and what
 // it needs approval for. Profiles are shared with the session; an agent runs
@@ -83,6 +84,8 @@ export function AgentsScreen({ state, onOpenChat }: { state: AppState; onOpenCha
           />
         ))}
       </div>
+
+      <NotesAgentSettings state={state} />
     </div>
   );
 }
@@ -154,13 +157,19 @@ function AgentCard({ agent, state, onEdit, onChat }: { agent: AgentProfile; stat
   );
 }
 
-/** What the agent cost today and this week (since Monday), over all its chats. */
+/**
+ * What the agent cost today and this week (since Monday), over all its chats
+ * and drafts; its folder notes and commit message drafts are also shown apart.
+ */
 function AgentSpend({ agent, state }: { agent: AgentProfile; state: AppState }) {
   const { usage, prices } = state.session;
   const rows = usage.filter((r) => r.agentId === agent.id);
   const now = Date.now();
   const today = usageDay(now);
   const monday = weekStart(now);
+  const drafts = (['notes', 'commit', 'review'] as const)
+    .map((kind) => ({ kind, ...draftTotals(state, kind, agent.id, now) }))
+    .filter((d) => d.week.calls > 0);
   return (
     <>
       <dt>Today</dt>
@@ -171,6 +180,15 @@ function AgentSpend({ agent, state }: { agent: AgentProfile; state: AppState }) 
       <dd>
         <CostShort total={totalUsage(rows.filter((r) => r.day >= monday), prices)} />
       </dd>
+      {drafts.map((d) => (
+        <Fragment key={d.kind}>
+          <dt>{d.kind === 'notes' ? 'Folder notes' : d.kind === 'review' ? 'Duplicate checks' : 'Commit messages'}</dt>
+          <dd title="Drafts written outside any chat, counted in the totals above">
+            <CostShort total={d.today} /> <span className="muted">today ·</span> <CostShort total={d.week} />{' '}
+            <span className="muted">this week</span>
+          </dd>
+        </Fragment>
+      ))}
     </>
   );
 }
