@@ -5,77 +5,60 @@ where two developers and their AI agents work on the same project in one live
 session: shared task board, locks, presence, GitHub status
 and agent chat. Design notes live in [docs/design](docs/design).
 
-Working so far: hosting a session on your PC or joining one by invite code,
-live presence, a shared task board (five stages, drag to move, assign to a
-person or agent, allowed paths, activity feed, search with Mine / Agents /
-Blocked / Unverified filters; empty columns shrink), and file locks (exclusive for
-files matching the lock rules, soft for the rest, abandoned locks can be
-recovered). Sessions are saved, everyone keeps the same identity across
-reconnects, and tasks can be edited while the host is offline (changes sync
-when it is back). GitHub status: link the repository and see branches, pull
-requests, checks, reviews and merge conflicts on the task cards; each person
-picks their project folder so others see their branch and changed files,
-whether those stay inside the task's allowed paths, and where two people (or a
-pull request or a lock) touch the same file. The GitHub page also runs
-everyday git for your own copy with the git on your PC: clone the linked
-repository into a folder (it becomes your project folder), pull, commit, push,
-and switch or create branches. After a commit it offers to release your locks
-on files with nothing left to commit, and frees the committed files' locks of
-idle agents on your PC that work in your project folder. Draft it next to
-the commit message has an agent you pick write the message from your
-uncommitted diff and the branch's task; you edit it and commit yourself, and
-the call counts in the agent's and the task's cost. Issues: the repository's open issues show on
-the Code screen's Issues tab, filtered by label and assignee; link one to a
-feature or task (or write `#123` in its text), make a feature from an issue, or
-open an issue from a feature. When a linked feature is done the app offers to
-close the issue with a comment naming its pull requests, and only closes it
-once you confirm. Home lists issues nobody has linked or triaged. Agents: set up agents for a model
-API (Claude, DeepSeek, OpenAI, a local model through Ollama, or any
-OpenAI-compatible API) or a command-line agent (Claude Code, Codex CLI), start
-them on your PC, and chat with them together in shared agent chats. Every edit
-and command an agent makes is checked against locks, its allowed paths, the
-task's paths and its approval rules; anything that needs a person shows an
-approval card in the chat. Agents lock each file themselves before their first
-edit (tagged with the chat and task), wait when someone else holds a file they
-need, free locks on files they did not change when a turn ends, and free a
-task's locks when it is done; people can release an agent's lock any time.
-Each agent chat works in its own copy of the project (a git worktree on an
-`agent/...` branch, in a `<project>-agents` folder next to yours), so an agent's
-edits never touch your own folder or another agent's copy. The chat shows what
-the copy changed; on the PC that holds it you can review the diff, merge it
-into your branch, push it and open a pull request, or discard it.
-What each agent is doing right now shows under Who is here, on its task card
-and at the top of its chat. Chats can become tasks and hand work to another
-agent with the plan, decisions, paths and acceptance criteria. Project
-setup: make the project with its engine first (Unreal launcher, Godot or the
-`summer` CLI), then Set up project (bottom left, or the Home checklist) detects
-Unreal, Godot (Summer Engine projects are Godot projects) or a generic project and offers its preset item by item:
-`.gitignore` lines, Git LFS in `.gitattributes`, engine lock rules for the
-session, bloat check skips in `.collab-tool.json`, a starter project memory
-entry with `docs/project-memory.md` kept up to date, the agent rules in a
-marked block of the root `AGENTS.md` (the Unreal preset names Epic's UE 5.8
-folder structure, asset naming, coding standard and source control pages as
-the source of truth) and a `CLAUDE.md` that imports it. An agent drafts the
-first folder notes, and everything goes into one commit. Running it again only
-shows what is missing or out of date. From then on that agent keeps folder
-notes up to date by itself: stale or missing notes are drafted for people to
-review on the Folder notes tab. For Godot and Summer Engine projects, setup
-can also add the app's editor plugin: a Locks dock in the editor, a warning
-when the scene you open is locked by someone else, and Lock this scene.
-Agents act in the engine through the Godot MCP server (headless Godot on
-their own copy) or Summer Engine's (the editor that has your project open),
-picked on their own: Summer's while Summer Engine is open, Godot's otherwise
-(Settings, Game engine, to choose yourself). Home shows when Godot or Summer
-Engine has your project open, warns when the scene you opened is locked by
-someone else, finds Godot from the editor you run, and adds the Locks plugin
-in one click. The app runs that server itself and checks every
-call: scene and resource changes take locks and follow task paths and
-approvals like file edits, playing the game asks like a command, and Summer's
-stale overwrite refusals show in the chat. With Godot's path set and GUT or
-gdUnit4 in the project, agents run the tests headless and record the results
-on the task's acceptance criteria. The bloat check follows what a Godot game
-loads (`res://`, `uid://`, `class_name`) and lists scenes, scripts and assets
-nothing reaches. Unreal (#11) is next; see `docs/design/engines.md`.
+## Features
+
+### Shared session
+- **Host or join** a session from the app with an invite code; it runs on the host's PC and others connect over Tailscale.
+- **As many people as you like**: anyone with the invite code can join, and there is no cap on people or agents. It is built for a small team, and the tests run with up to three people at once.
+- **Live presence**: Who is here shows each person and agent and what they are working on right now.
+- **Home** gives the overview: who is doing what, what needs you, the current milestone, and unlinked GitHub issues.
+- **Resume, backups and snapshots**: sessions are saved, backed up daily, and can be restored or snapshotted before a big change.
+- **Works offline**: tasks can be edited while the host is away and sync when it is back.
+- **Invites you control**: make a new invite code if one leaks, or remove someone from the session.
+
+### Board and locks
+- **Task board** with five stages, drag to move, assign to a person or an agent, and set the paths a task may touch.
+- **Search and filters** (Mine, Agents, Blocked, Unverified) to find work fast.
+- **File locks**: exclusive for files that cannot be merged, soft for the rest, and abandoned locks can be recovered.
+- **Overlap warnings** when two people, a pull request or a lock touch the same file, or work strays outside a task's paths.
+
+### Agents
+- **Any model or CLI agent**: Claude, DeepSeek, OpenAI, local models through Ollama, any OpenAI-compatible API, Claude Code and Codex CLI.
+- **Shared agent chats** where both of you talk to the same agent, and approval cards for anything that needs a person.
+- **Same rules as people**: every edit and command is checked against locks, allowed paths and approval rules, and agents lock files themselves.
+- **Own copy of the project** for each agent chat (a git worktree), so agents never touch your folder or each other's work.
+- **Hand-offs** turn a chat into a task or pass it to another agent with the plan, decisions, paths and acceptance criteria.
+- **Cost and budgets**: token and cost tracking per agent, chat and task, with budgets that ask before going further.
+
+### Review and undo
+- **Review an agent's changes**: see the diff, merge it into your branch, push and open a pull request, or discard it.
+- **Undo an agent turn** or go back to an earlier point in the chat; every turn that changes files is a checkpoint.
+- **Branch a chat** to try another direction from any message.
+
+### Planning and memory
+- **Planning space** for notes, feature ideas, requirements, dependencies and tasks, tracked from plan to done.
+- **Roadmap** with milestones (Now, Next, Later or your own), dates and risk warnings.
+- **Acceptance criteria and test results** on each task, so you can see what is ready, blocked or still unverified.
+- **Project memory** for decisions, conventions and known issues, also written to `docs/project-memory.md` for CLI agents.
+- **Folder notes** that an agent drafts and keeps up to date for you to review.
+- **Bloat check** that lists duplicate files, unused assets, unneeded dependencies and large files.
+
+### GitHub
+- **Status on the cards**: branches, pull requests, checks, reviews and merge conflicts.
+- **Everyday git in the app**: clone, pull, commit, push and switch branches, with locks freed after a commit.
+- **Commit message drafts** written by an agent from your diff and the task.
+- **Issues** in the app: link them to features and tasks, make features from them, and close them when the work is done.
+
+### Engines and project setup
+- **Set up project** detects Unreal, Godot, Summer Engine or a generic project and adds `.gitignore`, Git LFS, lock rules and agent rules (`AGENTS.md`).
+- **Godot and Summer Engine**: agents work in the engine through its MCP server, with scene changes going through locks and approvals.
+- **Editor plugin** for Godot with a Locks dock and a warning when the scene you open is locked by someone else.
+- **Engine tests**: agents run GUT or gdUnit4 tests headless and record the results on the task.
+- **Unreal** (#11) is next; see `docs/design/engines.md`.
+
+### Notifications and updates
+- **Windows notifications** for approvals, finished or stuck agents, lock waits and failing checks; click one to open it, mute any kind.
+- **Automatic updates** from GitHub Releases with a Restart to update button.
 
 ## Layout
 
