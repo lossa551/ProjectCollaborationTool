@@ -601,6 +601,63 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     await waitFor(martin, (s) => s.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.startsWith('Martin took the copy back to the end of turn 2.')));
   });
 
+  it('branches a chat with its files: the new copy starts at the checkpoint, and the original keeps going', async () => {
+    const { martin, profile, root } = await setup([
+      write('t1', 'src/jump.gd', 'jump\n'),
+      { text: 'Jump done.', toolCalls: [], stop: 'end' },
+      write('t2', 'src/dash.gd', 'dash\n'),
+      { text: 'Dash done.', toolCalls: [], stop: 'end' },
+      write('t3', 'src/slide.gd', 'slide\n'),
+      { text: 'Slide done.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Moves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    await checkpoints(martin, chatId, 1);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a dash' });
+    const [first, second] = await checkpoints(martin, chatId, 2);
+    const original = (await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.worktree?.head === second!.checkpoint!.commit)).chats.find(
+      (c) => c.id === chatId,
+    )!.worktree!;
+    const jumpDone = martin.getState().messages[chatId]!.find((m) => m.text === 'Jump done.')!.id;
+
+    // Branched after turn 1: the copy is made right away, with turn 1's files and not turn 2's.
+    const branchId = martin.branchChat({ fromChatId: chatId, fromMessageId: jumpDone, title: 'Moves (slide)' });
+    let state = await waitFor(martin, (s) => !!s.chats.find((c) => c.id === branchId)?.worktree?.head);
+    const branch = state.chats.find((c) => c.id === branchId)!;
+    expect(branch.branchedFrom!.files).toMatchObject({ commit: first!.checkpoint!.commit, turn: 1, branch: original.branch, base: 'main' });
+    const copy = branch.worktree!;
+    expect(copy.branch).not.toBe(original.branch);
+    expect(copy.folder).not.toBe(original.folder);
+    expect(copy.head).toBe(first!.checkpoint!.commit);
+    // Counted from where the original started, so turn 1 is part of what the branch would merge.
+    expect(copy).toMatchObject({ base: 'main', baseCommit: original.baseCommit, commits: 1, files: [{ path: 'src/jump.gd', change: 'added' }] });
+    expect(readFileSync(joinPath(copy.folder, 'src/jump.gd'), 'utf8')).toBe('jump\n');
+    expect(existsSync(joinPath(copy.folder, 'src/dash.gd'))).toBe(false);
+    expect(state.messages[branchId]!.some((m) => m.kind === 'notice' && m.text.includes('started from the files at the end of turn 1 of "Moves"'))).toBe(true);
+    // The copied turn 1 now belongs to the branch's copy, so it can be undone from there.
+    state = await waitFor(martin, (s) => s.messages[branchId]?.find((m) => m.kind === 'checkpoint')?.checkpoint?.branch === copy.branch);
+
+    // The branch carries on in its own copy; the original copy is not touched.
+    martin.postChat(branchId, { kind: 'text', text: 'Add a slide' });
+    const [, slide] = await checkpoints(martin, branchId, 2);
+    expect(slide!.checkpoint).toMatchObject({ turn: 2, branch: copy.branch, files: [{ path: 'src/slide.gd', change: 'added' }] });
+    expect(existsSync(joinPath(copy.folder, 'src/slide.gd'))).toBe(true);
+    expect(existsSync(joinPath(original.folder, 'src/slide.gd'))).toBe(false);
+    expect(existsSync(joinPath(original.folder, 'src/dash.gd'))).toBe(true);
+
+    const inherited = martin.getState().messages[branchId]!.find((m) => m.kind === 'checkpoint')!;
+    martin.undoTurn(branchId, inherited.id, 'undo');
+    await waitFor(martin, (s) => !!s.messages[branchId]?.find((m) => m.id === inherited.id)?.checkpoint?.undone);
+    expect(existsSync(joinPath(copy.folder, 'src/jump.gd'))).toBe(false);
+    expect(existsSync(joinPath(copy.folder, 'src/slide.gd'))).toBe(true);
+    // Undoing it in the branch leaves the original chat's turn 1 alone.
+    expect(readFileSync(joinPath(original.folder, 'src/jump.gd'), 'utf8')).toBe('jump\n');
+    expect(martin.getState().messages[chatId]!.find((m) => m.id === first!.id)!.checkpoint!.undone).toBeNull();
+  });
+
   it('turns down an undo while the agent is not running', async () => {
     const { martin, profile, root } = await setup([write('t1', 'src/jump.gd', 'jump\n'), { text: 'Done.', toolCalls: [], stop: 'end' }]);
     commitProject(root);

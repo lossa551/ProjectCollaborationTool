@@ -3,6 +3,7 @@ import type {
   AgentProfile,
   AgentSaveMessage,
   ChatAgentState,
+  ChatBranch,
   ChatContext,
   ChatInfo,
   ChatMessage,
@@ -12,6 +13,7 @@ import type {
   Participant,
   TaskOwner,
 } from '@pct/shared';
+import { checkpointMessageAt } from '@pct/shared';
 import type { Storage } from './storage.js';
 
 // Agent profiles and the shared agent chats. People and agents post into the
@@ -122,8 +124,9 @@ export class AgentChats {
   /**
    * Starts a new chat with a copy of another chat's messages, up to and
    * including one of them, and a notice saying where it came from. The copies
-   * get new ids; the original chat is not changed. Only the conversation is
-   * branched, not the files the agent changed.
+   * get new ids; the original chat is not changed. When the parent has its
+   * own copy of the project, the branch's agent starts its copy from the
+   * files as they were at that message (the last checkpoint before it).
    */
   async branchChat(
     input: { id: string; fromChatId: string; fromMessageId: string; agentId?: string; title: string },
@@ -144,6 +147,20 @@ export class AgentChats {
     const raced = this.chats.get(input.id);
     if (raced) return { ok: true, value: { chat: raced, messages: await this.history(raced.id) }, description: null };
 
+    const copy = parent.worktree;
+    // The turn's checkpoint comes after the agent's last words: it is copied too, so the branch can undo that turn.
+    const checkpointMessage = copy ? checkpointMessageAt(source, input.fromMessageId) : null;
+    const checkpoint = checkpointMessage?.checkpoint ?? null;
+    const files: ChatBranch['files'] = copy
+      ? {
+          commit: checkpoint?.commit ?? copy.baseCommit,
+          turn: checkpoint?.turn ?? null,
+          branch: copy.branch,
+          base: copy.base,
+          baseCommit: copy.baseCommit,
+          owner: copy.owner,
+        }
+      : null;
     const chat: ChatInfo = {
       id: input.id,
       title: input.title,
@@ -151,7 +168,7 @@ export class AgentChats {
       taskId: parent.taskId,
       createdBy: owner(by),
       handoff: parent.handoff,
-      branchedFrom: { chatId: parent.id, messageId: input.fromMessageId, title: parent.title },
+      branchedFrom: { chatId: parent.id, messageId: input.fromMessageId, title: parent.title, files },
       worktree: null,
       state: 'idle',
       activity: null,
@@ -160,7 +177,9 @@ export class AgentChats {
       createdAt: now,
       updatedAt: now,
     };
-    const messages: ChatMessage[] = source.slice(0, end + 1).map((m) => ({
+    const kept = source.slice(0, end + 1);
+    if (checkpointMessage && !kept.includes(checkpointMessage)) kept.push(checkpointMessage);
+    const messages: ChatMessage[] = kept.map((m) => ({
       ...m,
       id: randomUUID(),
       chatId: chat.id,
@@ -177,7 +196,12 @@ export class AgentChats {
       kind: 'notice',
       text:
         `${by.name} branched this chat from "${parent.title}".${switched} ` +
-        'Only the conversation was branched: files changed later in the original chat are still changed in the project folder.',
+        (!files
+          ? 'Only the conversation was branched: files changed later in the original chat are still changed in the project folder.'
+          : files.turn
+            ? `The files go back to this point too: the agent's own copy starts from the end of turn ${files.turn} (${files.commit.slice(0, 7)}), ` +
+              'and later turns of the original chat are not in it.'
+            : `The files go back to this point too: the agent's own copy starts from where the original chat's copy started, before its agent changed anything.`),
       streaming: false,
       tool: null,
       approval: null,

@@ -131,7 +131,7 @@ describe('agent chats', () => {
     const branchId = friend.branchChat({ fromChatId: chatId, fromMessageId: answer, title: 'Menu (grid)' });
     const state = await waitFor(martin, (s) => s.chats.length === 2 && (s.messages[branchId]?.length ?? 0) === 3);
     const branch = state.chats.find((c) => c.id === branchId)!;
-    expect(branch.branchedFrom).toEqual({ chatId, messageId: answer, title: 'Menu' });
+    expect(branch.branchedFrom).toEqual({ chatId, messageId: answer, title: 'Menu', files: null });
     expect(branch.agentId).toBe(agents[0]!.id);
     const copied = state.messages[branchId]!;
     expect(copied.map((m) => m.text.split('.')[0])).toEqual(['Plan the menu', 'Use a grid', 'Friend branched this chat from "Menu"']);
@@ -197,5 +197,68 @@ describe('agent chats', () => {
     const after = await waitFor(friend, (s) => s.chats.find((c) => c.id === chatId)?.worktree === null && s.activity.some((a) => a.text.startsWith('merged')));
     expect(after.activity.find((a) => a.text.startsWith('merged'))).toMatchObject({ actorName: 'Martin', text: 'merged agent/jump-abc123 into main' });
     expect(after.activity.some((a) => a.text === 'discarded it')).toBe(false);
+  });
+
+  it('branches the files with the conversation when the chat has its own copy', async () => {
+    server = await startServer({ port: 0, host: '127.0.0.1' });
+    const martin = await join('Martin');
+    martin.saveAgent(builder);
+    const { agents } = await waitFor(martin, (s) => s.agents.length === 1);
+    const agent = await join('Builder', { profileId: agents[0]!.id, startedBy: 'Martin' });
+    const chatId = martin.createChat({ agentId: agents[0]!.id, title: 'Jump' });
+    await waitFor(agent, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    const owner = { id: martin.getState().you!.id, name: 'Martin' };
+    agent.setChatWorktree(chatId, {
+      branch: 'agent/jump-abc123',
+      base: 'main',
+      baseCommit: 'a'.repeat(40),
+      folder: '/game-agents/jump-abc123',
+      owner,
+      files: [],
+      truncated: false,
+      commits: 1,
+      uncommitted: 0,
+      head: 'b'.repeat(40),
+      updatedAt: 1,
+    });
+    await waitFor(martin, (s) => !!s.chats.find((c) => c.id === chatId)?.worktree);
+    const ask = martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    await waitFor(agent, (s) => s.messages[chatId]?.length === 1);
+    const done = agent.postChat(chatId, { kind: 'text', text: 'Jump done.' });
+    const checkpoint = {
+      turn: 1,
+      commit: 'b'.repeat(40),
+      parent: 'a'.repeat(40),
+      branch: 'agent/jump-abc123',
+      files: [{ path: 'src/jump.gd', change: 'added' as const }],
+      truncated: false,
+      undone: null,
+      revertCommit: null,
+    };
+    agent.postChat(chatId, { kind: 'checkpoint', text: 'Turn 1', checkpoint });
+    await waitFor(martin, (s) => s.messages[chatId]?.length === 3);
+    martin.postChat(chatId, { kind: 'text', text: 'Now a dash' });
+    await waitFor(martin, (s) => s.messages[chatId]?.length === 4);
+
+    // At the agent's last words of a turn: the files at the end of that turn, with its checkpoint.
+    const after = martin.branchChat({ fromChatId: chatId, fromMessageId: done, title: 'Jump (b)' });
+    let state = await waitFor(martin, (s) => (s.messages[after]?.length ?? 0) === 4);
+    expect(state.chats.find((c) => c.id === after)!.branchedFrom!.files).toEqual({
+      commit: 'b'.repeat(40),
+      turn: 1,
+      branch: 'agent/jump-abc123',
+      base: 'main',
+      baseCommit: 'a'.repeat(40),
+      owner,
+    });
+    expect(state.messages[after]!.map((m) => m.kind)).toEqual(['text', 'text', 'checkpoint', 'notice']);
+    expect(state.messages[after]![3]!.text).toContain('starts from the end of turn 1 (bbbbbbb)');
+
+    // At the first message: where the copy started, before any turn.
+    const before = martin.branchChat({ fromChatId: chatId, fromMessageId: ask, title: 'Jump (a)' });
+    state = await waitFor(martin, (s) => (s.messages[before]?.length ?? 0) === 2);
+    expect(state.chats.find((c) => c.id === before)!.branchedFrom!.files).toMatchObject({ commit: 'a'.repeat(40), turn: null });
+    expect(state.messages[before]![1]!.text).toContain('before its agent changed anything');
   });
 });

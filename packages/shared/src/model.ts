@@ -468,6 +468,27 @@ export const ChatBranch = z.object({
   messageId: z.string(),
   /** The parent's title when branched, so the link still reads well if it is renamed or deleted. */
   title: ChatTitle,
+  /**
+   * Where the branch's own copy of the project starts: the parent's files as
+   * they were at that message. Null when the parent had no copy (it worked
+   * in the project folder), so only the conversation is branched.
+   */
+  files: z
+    .object({
+      /** The last checkpoint at or before the message, or where the parent's copy started when there was none. */
+      commit: z.string().min(4).max(64),
+      /** That checkpoint's turn; null for the start of the parent's copy. */
+      turn: z.number().int().min(1).nullable(),
+      /** The parent's agent branch, which holds the commit. */
+      branch: BranchName,
+      /** What the parent's copy started from, so the branch shows the same changes to merge. */
+      base: BranchName.nullable(),
+      baseCommit: z.string().min(4).max(64),
+      /** The person whose PC holds the parent's copy, and so the commit. */
+      owner: z.object({ id: z.string(), name: z.string() }),
+    })
+    .nullable()
+    .default(null),
 });
 export type ChatBranch = z.infer<typeof ChatBranch>;
 
@@ -582,16 +603,32 @@ export const ChatCheckpoint = z.object({
 export type ChatCheckpoint = z.infer<typeof ChatCheckpoint>;
 
 /**
- * The last checkpoint at or before a message, still in its copy. Where a
- * chat branched from that message would start its own copy.
+ * The checkpoint message for the files at a message: for one the agent wrote,
+ * the end of its turn (the checkpoint comes after the agent's last words);
+ * else the last checkpoint before it. Only checkpoints still in the copy
+ * count. Where a chat branched from that message starts its own copy.
  */
-export function checkpointAt(messages: ChatMessage[], messageId: string): ChatCheckpoint | null {
+export function checkpointMessageAt(messages: ChatMessage[], messageId: string): ChatMessage | null {
   const end = messages.findIndex((m) => m.id === messageId);
+  if (end < 0) return null;
+  if (messages[end]!.author.kind === 'agent') {
+    for (let i = end + 1; i < messages.length && messages[i]!.author.kind === 'agent'; i++) {
+      const checkpoint = messages[i]!.checkpoint;
+      if (checkpoint) {
+        if (!checkpoint.undone) return messages[i]!;
+        break;
+      }
+    }
+  }
   for (let i = end; i >= 0; i--) {
     const checkpoint = messages[i]!.checkpoint;
-    if (checkpoint && !checkpoint.undone) return checkpoint;
+    if (checkpoint && !checkpoint.undone) return messages[i]!;
   }
   return null;
+}
+
+export function checkpointAt(messages: ChatMessage[], messageId: string): ChatCheckpoint | null {
+  return checkpointMessageAt(messages, messageId)?.checkpoint ?? null;
 }
 
 export const CHAT_TEXT_LIMIT = 100_000;

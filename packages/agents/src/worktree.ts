@@ -95,6 +95,11 @@ async function commitOf(cwd: string, ref: string): Promise<string | null> {
   return tryGit(cwd, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
 }
 
+/** Whether the commit is in this repository (a checkpoint made on another PC is not). */
+export async function hasCommit(root: string, commit: string): Promise<boolean> {
+  return (await commitOf(root, commit)) !== null;
+}
+
 /** Whether the folder holds a checkout of this branch (the copy is still there). */
 export async function worktreeReady(folder: string, branch: string): Promise<boolean> {
   if (!existsSync(folder)) return false;
