@@ -5,6 +5,7 @@ import {
   STAGE_LABELS,
   TaskStage,
   budgetsFor,
+  checkpointAt,
   describeConnection,
   totalUsage,
   type AgentProfile,
@@ -241,6 +242,8 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
                 <span>{chat.branchedFrom.title} (deleted)</span>
               )}{' '}
               at {time(chat.createdAt)}
+              {chat.branchedFrom.files &&
+                (chat.branchedFrom.files.turn ? ` · files from turn ${chat.branchedFrom.files.turn}` : ' · files from before its first turn')}
             </span>
           )}
           {chat.state !== 'idle' && (
@@ -518,6 +521,12 @@ function BranchForm({ state, chat, from, onDone }: { state: AppState; chat: Chat
   const [agentId, setAgentId] = useState(session.agents.some((a) => a.id === chat.agentId) ? chat.agentId : (session.agents[0]?.id ?? ''));
   const [error, setError] = useState<string | null>(null);
   const answers = from.author.kind === 'human';
+  const checkpoint = chat.worktree ? checkpointAt(session.messages[chat.id] ?? [], from.id) : null;
+  const files = !chat.worktree
+    ? ' Files are not branched: this chat has no copy of its own.'
+    : checkpoint
+      ? ` Its agent gets its own copy with the files as they were at the end of turn ${checkpoint.turn}.`
+      : ' Its agent gets its own copy with the files as they were before this chat changed any.';
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -533,7 +542,8 @@ function BranchForm({ state, chat, from, onDone }: { state: AppState; chat: Chat
           Branch from {from.author.name}’s message at {time(from.at)}.
         </strong>{' '}
         The new chat gets the conversation up to here; this chat stays as it is.
-        {answers ? ' The agent answers this message again in the new chat.' : ''} Files are not branched.
+        {answers ? ' The agent answers this message again in the new chat.' : ''}
+        {files}
       </p>
       <div className="row">
         <input className="grow" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} aria-label="Title" />
