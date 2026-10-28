@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { UpdateInfo } from '../common/api';
+import type { UpdateChannel, UpdateInfo } from '../common/api';
 import './update.css';
 import { ask } from './Dialog';
 
@@ -62,8 +62,32 @@ export function UpdateButton({ hosting }: { hosting: boolean }) {
   }
 }
 
-// Settings: the numbers to give when something does not work. Both PCs need
-// the same protocol to join a session; see docs/releasing.md.
+const CHANNELS: { id: UpdateChannel; label: string; detail: string }[] = [
+  { id: 'stable', label: 'Stable', detail: 'Releases from main. Tested work only.' },
+  { id: 'beta', label: 'Beta', detail: 'Also previews from the beta branch, like Unreal support, as soon as they are pushed.' },
+];
+
+async function chooseChannel(info: UpdateInfo, channel: UpdateChannel) {
+  if (channel === info.channel) return;
+  const sure =
+    channel === 'beta'
+      ? await ask('Get beta updates on this PC?', {
+          detail:
+            'Betas have work that is not tested yet. To share a session, both PCs need the same protocol (shown below), so your friend may need beta too. You can switch back to Stable at any time.',
+          confirm: 'Switch to Beta',
+        })
+      : await ask('Go back to stable updates?', {
+          detail: /-beta\./.test(info.version)
+            ? `You are on beta v${info.version}. The app downloads the latest stable release and installs it when you restart. Sessions hosted on beta may not open on stable until stable catches up.`
+            : 'Beta previews stop arriving. Your current version stays until the next stable release.',
+          confirm: 'Switch to Stable',
+        });
+  if (sure) await window.pct.setUpdateChannel(channel);
+}
+
+// Settings: the numbers to give when something does not work, and which
+// releases this PC follows. Both PCs need the same protocol to join a session;
+// see docs/releasing.md.
 export function VersionSettings() {
   const [info, setInfo] = useState<UpdateInfo | null>(null);
 
@@ -79,6 +103,15 @@ export function VersionSettings() {
       <dl>
         <dt>App</dt>
         <dd>v{info.version}</dd>
+        <dt>Update channel</dt>
+        <dd className="update-channels">
+          {CHANNELS.map((channel) => (
+            <label key={channel.id}>
+              <input type="radio" name="update-channel" checked={info.channel === channel.id} onChange={() => void chooseChannel(info, channel.id)} />
+              <strong>{channel.label}</strong> <span className="muted small">{channel.detail}</span>
+            </label>
+          ))}
+        </dd>
         <dt>Protocol</dt>
         <dd>
           {info.protocol} <span className="muted small">Both PCs need the same one to join a session.</span>

@@ -5,6 +5,10 @@ Every merge to `main` that touches code ships a release. The Release workflow
 installer, and publishes it as a GitHub Release. Installed apps find it there
 and offer the update. Changes to docs only (`docs/**`, `*.md`) do not release.
 
+Every push to `beta` that touches code ships a **beta release** the same way,
+published as a GitHub prerelease. Only apps on the Beta update channel take it
+(see [Update channels](#update-channels)).
+
 If the workflow fails (say, a test), nothing is published. The next release
 that passes includes everything merged since the last published one.
 
@@ -29,26 +33,51 @@ Work that cannot be tested yet (first: Unreal Engine support, #11) goes to the
 long-lived `beta` branch instead of `main` (Martin, 2026-10-28). Its pull
 requests target `beta`.
 
-- **Nothing on `beta` is released.** The Release workflow only runs on pushes
-  to `main`, so installed apps never see beta work. Do not start the Release
-  workflow by hand on `beta`. CI still runs on every pull request, `beta`
-  ones included.
+- **Every push to `beta` publishes a beta release**, a GitHub prerelease that
+  is never marked as GitHub's latest release, so apps on Stable never see it.
+  If its tests fail, nothing is published. Starting the Release workflow by
+  hand on `beta` publishes a beta too.
 - **Keep it current.** Merge `main` into `beta` (a merge, not a rebase) when
-  `main` moves, so promotion stays a clean merge.
+  `main` moves, so promotion stays a clean merge. This is also how beta
+  testers get fixes from `main`: a stable release sorts below the current
+  beta, so they only see it once it is merged into `beta` and a new beta ships.
 - **Promote** once the beta work has been tested: open a pull request from
   `beta` to `main` and merge it. That push to `main` ships it as a normal
-  release; bump MINOR in the same PR if it finishes a milestone.
+  release. **Bump MINOR in that PR** to the minor the betas previewed (0.2
+  for 0.2.0-beta.N): then the release (say 0.2.40) outranks every beta of it,
+  beta testers get it too, and the next betas move on to 0.3.0-beta.N.
+  Without the bump the release would be 0.1.x, below the betas, and beta
+  testers would stay on the last beta.
 
-There is no beta channel in the app's updates: everyone gets every release
-from `main`. To try `beta` on your PC, use one of these.
+## Update channels
 
-**Beta installer (no tools needed).** Every push to `beta` and every pull
-request builds a Windows installer. On GitHub open Actions → CI, pick the
-latest run on `beta`, and download `windows-installer` under Artifacts (you
-must be signed in). Unzip it and run it. It installs over Foreus and uses the
-same data folder, so your sessions and settings carry over. Its version reads
-`0.x.0-beta.N` in Settings → Versions. A beta build does not update itself;
-press Update when you want the released version back.
+Settings → Versions → **Update channel** picks which releases this PC gets.
+It is kept per PC.
+
+- **Stable** (the default): releases from `main` only.
+- **Beta**: the newest of all releases, beta or stable, by version. The app
+  reads GitHub's release list for this, because GitHub's own feed would only
+  offer whichever release was published last.
+
+Switching to Beta asks first and then looks for the newest beta at once.
+Switching back to Stable from a beta build goes back down to the latest
+stable release (downloaded in the background; restart to install). A session
+hosted on a beta may use a newer database layout that stable cannot open
+until stable catches up, and both PCs in a session still need the same
+protocol, so a friend joining a beta host may need Beta too.
+
+An app installed from a beta release starts on Beta; any other starts on
+Stable.
+
+## Trying beta without updating
+
+**Test installer (no tools needed).** Every pull request and every push to
+`beta` also builds a Windows installer in CI. On GitHub open Actions → CI, pick
+the run, and download `windows-installer` under Artifacts (you must be signed
+in). Unzip it and run it. It installs over Foreus and uses the same data
+folder, so your sessions and settings carry over. Its version reads
+`0.x.0-ci.N` in Settings → Versions. A test build does not update itself;
+press Update when you want the newest version of your update channel back.
 
 **From the clone (for quick changes).** Quit Foreus first (tray icon → Quit):
 both use the same data folder and only one can run at a time.

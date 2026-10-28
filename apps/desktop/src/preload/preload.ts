@@ -90,6 +90,7 @@ const api: PctApi = {
     return () => ipcRenderer.off(Channel.state, handler);
   },
   getUpdate: () => ipcRenderer.invoke(Channel.getUpdate),
+  setUpdateChannel: (channel) => ipcRenderer.invoke(Channel.setUpdateChannel, channel),
   update: () => ipcRenderer.invoke(Channel.update),
   onUpdate(listener) {
     const handler = (_event: IpcRendererEvent, info: UpdateInfo) => listener(info);

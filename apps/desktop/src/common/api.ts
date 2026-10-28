@@ -327,9 +327,13 @@ export type UpdateState =
   | { status: 'ready'; version: string }
   | { status: 'error'; message: string };
 
+/** Stable follows releases from main; beta also takes prereleases from the beta branch. */
+export type UpdateChannel = 'stable' | 'beta';
+
 export interface UpdateInfo {
   /** The version running now. */
   version: string;
+  channel: UpdateChannel;
   /** What the app speaks to the session host; both sides must match. */
   protocol: number;
   /** The layout of the session database it writes. */
@@ -473,6 +477,8 @@ export interface PctApi {
   discardNoteDraft(notePath: string): void;
   onState(listener: (state: AppState) => void): () => void;
   getUpdate(): Promise<UpdateInfo>;
+  /** Follows stable or beta releases from now on, and checks that channel. */
+  setUpdateChannel(channel: UpdateChannel): Promise<void>;
   /** Restarts into a downloaded update, or checks for one. */
   update(): Promise<void>;
   onUpdate(listener: (info: UpdateInfo) => void): () => void;
@@ -558,6 +564,7 @@ export const Channel = {
   discardNoteDraft: 'pct:discard-note-draft',
   state: 'pct:state',
   getUpdate: 'pct:get-update',
+  setUpdateChannel: 'pct:set-update-channel',
   update: 'pct:update',
   updateState: 'pct:update-state',
 } as const;

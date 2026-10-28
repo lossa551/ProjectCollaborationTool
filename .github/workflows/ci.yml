@@ -39,13 +39,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # A build from a PR is a beta: its version sorts below the next release,
-      # so the app stays on it until you press Update (see docs/releasing.md).
-      - name: Mark the build as a beta
+      # A build from CI is a test build (0.x.0-ci.N): it does not update on its
+      # own, so the app stays on it until you press Update (see docs/releasing.md).
+      - name: Mark the build as a test build
         shell: bash
         run: |
           base=$(node -p "require('./apps/desktop/package.json').version.split('.').slice(0, 2).join('.')")
-          npm version "$base.0-beta.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
+          npm version "$base.0-ci.$GITHUB_RUN_NUMBER" --no-git-tag-version -w @pct/desktop
       - run: npm run package -w @pct/desktop
       - uses: actions/upload-artifact@v4
         with:
