@@ -284,7 +284,7 @@ export function missingLfs(text: string | null, patterns: string[]): string[] {
 
 export const lfsLine = (pattern: string) => `${pattern} filter=lfs diff=lfs merge=lfs -text`;
 
-const sectionHeader = (engine: Engine) => `# Added by Project Collaboration Tool (${ENGINE_LABELS[engine]} preset)`;
+const sectionHeader = (engine: Engine) => `# Added by Foreus (${ENGINE_LABELS[engine]} preset)`;
 
 /** Adds lines to the end of a file, under one comment; never removes or reorders what is there. */
 export function appendSection(text: string | null, header: string, added: string[]): string {
@@ -302,11 +302,11 @@ export function agentRules(engine: Engine): string {
   const preset = PRESETS[engine];
   const out = [
     RULES_START,
-    '<!-- Written by Project Collaboration Tool from its project setup. Run setup again to update this block; text outside it is yours. -->',
+    '<!-- Written by Foreus from its project setup. Run setup again to update this block; text outside it is yours. -->',
     '',
     '# Agent rules',
     '',
-    'People and AI agents work on this project together through Project Collaboration Tool. Every agent follows these rules, whichever tool or model it runs on.',
+    'People and AI agents work on this project together through Foreus. Every agent follows these rules, whichever tool or model it runs on.',
     '',
     '## Before you start',
     '',
@@ -370,7 +370,7 @@ export const MEMORY_ENGINE_PREFIX = 'Engine:';
 /** The starter project memory entry: which engine, which version. */
 export function engineEntry(detected: DetectedProject, engine: Engine): { title: string; body: string } {
   if (engine === 'generic') {
-    return { title: `${MEMORY_ENGINE_PREFIX} none`, body: 'Not a game engine project. Set up with Project Collaboration Tool\'s generic preset.' };
+    return { title: `${MEMORY_ENGINE_PREFIX} none`, body: 'Not a game engine project. Set up with Foreus\'s generic preset.' };
   }
   const version = detected.version ? ` ${detected.version}` : '';
   // The memory entry names the engine plainly; Summer Engine shares Godot's version numbers.

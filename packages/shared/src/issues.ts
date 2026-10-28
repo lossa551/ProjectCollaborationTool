@@ -124,7 +124,7 @@ export function closeComment(feature: PlanItem, pulls: PullRequest[]): string {
   } else {
     lines.push('', 'No pull request is linked to its tasks.');
   }
-  lines.push('', '_Closed from Project Collaboration Tool._');
+  lines.push('', '_Closed from Foreus._');
   return lines.join('\n');
 }
 
@@ -141,7 +141,7 @@ export function featureFromIssue(issue: Issue, id: string): PlanOp[] {
 /** Title and text for a GitHub issue made from a feature or idea. */
 export function issueFromPlan(item: PlanItem): { title: string; body: string } {
   const plan = renderPlan(item).split('\n').slice(1).join('\n').trim();
-  const body = `${plan || 'No description yet.'}\n\n_Planned in Project Collaboration Tool._`;
+  const body = `${plan || 'No description yet.'}\n\n_Planned in Foreus._`;
   return { title: item.title.slice(0, 256), body: body.slice(0, ISSUE_BODY_LIMIT) };
 }
 

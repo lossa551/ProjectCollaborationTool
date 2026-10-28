@@ -22,9 +22,9 @@ export const GODOT_EDITOR_BEAT_S = 2;
 
 export const GODOT_PLUGIN_CFG = `[plugin]
 
-name="Project Collaboration Tool"
+name="Foreus"
 description="Shows the session's file locks in the editor, and locks the open scene."
-author="Project Collaboration Tool"
+author="Foreus"
 version="1.1"
 script="plugin.gd"
 `;
@@ -32,7 +32,7 @@ script="plugin.gd"
 export const GODOT_PLUGIN_SCRIPT = `@tool
 extends EditorPlugin
 
-# Project Collaboration Tool: shows the session's file locks inside the
+# Foreus: shows the session's file locks inside the
 # editor, warns before you change a scene or resource someone else holds,
 # and lets you lock or release the open scene. The app writes the locks to
 # .godot/collab_tool/locks.json (never committed) and reads requests from
@@ -149,7 +149,7 @@ func _current_scene() -> String:
 func _show() -> void:
 	if not _dock:
 		return
-	_status.text = ("Locks in the session, as %s." % _you) if _connected else "Not connected: open Project Collaboration Tool and join the session."
+	_status.text = ("Locks in the session, as %s." % _you) if _connected else "Not connected: open Foreus and join the session."
 	_list.clear()
 	for lock in _locks:
 		var line: String = "%s  %s%s" % [str(lock.get("path", "")), str(lock.get("holder", "")), " (exclusive)" if lock.get("exclusive", false) else ""]
@@ -166,7 +166,7 @@ func _show() -> void:
 		_warning.text = "%s is locked by %s. Changes you save here will clash with theirs." % [scene, str(lock.get("holder", ""))]
 		if not _warned.has(scene):
 			_warned[scene] = true
-			push_warning("Project Collaboration Tool: " + _warning.text)
+			push_warning("Foreus: " + _warning.text)
 	_lock_button.disabled = scene == "" or not _connected or others
 	_lock_button.text = "Release this scene" if (not lock.is_empty() and lock.get("mine", false)) else "Lock this scene"
 
@@ -181,7 +181,7 @@ func _on_lock_pressed() -> void:
 	var path := ProjectSettings.globalize_path(REQUESTS)
 	var file := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
 	if file == null:
-		push_error("Project Collaboration Tool: could not write %s" % path)
+		push_error("Foreus: could not write %s" % path)
 		return
 	file.seek_end()
 	file.store_line(JSON.stringify({"action": action, "path": scene}))

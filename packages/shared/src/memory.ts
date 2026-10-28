@@ -141,7 +141,7 @@ export function memoryMarkdown(entries: MemoryEntry[]): string {
   const out = [
     '# Project memory',
     '',
-    '<!-- Written by Project Collaboration Tool from the session\'s project memory. Edit entries in the app: changes made here are overwritten. -->',
+    '<!-- Written by Foreus from the session\'s project memory. Edit entries in the app: changes made here are overwritten. -->',
     '',
     'What everyone working on this project, people and agents, should know about it.',
   ];

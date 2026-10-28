@@ -1,8 +1,11 @@
 # Packages the app as a Windows installer and publishes it to GitHub Releases,
 # where the in-app Update button looks for new versions. Everything the app
 # needs is bundled into dist/, so no node_modules ship with it.
+# The appId is from before the app was renamed to Foreus. It must not change:
+# the installer and Windows use it to recognize an existing install, so it can
+# update in place.
 appId: com.lossa551.projectcollaborationtool
-productName: Project Collaboration Tool
+productName: Foreus
 copyright: Copyright © 2026 lossa551
 
 directories:
@@ -19,14 +22,14 @@ asarUnpack:
 
 win:
   target: nsis
-  artifactName: ProjectCollaborationTool-Setup-${version}.${ext}
+  artifactName: Foreus-Setup-${version}.${ext}
 
 # One click: installs for the current user without admin rights, then opens.
 nsis:
   oneClick: true
   perMachine: false
   runAfterFinish: true
-  shortcutName: Project Collaboration Tool
+  shortcutName: Foreus
 
 publish:
   provider: github
