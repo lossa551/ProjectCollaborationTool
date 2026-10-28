@@ -17,6 +17,7 @@ import type { AppState, GitAction, LocalWorkspace } from '../common/api';
 import { keyProblem, runnerOf } from './Agents';
 import { useKept } from './kept';
 import { recall, remember } from './storage';
+import { ask } from './Dialog';
 
 export const taskForBranch = (tasks: Task[], branch: string | null) => (branch ? tasks.find((t) => t.branch === branch) : undefined);
 
@@ -196,7 +197,7 @@ function RepoCard({ state }: { state: AppState }) {
             <GitHubStatusLine github={github} />
           </p>
           {github.error && <p className="warning">{github.error}</p>}
-          <button className="secondary" disabled={!online} onClick={() => confirm('Unlink the GitHub repository for everyone?') && void link(null)}>
+          <button className="secondary" disabled={!online} onClick={async () => (await ask('Unlink the GitHub repository for everyone?', { confirm: 'Unlink' })) && void link(null)}>
             Unlink
           </button>
         </>
@@ -272,7 +273,7 @@ function DraftButton({
   }
   if (!agent) {
     return (
-      <span className="muted small" title="Add an agent on the Agents screen that can run on this PC">
+      <span className="muted small" title="Add an agent in Settings, Agents, that can run on this PC">
         {agents.length === 0 ? 'Add an agent to draft messages for you.' : 'None of the agents can run on this PC to draft a message.'}
       </span>
     );
@@ -284,8 +285,8 @@ function DraftButton({
         className="secondary"
         disabled={disabled}
         title="An agent reads your uncommitted changes and the branch's task and writes a message for you to edit"
-        onClick={() => {
-          if (hasMessage && !confirm('Replace your message with a draft?')) return;
+        onClick={async () => {
+          if (hasMessage && !(await ask('Replace your message with a draft?', { confirm: 'Replace' }))) return;
           onStart();
           // The outcome arrives in the app state (commitDraft), also when you left this page meanwhile.
           void window.pct.draftCommitMessage(agent.id);
@@ -449,7 +450,7 @@ function GitCard({ state }: { state: AppState }) {
               ))}
             </ul>
           )}
-          <button className="secondary" disabled={disabled} onClick={() => confirm('Abort the merge and undo the pull?') && void git('Aborting', { type: 'abort-merge' })}>
+          <button className="secondary" disabled={disabled} onClick={async () => (await ask('Abort the merge and undo the pull?', { confirm: 'Abort merge', danger: true })) && void git('Aborting', { type: 'abort-merge' })}>
             Abort merge
           </button>
         </div>
@@ -794,7 +795,7 @@ export function WorkspaceCard({
               <button className="link small" onClick={() => onOpenTask(task.id)}>
                 {task.title}
               </button>
-              <span className={`small ${outside.length > 0 ? 'warning' : 'good'}`} title={outside.join('\n')}>
+              <span className={`small ${outside.length > 0 ? 'warning' : task.scope.length === 0 ? 'muted' : 'good'}`} title={outside.join('\n')}>
                 {task.scope.length === 0
                   ? 'Task has no path limits'
                   : outside.length > 0
@@ -815,8 +816,18 @@ export function WorkspaceCard({
       <button className="link small" onClick={() => void choose()}>
         Change folder
       </button>
-      <button className="link small" onClick={() => window.pct.stopWorkspace()}>
-        Stop sharing
+      <button
+        className="link small"
+        title="Forget this folder in the app: the files stay where they are"
+        onClick={async () => {
+          const ok = await ask('Stop using this folder?', {
+            detail: `${local.folder}\n\nThe app forgets it: your changes and branch stop showing to the others, and agents can no longer start here. The files on disk stay as they are; choose the folder again any time.`,
+            confirm: 'Stop using it',
+          });
+          if (ok) window.pct.stopWorkspace();
+        }}
+      >
+        Stop using this folder
       </button>
       {error && <span className="error small">{error}</span>}
     </div>

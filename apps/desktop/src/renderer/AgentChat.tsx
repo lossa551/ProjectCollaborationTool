@@ -16,6 +16,7 @@ import type { AppState, WorktreeAction } from '../common/api';
 import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
 import { BudgetField, BudgetMeter, CostLine } from './Cost';
+import { ask } from './Dialog';
 
 // Screen 7: shared agent chats. Everyone in the session sees every chat live
 // and can post in it; the agent answers from the PC that runs it. Edits and
@@ -290,7 +291,7 @@ function Conversation({ state, chat, onSelect }: { state: AppState; chat: ChatIn
       )}
       {!runner && agent && (
         <p className="banner small">
-          {agent.name} is not running. Start it on the Agents screen; it answers what was posted here once it is up.
+          {agent.name} is not running. Start it in Settings, Agents; it answers what was posted here once it is up.
         </p>
       )}
       {branchFrom ? (
@@ -455,9 +456,9 @@ function Checkpoint({
           ? `Wait until ${agentName} finishes its turn, or stop it`
           : null;
   const undo = () => window.pct.undoTurn(chat.id, m.id, 'undo');
-  const goBack = () => {
+  const goBack = async () => {
     const later = 'Anything changed after it, undos included, is taken out of the copy; it can be brought back from its own checkpoint.';
-    if (confirm(`Take ${agentName}’s copy back to exactly how it was at the end of turn ${checkpoint.turn}? ${later}`)) {
+    if (await ask(`Take ${agentName}’s copy back to exactly how it was at the end of turn ${checkpoint.turn}?`, { detail: later, confirm: 'Go back' })) {
       window.pct.undoTurn(chat.id, m.id, 'go-back');
     }
   };

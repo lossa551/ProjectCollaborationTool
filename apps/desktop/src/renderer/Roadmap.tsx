@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type DragEvent, type FormEvent } from 'react';
 import {
   AssignStage,
   FEATURE_STATE_LABELS,
@@ -23,13 +23,16 @@ import {
 import type { AppState } from '../common/api';
 import { PullBadge } from './GitHub';
 import { IssueChips } from './Issues';
+import { ask, useClickOutside, useEscape } from './Dialog';
 import { ApproveForm, FeatureBadge } from './Planning';
 
 // The Roadmap view (issue #42), the first view of the Planning screen: one
 // lane per milestone, features in priority order, and how far each one is
 // without opening it. Drag a feature to reorder it or move it to another
 // milestone. Approving a plan, picking who does each stage and starting an
-// agent on the next task all happen here, without going to the board.
+// agent on the next task all happen here, without going to the board. There is
+// one Start button per feature: it uses the next stage's assignee and asks
+// which agent when that is "Anyone" (issue #65).
 
 /** The stage pipeline as it reads on a roadmap row. */
 const PIPELINE: { stage: TaskStage; label: string }[] = [
@@ -69,6 +72,7 @@ export function RoadmapView({
   const [dragging, setDragging] = useState<string | null>(null);
   const [drop, setDrop] = useState<Drop | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  useEscape(() => setOpen(null), open !== null);
 
   const finishDrop = (event: DragEvent) => {
     event.preventDefault();
@@ -156,13 +160,21 @@ function MilestoneHeader({ lane, index, milestones, editable }: { lane: RoadmapL
   return (
     <header className="milestone-head">
       <div className="milestone-title">
-        <TextOnBlur className="milestone-name" value={milestone.title} maxLength={100} disabled={!editable} onSave={(title) => title && edit({ title })} />
+        <TextOnBlur
+          className="milestone-name"
+          value={milestone.title}
+          maxLength={100}
+          disabled={!editable}
+          label="Milestone name"
+          onSave={(title) => title && edit({ title })}
+        />
         <TextOnBlur
           className="milestone-goal"
           value={milestone.goal}
           placeholder="Goal, in one line"
           maxLength={300}
           disabled={!editable}
+          label="Milestone goal"
           onSave={(goal) => edit({ goal })}
         />
         <input
@@ -186,19 +198,16 @@ function MilestoneHeader({ lane, index, milestones, editable }: { lane: RoadmapL
           >
             ▼
           </button>
-          <button
-            className="link"
-            disabled={!editable || milestones.length <= 1}
-            title="Delete milestone"
-            aria-label="Delete milestone"
-            onClick={() => {
+          <MilestoneMenu
+            disabled={!editable}
+            canDelete={milestones.length > 1}
+            onDelete={async () => {
               const to = milestones.find((m) => m.id !== milestone.id)!;
-              if (!confirm(`Delete the milestone "${milestone.title}" for everyone?${total > 0 ? ` Its ${total} features move to "${to.title}".` : ''}`)) return;
+              const moved = total > 0 ? `Its ${total} ${total === 1 ? 'feature moves' : 'features move'} to "${to.title}".` : undefined;
+              if (!(await ask(`Delete the milestone "${milestone.title}" for everyone?`, { detail: moved, confirm: 'Delete milestone', danger: true }))) return;
               window.pct.editPlanning({ op: 'milestone-delete', id: milestone.id });
             }}
-          >
-            ✕
-          </button>
+          />
         </div>
       </div>
       {total > 0 && (
@@ -216,6 +225,38 @@ function MilestoneHeader({ lane, index, milestones, editable }: { lane: RoadmapL
         </div>
       )}
     </header>
+  );
+}
+
+/** More actions for a milestone, kept away from the reorder arrows so a slip does not delete it. */
+function MilestoneMenu({ disabled, canDelete, onDelete }: { disabled: boolean; canDelete: boolean; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEscape(() => setOpen(false), open);
+  useClickOutside(ref, () => setOpen(false), open);
+  return (
+    <div ref={ref} className="milestone-menu">
+      <button className="link" disabled={disabled} onClick={() => setOpen(!open)} title="More" aria-label="More milestone actions" aria-haspopup="menu" aria-expanded={open}>
+        ⋯
+      </button>
+      {open && (
+        <div className="card menu small-menu" role="menu">
+          <button
+            role="menuitem"
+            className="menu-item bad"
+            disabled={!canDelete}
+            title={canDelete ? undefined : 'The last milestone cannot be deleted'}
+            autoFocus
+            onClick={() => {
+              setOpen(false);
+              onDelete();
+            }}
+          >
+            Delete milestone…
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -266,17 +307,8 @@ function FeatureRow({
   const deps = featureDependencies(item, session.planning);
   const planned = plannedTasks(item.tasks).length;
   const [approving, setApproving] = useState(false);
-  const nextAgent = feature.next ? item.assign[feature.next.stage] : undefined;
-  const startable = feature.next && nextAgent?.kind === 'agent' && session.agents.some((a) => a.id === nextAgent.id) ? nextAgent : null;
-  const [error, setError] = useState<string | null>(null);
-
-  const start = async (agentId: string) => {
-    if (!feature.next) return;
-    setError(null);
-    const result = await startOnTask(feature, agentId);
-    if (result.ok) onOpenChat(result.value);
-    else setError(result.error);
-  };
+  const start = useStart(feature, state, onOpenChat);
+  const [choosing, setChoosing] = useState(false);
 
   const classes = ['roadmap-row', dropBefore && 'drop-before', dragging && 'dragging', open && 'open'].filter(Boolean).join(' ');
   return (
@@ -343,9 +375,26 @@ function FeatureRow({
             >
               Approve plan
             </button>
-          ) : startable ? (
-            <button className="small" disabled={session.status !== 'connected'} onClick={() => void start(startable.id)} title={`Hand "${feature.next!.task.title}" to ${startable.name}`}>
-              Start {startable.name}
+          ) : start.agent ? (
+            <button
+              className="small"
+              disabled={!start.online}
+              onClick={() => void start.run(start.agent!.id)}
+              title={`Hand "${feature.next!.task.title}" to ${start.agent.name}, the ${PIPELINE_LABEL[feature.next!.stage]} assignee`}
+            >
+              Start {start.agent.name}
+            </button>
+          ) : start.anyone ? (
+            <button
+              className="small"
+              disabled={!start.online}
+              onClick={() => {
+                setChoosing(true);
+                if (!open) onToggle();
+              }}
+              title={`Nobody is picked for ${PIPELINE_LABEL[feature.next!.stage]}: choose which agent starts`}
+            >
+              Start agent…
             </button>
           ) : null}
           <button className="secondary small" onClick={onToggle} aria-expanded={open} title="Stages, next task and milestone">
@@ -353,7 +402,7 @@ function FeatureRow({
           </button>
         </div>
       </div>
-      {error && <p className="error small">{error}</p>}
+      {start.error && <p className="error small">{start.error}</p>}
       {open && (
         <FeatureActions
           feature={feature}
@@ -361,7 +410,9 @@ function FeatureRow({
           state={state}
           approving={approving}
           onApproving={setApproving}
-          onStart={start}
+          choosing={choosing}
+          onChoosing={setChoosing}
+          start={start}
           onOpenTask={onOpenTask}
           onOpenFeature={onOpenFeature}
         />
@@ -384,6 +435,42 @@ function Pipeline({ feature }: { feature: RoadmapFeature }) {
     </ol>
   );
 }
+
+/**
+ * Starting an agent on a feature's next task. The agent is the next stage's
+ * assignee; with "Anyone" there, the person picks one, and that agent becomes
+ * the stage's assignee so the row and the stage pickers always agree.
+ */
+function useStart(feature: RoadmapFeature, state: AppState, onOpenChat: (chatId: string) => void) {
+  const { session } = state;
+  const [error, setError] = useState<string | null>(null);
+  const next = feature.next;
+  const assignee = next ? feature.item.assign[next.stage] : undefined;
+  const agent = next && assignee?.kind === 'agent' ? session.agents.find((a) => a.id === assignee.id) ?? null : null;
+  const run = async (agentId: string) => {
+    if (!next) return;
+    setError(null);
+    const stage = AssignStage.safeParse(next.stage);
+    const picked = session.agents.find((a) => a.id === agentId);
+    if (!assignee && stage.success && picked) {
+      window.pct.editPlanning({ op: 'assign', id: feature.item.id, stage: stage.data, who: { kind: 'agent', id: picked.id, name: picked.name } });
+    }
+    const result = await startOnTask(feature, agentId);
+    if (result.ok) onOpenChat(result.value);
+    else setError(result.error);
+  };
+  return {
+    /** The assigned agent, when it still exists. */
+    agent,
+    /** Nobody is assigned and there are agents to choose from. */
+    anyone: !!next && !assignee && session.agents.length > 0,
+    online: session.status === 'connected',
+    error,
+    run,
+  };
+}
+
+type Start = ReturnType<typeof useStart>;
 
 /** Hands the feature's next open task to an agent, with the whole plan. */
 function startOnTask(feature: RoadmapFeature, agentId: string) {
@@ -411,7 +498,9 @@ function FeatureActions({
   state,
   approving,
   onApproving,
-  onStart,
+  choosing,
+  onChoosing,
+  start,
   onOpenTask,
   onOpenFeature,
 }: {
@@ -420,7 +509,10 @@ function FeatureActions({
   state: AppState;
   approving: boolean;
   onApproving: (on: boolean) => void;
-  onStart: (agentId: string) => Promise<void>;
+  /** Picking which agent starts, when the stage has nobody assigned. */
+  choosing: boolean;
+  onChoosing: (on: boolean) => void;
+  start: Start;
   onOpenTask: (taskId: string) => void;
   onOpenFeature: (id: string) => void;
 }) {
@@ -429,7 +521,7 @@ function FeatureActions({
   const { item, next } = feature;
   const people = session.participants.filter((p) => p.kind === 'human');
   const picked = next ? item.assign[next.stage] : undefined;
-  const [agentId, setAgentId] = useState(picked?.kind === 'agent' ? picked.id : (session.agents[0]?.id ?? ''));
+  const [agentId, setAgentId] = useState(session.agents[0]?.id ?? '');
   const person = picked?.kind === 'human' ? people.find((p) => p.id === picked.id) : undefined;
   const ids = lane.features.map((f) => f.item.id);
   const at = ids.indexOf(item.id);
@@ -490,20 +582,33 @@ function FeatureActions({
               Give to {person.name}
             </button>
           )}
-          {session.agents.length > 0 && (
+          {start.agent ? (
+            <span className="muted small">Start {start.agent.name} with the button above</span>
+          ) : start.anyone && choosing ? (
             <>
-              <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              <select value={agentId} onChange={(e) => setAgentId(e.target.value)} aria-label="Which agent starts" autoFocus>
                 {session.agents.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name}
                   </option>
                 ))}
               </select>
-              <button className="small" disabled={session.status !== 'connected' || !agentId} onClick={() => void onStart(agentId)}>
-                Start agent
+              <button
+                className="small"
+                disabled={!start.online || !agentId}
+                onClick={() => {
+                  onChoosing(false);
+                  void start.run(agentId);
+                }}
+                title={`Starts the agent and makes it the ${PIPELINE_LABEL[next.stage]} assignee`}
+              >
+                Start
+              </button>
+              <button className="secondary small" onClick={() => onChoosing(false)}>
+                Cancel
               </button>
             </>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -568,27 +673,50 @@ function AddMilestone({ editable, count }: { editable: boolean; count: number })
   );
 }
 
-/** A text field that saves when you leave it (or press Enter), not on every key. */
+/**
+ * A text field that saves when you leave it (or press Enter), not on every
+ * key. A pencil shows it can be edited (issue #65); clicking it edits too.
+ */
 function TextOnBlur({
   value,
   onSave,
+  label,
+  className,
   ...props
-}: { value: string; onSave: (value: string) => void; className?: string; placeholder?: string; maxLength?: number; disabled?: boolean }) {
+}: { value: string; onSave: (value: string) => void; label: string; className?: string; placeholder?: string; maxLength?: number; disabled?: boolean }) {
   const [text, setText] = useState(value);
   const [editing, setEditing] = useState(false);
   const shown = editing ? text : value;
   return (
-    <input
-      {...props}
-      value={shown}
-      onFocus={() => (setText(value), setEditing(true))}
-      onChange={(e) => setText(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        const next = text.trim();
-        if (next !== value) onSave(next);
-      }}
-      onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-    />
+    <label className={`editable-text ${className ?? ''}`} title={props.disabled ? undefined : `${label}: click to edit`}>
+      <input
+        {...props}
+        aria-label={label}
+        value={shown}
+        onFocus={() => (setText(value), setEditing(true))}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          setEditing(false);
+          const next = text.trim();
+          if (next !== value) onSave(next);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          // Escape drops the edit, and does not also close what is around it.
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setText(value);
+            setEditing(false);
+            const input = e.currentTarget;
+            requestAnimationFrame(() => input.blur());
+          }
+        }}
+      />
+      {!props.disabled && !editing && (
+        <span className="pencil" aria-hidden>
+          ✎
+        </span>
+      )}
+    </label>
   );
 }

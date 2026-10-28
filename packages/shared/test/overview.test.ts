@@ -290,6 +290,26 @@ describe('sinceLastHere', () => {
     expect(groups[2]!.lines[0]!.text).toBe('Failing: Double jump works ("Jumping", Lina)');
     expect(groups[5]!.lines.map((l) => l.text)).toEqual(['Lina: 2 changes']);
   });
+
+  it('leaves out new issues that Home lists to triage', () => {
+    const issue = (number: number) => ({
+      number,
+      title: `Issue ${number}`,
+      url: `https://github.com/martin/game/issues/${number}`,
+      author: 'lina',
+      labels: [],
+      assignees: [],
+      body: '',
+      comments: 0,
+      createdAt: 20,
+      updatedAt: 20,
+    });
+    const state = base({ github: { ...EMPTY_GITHUB_STATUS, issues: [issue(7), issue(8)] } });
+    expect(sinceLastHere(state, 10, 'Martin').find((g) => g.key === 'issues')!.lines).toHaveLength(2);
+    const lines = sinceLastHere(state, 10, 'Martin', { leaveOutIssues: new Set([7]) }).find((g) => g.key === 'issues')!.lines;
+    expect(lines.map((l) => l.text)).toEqual(['#8 Issue 8 (lina)']);
+    expect(sinceLastHere(state, 10, 'Martin', { leaveOutIssues: new Set([7, 8]) }).some((g) => g.key === 'issues')).toBe(false);
+  });
 });
 
 describe('groupActivity', () => {
