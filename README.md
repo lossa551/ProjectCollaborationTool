@@ -8,7 +8,8 @@ and agent chat. Design notes live in [docs/design](docs/design).
 ## Features
 
 ### Shared session
-- **Host or join** a session from the app with an invite code; it runs on the host's PC and the friend connects over Tailscale.
+- **Host or join** a session from the app with an invite code; it runs on the host's PC and others connect over Tailscale.
+- **As many people as you like**: anyone with the invite code can join, and there is no cap on people or agents. It is built for a small team, and the tests run with up to three people at once.
 - **Live presence**: Who is here shows each person and agent and what they are working on right now.
 - **Home** gives the overview: who is doing what, what needs you, the current milestone, and unlinked GitHub issues.
 - **Resume, backups and snapshots**: sessions are saved, backed up daily, and can be restored or snapshotted before a big change.
