@@ -57,7 +57,7 @@ jobs:
             echo "KIND=" >> "$GITHUB_ENV"
             echo "LATEST=--latest" >> "$GITHUB_ENV"
           fi
-          npm version "$version" --no-git-tag-version -w @pct/desktop
+          npm version "$version" --no-git-tag-version --allow-same-version -w @pct/desktop
           echo "VERSION=$version" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

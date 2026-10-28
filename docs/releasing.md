@@ -29,7 +29,13 @@ Versions look like `0.MINOR.PATCH`.
   then we stay on 0.x.
 
 **0.2 is game engine support**: Godot and Summer Engine (#10) plus Unreal
-(#11), promoted from `beta` in PR #79. The next bump is 0.3.0.
+(#11), promoted from `beta` in PR #79.
+
+**0.3 is token spend and bloat control** (#88-#94): context trimming and
+continuing in a new chat, the memory token budget, a fixed system prompt per
+turn, shorter repeated file reads, the prompt cache share per chat, the wider
+bloat check and the cheapest-model notes agent. Promoted from `beta`; the next
+bump is 0.4.0.
 
 ### Why 0.2 starts at 0.2.39
 
