@@ -19,6 +19,7 @@ import {
 import type { AppState } from '../common/api';
 import { Avatar } from './Avatar';
 import { CostShort } from './Cost';
+import { ask } from './Dialog';
 
 // Screen 5: each agent's connection, responsibilities, allowed paths and what
 // it needs approval for. Profiles are shared with the session; an agent runs
@@ -47,10 +48,10 @@ export function AgentsScreen({ state, onOpenChat }: { state: AppState; onOpenCha
     <div className="agents-screen">
       <header className="screen-header">
         <div>
-          <h1>Agent setup</h1>
+          <h2>Agents</h2>
           <p className="muted">
             Agents join the session like people do. Each runs on the PC of whoever starts it, in that person’s project
-            folder; API keys stay on that PC. Chat with them under Agents in the menu.
+            folder; API keys stay on that PC. Chat with them under Chats in the menu.
           </p>
         </div>
         <button disabled={!online} onClick={() => setEditing('new')}>
@@ -340,8 +341,8 @@ function AgentEditor({ agent, state, onDone }: { agent: AgentProfile | undefined
           <button
             type="button"
             className="danger"
-            onClick={() => {
-              if (confirm(`Remove ${agent.name}? Its chats stay.`)) {
+            onClick={async () => {
+              if (await ask(`Remove ${agent.name}?`, { detail: 'Its chats stay.', confirm: 'Remove agent', danger: true })) {
                 window.pct.deleteAgent(agent.id);
                 onDone();
               }

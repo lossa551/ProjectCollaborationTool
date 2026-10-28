@@ -38,6 +38,14 @@ describe('agent usage and cost', () => {
     expect(priceFor('qwen3', DEFAULT_PRICES)).toBeNull();
   });
 
+  it('prices Opus 4.0 and 4.1 at their own, higher rate', () => {
+    expect(priceFor('claude-opus-4-1', DEFAULT_PRICES)?.input).toBe(15);
+    expect(priceFor('claude-opus-4-1-20250805', DEFAULT_PRICES)?.output).toBe(75);
+    expect(priceFor('claude-opus-4-0', DEFAULT_PRICES)?.input).toBe(15);
+    expect(priceFor('claude-opus-4-20250514', DEFAULT_PRICES)?.input).toBe(15);
+    expect(priceFor('claude-opus-4-5', DEFAULT_PRICES)?.input).toBe(5);
+  });
+
   it('adds calls up per row and prices them by kind', () => {
     const first = row();
     const both = addUsage(first, report({ input: 0, output: 0, cacheRead: 1_000_000 }), { agentId: 'a1', taskId: 't1' }, 2);

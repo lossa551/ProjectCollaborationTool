@@ -14,7 +14,7 @@ export function createModel(agent: AgentProfile, keys: ApiKeys): ModelAdapter {
   const baseUrl = connection.baseUrl ?? preset.baseUrl;
   const key = keys(apiKeyName(connection.provider, baseUrl));
   if (preset.needsKey && !key) {
-    throw new Error(`No API key for ${preset.label} on this PC. Add it on the Agents screen.`);
+    throw new Error(`No API key for ${preset.label} on this PC. Add it in Settings, Agents.`);
   }
   if (connection.provider === 'anthropic') return new AnthropicAdapter(connection.model, key ?? '', connection.baseUrl);
   if (!baseUrl) throw new Error(`${agent.name} needs the address of its API`);

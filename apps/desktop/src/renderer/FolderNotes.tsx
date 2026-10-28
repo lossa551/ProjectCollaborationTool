@@ -378,7 +378,7 @@ function PromptActions({
       <label className="field">
         <span>Agent</span>
         <select value={agentId} onChange={(e) => setAgentId(e.target.value)} disabled={session.agents.length === 0}>
-          {session.agents.length === 0 && <option value="">Add an agent on the Agents screen first</option>}
+          {session.agents.length === 0 && <option value="">Add an agent in Settings first</option>}
           {session.agents.map((a) => (
             <option key={a.id} value={a.id}>
               {a.name} · {describeConnection(a.connection)}

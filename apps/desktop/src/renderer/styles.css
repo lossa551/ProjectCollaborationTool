@@ -6,6 +6,8 @@
   --text: #e6e8ee;
   --muted: #9097a6;
   --accent: #5b8def;
+  /* Button background: white text on it is 4.7:1 (WCAG AA); --accent stays for links and borders. */
+  --accent-strong: #3d6fd6;
   --good: #3fb97a;
   --warn: #e0a43c;
   --bad: #e5604f;
@@ -46,7 +48,7 @@ h2 {
 }
 
 button {
-  background: var(--accent);
+  background: var(--accent-strong);
   color: white;
   border: 0;
   border-radius: 6px;
@@ -277,6 +279,17 @@ textarea {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+}
+
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button.danger-solid {
+  background: #b8392b;
 }
 
 button.danger {
@@ -519,11 +532,23 @@ textarea:disabled {
   gap: 8px;
 }
 
-.activity li.clickable {
-  cursor: pointer;
+.activity-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 
-.activity li.clickable:hover span {
+button.activity-row {
+  background: none;
+  color: inherit;
+  padding: 0;
+  border-radius: 4px;
+  text-align: left;
+  font-size: inherit;
+}
+
+button.activity-row:hover span {
   text-decoration: underline;
 }
 
@@ -1955,7 +1980,12 @@ pre.fn-prompt {
 }
 
 .agent-working {
+  color: var(--good);
+}
+
+.agent-waiting {
   color: var(--warn);
+  font-weight: 600;
 }
 
 .plan-filter {
@@ -2261,17 +2291,74 @@ pre.fn-prompt {
   border-color: var(--border);
 }
 
-input.milestone-name {
-  width: 180px;
+/* Milestone name and goal are edited in place: a pencil and a dashed underline say so (issue #65). */
+.editable-text {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.editable-text input:not(:disabled) {
+  border-bottom: 1px dashed var(--border);
+  border-radius: 6px 6px 0 0;
+  padding-right: 22px;
+}
+
+.editable-text input:not(:disabled):hover,
+.editable-text input:focus {
+  border-radius: 6px;
+}
+
+.editable-text .pencil {
+  position: absolute;
+  right: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.editable-text:hover .pencil {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.milestone-name {
+  width: 200px;
   flex: none;
+}
+
+.milestone-name input {
   font-size: 16px;
   font-weight: 600;
 }
 
-input.milestone-goal {
+.milestone-goal {
   flex: 1;
   min-width: 0;
+}
+
+.milestone-goal input {
   color: var(--muted);
+}
+
+.milestone-menu {
+  position: relative;
+}
+
+.milestone-menu .menu {
+  position: absolute;
+  right: 0;
+  top: 22px;
+  z-index: 10;
+  width: 200px;
+  padding: 4px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+
+.milestone-tools .menu-item.bad {
+  color: var(--bad);
+  font-size: 13px;
 }
 
 input.milestone-date {
@@ -2798,9 +2885,18 @@ input.milestone-date {
 }
 
 .budget-form {
+  margin: 4px 0;
+}
+
+.budget-form .row {
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  margin: 4px 0;
+  margin: 0;
+}
+
+.budget-form .error {
+  margin: 4px 0 0;
 }
 
 .budget-form input {
@@ -3013,4 +3109,80 @@ input.milestone-date {
 
 .engine-panel .home-rows li .grow {
   min-width: 0;
+}
+
+/* In-app confirm dialog (issue #66), in place of the native confirm()/alert(). */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.5);
+}
+
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dialog p {
+  margin: 0;
+}
+
+.dialog-message {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.dialog-detail {
+  white-space: pre-wrap;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.dialog-actions {
+  justify-content: flex-end;
+}
+
+/* Session menu in the host's title bar (issue #64): Invite, Snapshot, Stop hosting. */
+
+button.secondary.active {
+  border-color: var(--accent);
+}
+
+.popover.menu {
+  width: 320px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+  background: var(--panel-2);
+}
+
+.menu-item.bad {
+  color: var(--bad);
+}
+
+.settings-screen > .tabs {
+  margin-bottom: 4px;
 }

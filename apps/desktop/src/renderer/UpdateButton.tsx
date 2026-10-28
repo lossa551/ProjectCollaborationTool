@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { UpdateInfo } from '../common/api';
 import './update.css';
+import { ask } from './Dialog';
 
 // New versions download in the background, so most of the time this is a
 // quiet version label. Once an update is ready it turns into a restart button.
@@ -15,9 +16,9 @@ export function UpdateButton({ hosting }: { hosting: boolean }) {
   if (!info) return null;
   const { state, version } = info;
 
-  const update = () => {
+  const update = async () => {
     const restarting = state.status === 'ready';
-    if (restarting && hosting && !window.confirm('Restarting ends the session for everyone until you host again. Update now?')) return;
+    if (restarting && hosting && !(await ask('Restarting ends the session for everyone until you host again. Update now?', { confirm: 'Restart and update' }))) return;
     void window.pct.update();
   };
 

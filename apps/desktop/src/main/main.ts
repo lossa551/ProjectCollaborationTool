@@ -578,6 +578,9 @@ async function writeCommitDraft(agentId: unknown, abort: AbortController): Promi
   if (!profile) return { ok: false, error: 'Pick an agent to draft the message.' };
   const folder = workspace?.folder;
   if (!folder || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
+  // Started only to draft: stopped again afterwards, so no idle agent nobody
+  // started stays in the session (issue #63).
+  let startedToDraft = false;
   try {
     const changes = await uncommittedChanges(folder);
     if (changes.files.length === 0) return { ok: false, error: 'There are no uncommitted changes to describe.' };
@@ -585,6 +588,7 @@ async function writeCommitDraft(agentId: unknown, abort: AbortController): Promi
     if (!localAgents.isRunning(profile.id)) {
       const started = await startAgent(profile.id);
       if (!started.ok) return started;
+      startedToDraft = true;
     }
     const answer = cleanDraft(await localAgents.draft(profile.id, commitDraftPrompt({ ...changes, task }), task?.id ?? null, abort.signal));
     if (!answer) return { ok: false, error: `${profile.name} answered with an empty message. Try again, or write it yourself.` };
@@ -592,6 +596,10 @@ async function writeCommitDraft(agentId: unknown, abort: AbortController): Promi
   } catch (error) {
     if (abort.signal.aborted) return { ok: false, error: 'Stopped.' };
     return failure(error);
+  } finally {
+    // Unless someone opened a chat with it meanwhile.
+    const chatting = client.getState().chats.some((c) => c.agentId === profile.id && c.state !== 'idle');
+    if (startedToDraft && !chatting) void localAgents.stop(profile.id);
   }
 }
 

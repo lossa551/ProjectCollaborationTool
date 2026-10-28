@@ -333,6 +333,8 @@ export function sinceLastHere(
   input: Pick<SessionState, 'tasks' | 'github' | 'agents' | 'chats' | 'planning' | 'memory' | 'activity'>,
   since: number,
   yourName: string | null,
+  /** leaveOutIssues: new issues shown elsewhere on Home (still to triage), so not listed twice. */
+  options: { leaveOutIssues?: ReadonlySet<number> } = {},
 ): DigestGroup[] {
   const groups: DigestGroup[] = [];
   const recent = input.activity.filter((a) => a.at > since && a.actorName !== yourName);
@@ -371,7 +373,7 @@ export function sinceLastHere(
     });
   }
 
-  const opened = newIssues(input, since);
+  const opened = newIssues(input, since).filter((i) => !options.leaveOutIssues?.has(i.number));
   if (opened.length > 0) {
     groups.push({
       key: 'issues',

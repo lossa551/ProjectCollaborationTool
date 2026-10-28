@@ -12,6 +12,7 @@ import {
 } from '@pct/shared';
 import type { AppState } from '../common/api';
 import { useKept } from './kept';
+import { ask } from './Dialog';
 
 // GitHub issues in the app (issue #43): the Issues tab of the Code screen, and
 // the pieces the roadmap, the feature editor and Home use. Links, triage and
@@ -232,7 +233,7 @@ function LinkChip({ link, editable, onOpen, onUnlink }: { link: IssueLink; edita
 }
 
 /** Picks a feature, idea or task to link an issue to. */
-function LinkPicker({
+export function LinkPicker({
   state,
   exclude,
   onPick,
@@ -304,7 +305,7 @@ export function IssueChips({ issues }: { issues: Issue[] }) {
  * nothing is closed without this. Returns the error, if any.
  */
 export async function confirmCloseIssue(issue: Pick<Issue, 'number' | 'title'>, comment: string): Promise<string | null> {
-  if (!confirm(`Close issue #${issue.number} "${issue.title}" on GitHub?\n\nIt gets this comment:\n\n${comment}`)) return null;
+  if (!(await ask(`Close issue #${issue.number} "${issue.title}" on GitHub?`, { detail: `It gets this comment:\n\n${comment}`, confirm: 'Close issue' }))) return null;
   const result = await window.pct.closeIssue(issue.number, comment);
   return result.ok ? null : result.error;
 }

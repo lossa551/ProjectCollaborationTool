@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { matchesAny, samePath, type Lock, type LockRules, type Participant, type Task } from '@pct/shared';
 import { Avatar } from './Avatar';
+import { ask } from './Dialog';
 
 /** Locks on the same path held by others: soft locks that overlap. */
 export function overlapsFor(lock: Lock, locks: Lock[]): Lock[] {
@@ -130,8 +131,8 @@ export function LockList({
             {editable && !mine && agents && (
               <button
                 className="secondary"
-                onClick={() => {
-                  if (confirm(`Release ${lock.holder.name}'s lock on ${lock.path}? It locks the file again if it edits it.`)) {
+                onClick={async () => {
+                  if (await ask(`Release ${lock.holder.name}'s lock on ${lock.path}?`, { detail: 'It locks the file again if it edits it.', confirm: 'Release' })) {
                     window.pct.releaseLock(lock.id);
                   }
                 }}
@@ -142,8 +143,8 @@ export function LockList({
             {editable && !mine && lock.abandoned && (
               <button
                 className="danger"
-                onClick={() => {
-                  if (confirm(`Recover ${lock.path} from ${lock.holder.name}? Their unsaved work on it may be lost.`)) {
+                onClick={async () => {
+                  if (await ask(`Recover ${lock.path} from ${lock.holder.name}?`, { detail: 'Their unsaved work on it may be lost.', confirm: 'Recover', danger: true })) {
                     window.pct.recoverLock(lock.id);
                   }
                 }}
