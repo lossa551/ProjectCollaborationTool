@@ -31,19 +31,52 @@ export interface ContextInput {
   worktree: { branch: string; base: string | null } | null;
   /** The agent has the record_test_result tool (our own loop); CLI agents report results in the chat instead. */
   recordsResults: boolean;
-  /** A Godot (or Summer Engine) project, when the agent uses the engine on this PC (issue #10). */
+  /** A Godot (or Summer Engine) or Unreal project, when the agent uses the engine on this PC (issues #10, #11). */
   engine?: {
     /** The engine server's name, when the agent has its tools. */
     bridge: string | null;
-    /** The tools drive an editor that has the project open (Summer), rather than a headless Godot. */
+    /** The tools drive an editor that has the project open (Summer, Unreal), rather than a headless Godot. */
     liveEditor: boolean;
-    /** The project.godot folder, repo-relative ('' for the top). */
+    /** The project.godot folder, repo-relative ('' for the top, and for Unreal projects). */
     godotDir: string;
+    /** An Unreal project: the .uproject's folder (repo-relative) and name; null for Godot. */
+    unreal?: { dir: string; name: string } | null;
     /** The same folder on disk. */
     projectDir: string;
     /** How to run the tests: 'tool' for run_tests, else the command; null when they cannot run. */
     tests: string | null;
   } | null;
+}
+
+/** What an agent is told about an Unreal project (issue #11). */
+function unrealPiece(engine: NonNullable<ContextInput['engine']>, project: { dir: string; name: string }): Piece {
+  const content = project.dir ? `${project.dir}/Content` : 'Content';
+  const lines = [
+    `This is an Unreal Engine project (${project.name}.uproject${project.dir ? ` in ${project.dir}/` : ''}). /Game/ object paths are files in ${content}/: ` +
+      '/Game/X/BP_Door is X/BP_Door.uasset, a level is .umap. Assets and levels are binary: change them in the editor, never by writing the files.',
+    `Follow Epic's folder structure and asset naming (AGENTS.md has the pages): new assets go in ${content}/${project.name}/ (Assets/, Envs/ for ` +
+      `levels, Sequences/, Media/, Tools/) or ${content}/Common/, named [Prefix]_[Name]_[Descriptor]_[Variant] (BP_, WBP_, M_, MI_, SM_, SK_, ` +
+      'T_, DT_, E_, F_, FXS_, ...). The app refuses engine calls that would put a new asset elsewhere or name it otherwise.',
+  ];
+  if (engine.bridge) {
+    lines.push(
+      `You have the ${engine.bridge}'s tool \`unreal\`: it works in the Unreal Editor that has the project open. Use its operations in order: ` +
+        'search (2-4 plain words), describe (the exact contract, and the consent grant a delete needs), then execute with tool + action ' +
+        'and params. Copy each answer\'s nextCall instead of guessing names. If it answers NOT_CONNECTED, the editor is not open: say so ' +
+        'and work on code and files meanwhile.',
+      'Engine calls that change assets or levels are checked like file edits (an exclusive lock on each .uasset/.umap, allowed paths, ' +
+        'approvals); deletes always ask a person; placing actors, saving everything, playing the game, console commands and Python ' +
+        'follow the rule for commands. Save what you changed (control_editor save_all) before you finish, so it reaches the files.',
+    );
+  }
+  if (engine.tests) {
+    lines.push(
+      engine.tests === 'tool'
+        ? 'Run the automation tests with run_tests (Unreal Automation, headless; it takes minutes), and use the result as evidence for the acceptance criteria.'
+        : `Run the automation tests with this command (headless; it takes minutes), and use the result as evidence for the acceptance criteria:\n${engine.tests}`,
+    );
+  }
+  return { label: 'Game engine', detail: engine.bridge ?? 'Unreal project', text: lines.join('\n') };
 }
 
 interface Piece {
@@ -96,7 +129,9 @@ function pieces({ agent, chat, task, startedBy, memory, folderNotes, recordsResu
     }
     out.push({ label: 'Task', detail: `${task.title} · ${STAGE_LABELS[task.stage]}`, text: lines.join('\n') });
   }
-  if (engine) {
+  if (engine?.unreal) {
+    out.push(unrealPiece(engine, engine.unreal));
+  } else if (engine) {
     const where = engine.godotDir ? `in ${engine.godotDir}/ (res:// is that folder)` : 'in the top folder (res:// is the repository root)';
     const lines = [`This is a Godot project ${where}. It may be opened in Godot or in Summer Engine, which is built on Godot.`];
     if (engine.bridge) {

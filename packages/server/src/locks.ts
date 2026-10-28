@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   DEFAULT_LOCK_RULES,
-  matchesAny,
+  lockKindFor,
   normalizePath,
   samePath,
   type Lock,
@@ -43,7 +43,7 @@ export class LockTable {
 
   /** The kind of lock a path gets under the current rules. */
   kindFor(path: string): Lock['kind'] {
-    return matchesAny(path, this.rules.exclusivePatterns) ? 'exclusive' : 'soft';
+    return lockKindFor(path, this.rules);
   }
 
   acquire(

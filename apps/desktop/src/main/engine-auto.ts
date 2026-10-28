@@ -8,6 +8,10 @@ import type { RunningEditor } from './programs';
 
 export interface BridgeFacts {
   godotProject: boolean;
+  /** Your project folder has a .uproject (and no project.godot). */
+  unrealProject?: boolean;
+  /** EngineWire is in the Unreal project. */
+  unrealPlugin?: 'ok' | 'missing' | null;
   /** null: not checked yet. */
   node: boolean | null;
   summerSignedIn: boolean;
@@ -16,8 +20,17 @@ export interface BridgeFacts {
   summerRunning: boolean;
 }
 
-export function pickBridge(choice: EngineBridgeChoice, facts: BridgeFacts): { active: 'godot' | 'summer' | null; why: string } {
+export function pickBridge(choice: EngineBridgeChoice, facts: BridgeFacts): { active: 'godot' | 'summer' | 'unreal' | null; why: string } {
   if (choice === 'off') return { active: null, why: 'Turned off here.' };
+  if (!facts.godotProject && facts.unrealProject) {
+    // Unreal (issue #11): EngineWire is the one bridge; Godot's and Summer's do not fit.
+    if (choice !== 'auto' && choice !== 'unreal') return { active: null, why: `Your project is an Unreal project; ${choice === 'godot' ? 'the Godot MCP server' : 'Summer Engine'} does not fit it.` };
+    if (facts.node === false) return { active: null, why: 'Node.js is not installed; the app starts EngineWire’s MCP server with npx.' };
+    if (facts.unrealPlugin !== 'ok') return { active: null, why: 'Add EngineWire to your project first: agents reach the Unreal Editor through it.' };
+    const open = facts.editor?.kind === 'unreal' && facts.editor.projectOpen;
+    return { active: 'unreal', why: open ? 'The Unreal Editor has your project open.' : 'Agents reach the Unreal Editor once it has your project open.' };
+  }
+  if (choice === 'unreal') return { active: null, why: 'Your project folder has no .uproject.' };
   if (!facts.godotProject) return { active: null, why: 'Your project folder has no project.godot yet.' };
   if (facts.node === false) return { active: null, why: 'Node.js is not installed; the app starts the engine’s MCP server with npx.' };
   if (choice !== 'auto') return { active: choice, why: 'Chosen here.' };
@@ -33,13 +46,28 @@ export function pickBridge(choice: EngineBridgeChoice, facts: BridgeFacts): { ac
  * The editor to show: the one the Locks plugin says has your project open,
  * else a running one (which may have another project, or none, open).
  */
-export function currentEditor(beat: EditorHeartbeat | null, running: RunningEditor[], toRepoPath: (res: string) => string | null): EngineEditor | null {
+export function currentEditor(
+  beat: EditorHeartbeat | null,
+  running: RunningEditor[],
+  toRepoPath: (res: string) => string | null,
+  uproject: string | null = null,
+): EngineEditor | null {
   if (beat) {
     return { kind: beat.editor, projectOpen: true, scene: beat.scene ? toRepoPath(beat.scene) : null, version: beat.version || null };
   }
-  const first = running.find((e) => e.kind === 'summer') ?? running[0];
+  // Unreal: the command line names the .uproject it opened (absolute, as the launcher passes it).
+  const unreal = running.filter((e) => e.kind === 'unreal');
+  const ours = uproject ? unreal.find((e) => e.project && sameFile(e.project, uproject)) : undefined;
+  if (ours) return { kind: 'unreal', projectOpen: true, scene: null, version: null };
+  const first = running.find((e) => e.kind === 'summer') ?? (uproject ? unreal[0] : undefined) ?? running.find((e) => e.kind !== 'unreal') ?? running[0];
   return first ? { kind: first.kind, projectOpen: false, scene: null, version: null } : null;
 }
+
+/** The same file, however Windows spells it. */
+const sameFile = (a: string, b: string) => {
+  const clean = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+  return process.platform === 'win32' || /^[a-z]:/i.test(a) ? clean(a).toLowerCase() === clean(b).toLowerCase() : clean(a) === clean(b);
+};
 
 /** A Godot program seen running as an editor, to run tests with when none is chosen. */
 export function editorProgram(beat: EditorHeartbeat | null, running: RunningEditor[]): string | null {

@@ -131,6 +131,11 @@ describe('setup file', () => {
     });
   });
 
+  it('keeps the Unreal layout people set', () => {
+    const text = withConfig('{"engine":"unreal","bloatSkip":[],"unrealContentFolder":"ShooterGame","unrealFolders":["Megascans"]}', 'unreal');
+    expect(parseSetupConfig(text)).toMatchObject({ unrealContentFolder: 'ShooterGame', unrealFolders: ['Megascans'] });
+  });
+
   it('ignores a file that is not ours', () => {
     expect(parseSetupConfig('not json')).toBeNull();
     expect(parseSetupConfig('{"engine":"cryengine"}')).toBeNull();
@@ -141,7 +146,8 @@ describe('planSetup', () => {
   const unreal = facts({ uproject: { name: 'Shooter.uproject', text: '{"EngineAssociation":"5.8"}' } });
 
   it('offers every item for a new Unreal project', () => {
-    const items = planSetup('unreal', detectProject(unreal), unreal, session);
+    // A session made before Unreal's files were in the default rules.
+    const items = planSetup('unreal', detectProject(unreal), unreal, { ...session, lockRules: { exclusivePatterns: ['*.png'] } });
     expect(items.map((i) => [i.id, i.state])).toEqual([
       ['gitignore', 'missing'],
       ['gitattributes', 'missing'],

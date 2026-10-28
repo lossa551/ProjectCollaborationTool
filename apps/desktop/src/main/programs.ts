@@ -1,20 +1,23 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
-// Programs on this PC the app reacts to (follow-up to issue #10): a Godot or
-// Summer Engine editor that is running, Godot installs in the usual places,
-// and Node.js (npx starts the engines' MCP servers). Kept cheap: one process
-// list every few seconds, and the details only for new editor processes.
+// Programs on this PC the app reacts to (follow-up to issue #10, and #11):
+// a Godot, Summer Engine or Unreal Editor that is running, Godot and Unreal
+// installs in the usual places, and Node.js (npx starts the engines' MCP
+// servers). Kept cheap: one process list every few seconds, and the details
+// only for new editor processes.
 
-export type EditorKind = 'godot' | 'summer';
+export type EditorKind = 'godot' | 'summer' | 'unreal';
 
 export interface RunningEditor {
   kind: EditorKind;
   pid: number;
   /** The program's full path, when it could be read. */
   program: string | null;
+  /** Unreal: the .uproject it was opened with, when the command line says. */
+  project?: string | null;
 }
 
 /** Which editor a process name belongs to, if any. Node (the MCP servers) never counts. */
@@ -22,7 +25,15 @@ export function editorKind(name: string): EditorKind | null {
   const base = basename(name.replace(/\\/g, '/')).toLowerCase().replace(/\.exe$/, '');
   if (/summer/.test(base) && !/mcp|cli/.test(base)) return 'summer';
   if (/^godot/.test(base) && !/mcp/.test(base)) return 'godot';
+  // UnrealEditor-Cmd runs commandlets and tests, never an editor someone works in; UE4 was UE4Editor.
+  if (base === 'unrealeditor' || base === 'ue4editor') return 'unreal';
   return null;
+}
+
+/** The .uproject an Unreal Editor command line opens, if it names one. */
+export function uprojectIn(commandLine: string): string | null {
+  const m = /"([^"]+\.uproject)"|(\S+\.uproject)\b/i.exec(commandLine);
+  return m ? (m[1] ?? m[2]!) : null;
 }
 
 /**
@@ -30,6 +41,8 @@ export function editorKind(name: string): EditorKind | null {
  * agents' Godot MCP server, the game's tests, exports. Those do not count.
  */
 export function isEditorCommand(commandLine: string): boolean {
+  // Unreal commandlets (-run=cook, resave and the like) and test runs are not someone working in the editor.
+  if (/(^|\s)-run=|(^|\s)-ExecCmds="?Automation/i.test(commandLine)) return false;
   return !/(^|\s)(--headless|--script|-s|--doctool|--export-release|--export-debug|--export-pack|--check-only)(\s|=|$)/.test(commandLine);
 }
 
@@ -99,7 +112,8 @@ export async function runningEditors(): Promise<RunningEditor[]> {
     return candidates.flatMap((p) => {
       const info = details.get(p.pid);
       if (info && !isEditorCommand(info.commandLine)) return [];
-      return [{ kind: editorKind(p.name)!, pid: p.pid, program: info?.program ?? null }];
+      const kind = editorKind(p.name)!;
+      return [{ kind, pid: p.pid, program: info?.program ?? null, ...(kind === 'unreal' && { project: info ? uprojectIn(info.commandLine) : null }) }];
     });
   }
   const out = await run('ps', ['-Ao', 'pid=,args=']);
@@ -114,7 +128,7 @@ export async function runningEditors(): Promise<RunningEditor[]> {
     } catch {
       // Not Linux, or not ours to read.
     }
-    return [{ kind, pid, program }];
+    return [{ kind, pid, program, ...(kind === 'unreal' && { project: uprojectIn(args) }) }];
   });
 }
 
@@ -177,4 +191,81 @@ export function findGodotInstalls(): string | null {
 export async function nodeInstalled(): Promise<boolean> {
   const out = await run(process.platform === 'win32' ? 'node.exe' : 'node', ['--version'], 5_000);
   return !!out && /^v\d+/.test(out.trim());
+}
+
+/**
+ * Unreal Engine installs on this PC: the Epic Games Launcher's list
+ * (LauncherInstalled.dat), the registry (launcher installs by version,
+ * source builds by id), the usual folders, and UE_ROOT. By version
+ * ("5.8") or source build id, to each engine's folder.
+ */
+export async function findUnrealInstalls(): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  const add = (key: string, root: string) => {
+    if (!found.has(key) && existsSync(join(root, 'Engine'))) found.set(key, root);
+  };
+  if (process.platform === 'win32') {
+    const programData = process.env.ProgramData ?? 'C:\\ProgramData';
+    try {
+      const list = JSON.parse(readFileSync(join(programData, 'Epic', 'UnrealEngineLauncher', 'LauncherInstalled.dat'), 'utf8')) as {
+        InstallationList?: { InstallLocation?: string; AppName?: string }[];
+      };
+      for (const item of list.InstallationList ?? []) {
+        const version = /^UE_(\d+\.\d+)$/.exec(item.AppName ?? '')?.[1];
+        if (version && item.InstallLocation) add(version, item.InstallLocation);
+      }
+    } catch {
+      // No launcher, or not readable.
+    }
+    const machine = await run('reg', ['query', 'HKLM\\SOFTWARE\\EpicGames\\Unreal Engine', '/s', '/v', 'InstalledDirectory']);
+    for (const m of (machine ?? '').matchAll(/Unreal Engine\\(\d+\.\d+)\s+InstalledDirectory\s+REG_SZ\s+(.+)/g)) add(m[1]!, m[2]!.trim());
+    const builds = await run('reg', ['query', 'HKCU\\Software\\Epic Games\\Unreal Engine\\Builds']);
+    for (const m of (builds ?? '').matchAll(/^\s*(\S+)\s+REG_SZ\s+(.+)$/gm)) add(m[1]!, m[2]!.trim());
+    for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'D:\\Epic Games', 'C:\\Epic Games'].filter((p): p is string => !!p)) {
+      const epic = base.endsWith('Epic Games') ? base : join(base, 'Epic Games');
+      try {
+        for (const name of readdirSync(epic)) {
+          const version = /^UE_(\d+\.\d+)$/.exec(name)?.[1];
+          if (version) add(version, join(epic, name));
+        }
+      } catch {
+        // Not there.
+      }
+    }
+  }
+  if (process.env.UE_ROOT) add('env', process.env.UE_ROOT);
+  return found;
+}
+
+/** UnrealEditor-Cmd in an engine folder (or next to a running UnrealEditor), when it is there. */
+export function unrealCmdIn(root: string): string | null {
+  const names =
+    process.platform === 'win32'
+      ? [join('Engine', 'Binaries', 'Win64', 'UnrealEditor-Cmd.exe')]
+      : process.platform === 'darwin'
+        ? [join('Engine', 'Binaries', 'Mac', 'UnrealEditor-Cmd')]
+        : [join('Engine', 'Binaries', 'Linux', 'UnrealEditor-Cmd')];
+  for (const name of names) if (existsSync(join(root, name))) return join(root, name);
+  // A running editor's own folder.
+  const sibling = join(root, process.platform === 'win32' ? 'UnrealEditor-Cmd.exe' : 'UnrealEditor-Cmd');
+  return existsSync(sibling) ? sibling : null;
+}
+
+/** The engine a .uproject asks for: EngineAssociation is a version ("5.8") or a source build id. */
+export function pickUnreal(association: string | null, installs: Map<string, string>, running: string | null): string | null {
+  if (running) {
+    const cmd = unrealCmdIn(dirname(running));
+    if (cmd) return cmd;
+  }
+  const exact = association ? installs.get(association) : undefined;
+  if (exact) return unrealCmdIn(exact);
+  const env = installs.get('env');
+  if (env) return unrealCmdIn(env);
+  // No version asked for: the newest launcher install.
+  if (!association) {
+    const number = (v: string) => v.split('.').map(Number) as [number, number];
+    const versions = [...installs.keys()].filter((k) => /^\d+\.\d+$/.test(k)).sort((a, b) => number(b)[0] - number(a)[0] || number(b)[1] - number(a)[1]);
+    if (versions[0]) return unrealCmdIn(installs.get(versions[0])!);
+  }
+  return null;
 }
