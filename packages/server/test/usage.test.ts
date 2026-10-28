@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, DEFAULT_PRICES, SessionClient, commitDraftUsageId, newIdentity, type SessionState, type UsageReport } from '@pct/shared';
+import { DEFAULT_APPROVALS, DEFAULT_PRICES, SessionClient, commitDraftUsageId, newIdentity, notesDraftUsageId, type SessionState, type UsageReport } from '@pct/shared';
 import { SqliteStorage, startServer, type RunningServer } from '@pct/server';
 
 let server: RunningServer | null = null;
@@ -103,6 +103,15 @@ describe('agent usage', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(friend.getState().usage.find((r) => r.chatId === draftId)?.calls).toBe(1);
     expect(friend.getState().usage).toHaveLength(2);
+
+    // Folder note drafts count as the agent's own too, apart from its commit drafts.
+    const notesId = notesDraftUsageId(agents[0]!.id);
+    agent.recordUsage(call(notesId));
+    await waitFor(friend, (s) => s.usage.some((r) => r.chatId === notesId));
+    expect(friend.getState().usage.find((r) => r.chatId === notesId)).toMatchObject({ agentId: agents[0]!.id, taskId: null, calls: 1 });
+    other.recordUsage(call(notesId));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(friend.getState().usage.find((r) => r.chatId === notesId)?.calls).toBe(1);
 
     martin.setPrices([{ model: 'deepseek', input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 }]);
     await waitFor(friend, (s) => s.prices.length === 1);

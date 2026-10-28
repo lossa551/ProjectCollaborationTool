@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import {
+  cheapestAgent,
   describeConnection,
   describeSource,
   filesOutsideScope,
@@ -9,6 +10,7 @@ import {
   type GitHubStatus,
   type Overlap,
   type Participant,
+  type PriceTable,
   type PullRequest,
   type Task,
   type Workspace,
@@ -227,13 +229,16 @@ function RepoCard({ state }: { state: AppState }) {
   );
 }
 
-/** The agent picked to draft commit messages, remembered on this PC; else one meant for it, else the first that can run here. */
-function draftAgentFor(usable: AgentProfile[]): AgentProfile | undefined {
+/**
+ * The agent picked to draft commit messages, remembered on this PC; else one
+ * meant for it, else the cheapest that can run here (a draft is a small job).
+ */
+function draftAgentFor(usable: AgentProfile[], prices: PriceTable): AgentProfile | undefined {
   const saved = recall('commitAgent');
   return (
     usable.find((a) => a.id === saved) ??
     usable.find((a) => /commit/i.test(a.name) || /commit message/i.test(a.responsibilities)) ??
-    usable[0]
+    cheapestAgent(usable, prices)
   );
 }
 
@@ -264,7 +269,7 @@ function DraftButton({
   const agents = state.session.agents;
   const usable = agents.filter((a) => draftProblem(a, state) === null);
   const [picked, setPicked] = useState<string | null>(null);
-  const agent = usable.find((a) => a.id === picked) ?? draftAgentFor(usable);
+  const agent = usable.find((a) => a.id === picked) ?? draftAgentFor(usable, state.session.prices);
   if (drafting) {
     return (
       <button type="button" className="secondary" onClick={() => window.pct.cancelCommitDraft()}>
