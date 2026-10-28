@@ -8,6 +8,7 @@ import {
   DEFAULT_PRICES,
   PROTOCOL_VERSION,
   addUsage,
+  withDefaultTiers,
   formatCost,
   usageKey,
   commitDraftUsageId,
@@ -138,7 +139,9 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   const docs = new SharedDocs(await storage.loadDocs(), (docId, state) => persist('shared document', storage.saveDoc(docId, state)));
   let bloat = await storage.loadBloat();
   const usage = new Map((await storage.listUsage()).map((row) => [usageKey(row), row] as const));
-  let prices = (await storage.loadPrices()) ?? DEFAULT_PRICES;
+  // Tables saved before long-prompt prices existed (#92) get the default ones.
+  const saved = await storage.loadPrices();
+  let prices = saved ? withDefaultTiers(saved) : DEFAULT_PRICES;
   /** Each participant's local checkout, while they are connected. */
   const workspaces = new Map<string, Workspace>();
 
@@ -614,7 +617,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
           if (!chat) break;
           if (profileId !== chat.agentId) return fail(conn, 'not_allowed', 'Only the chat’s agent reports its usage');
           const key = usageKey(message.usage);
-          const row: UsageRow = addUsage(usage.get(key), message.usage, chat);
+          const row: UsageRow = addUsage(usage.get(key), message.usage, chat, Date.now(), prices);
           usage.set(key, row);
           void persist('usage', storage.saveUsage(row));
           broadcast({ type: 'usage.changed', row });

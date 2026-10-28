@@ -2968,6 +2968,66 @@ input.milestone-date {
   width: 80px;
 }
 
+.price-long td:first-child .row {
+  gap: 6px;
+  align-items: center;
+  padding-left: 16px;
+}
+
+/* Prompt cache share (#92) */
+.cache-bar {
+  display: inline-flex;
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+  vertical-align: middle;
+}
+
+.cache-bar > span,
+.cache-key {
+  display: inline-block;
+  height: 100%;
+}
+
+.cache-key {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin: 0 4px 0 10px;
+  vertical-align: middle;
+}
+
+.cache-key:first-child {
+  margin-left: 0;
+}
+
+.cache-uncached {
+  background: var(--muted);
+}
+
+.cache-read {
+  background: var(--good);
+}
+
+.cache-write {
+  background: var(--warn);
+}
+
+.cache-days {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.cache-days li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 0;
+}
+
 .price-settings .row {
   gap: 10px;
   align-items: center;

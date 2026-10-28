@@ -18,7 +18,7 @@ import {
 import type { AppState, WorktreeAction } from '../common/api';
 import { runnerOf } from './Agents';
 import { Avatar } from './Avatar';
-import { BudgetField, BudgetMeter, CostLine } from './Cost';
+import { BudgetField, BudgetMeter, CacheSection, CostLine } from './Cost';
 import { ask } from './Dialog';
 import { FirstCommitPrompt } from './FirstCommit';
 
@@ -839,6 +839,7 @@ export function ChatSidePanel({
           </section>
           <HeldLocks state={state} chat={chat} />
           <BudgetSection state={state} chat={chat} task={task} />
+          <CacheSection rows={session.usage.filter((r) => r.chatId === chat.id)} prices={session.prices} />
           <section>
             <h2>Task</h2>
             <select value={chat.taskId ?? ''} disabled={!online} onChange={(e) => window.pct.updateChat(chat.id, { taskId: e.target.value || null })}>
