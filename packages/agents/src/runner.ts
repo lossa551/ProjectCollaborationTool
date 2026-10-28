@@ -46,7 +46,7 @@ import {
   type SetupConfig,
 } from '@pct/shared';
 import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
-import { describeContext, systemPrompt, type ContextInput } from './context.js';
+import { contextUpdate, describeContext, freezePrompt, systemPrompt, type ContextInput } from './context.js';
 import { trimHistory } from './trim.js';
 import {
   ENGINE_BRIDGES,
@@ -1362,6 +1362,12 @@ export class AgentRunner {
     const maxSteps = this.options.maxSteps ?? 40;
     const connection = agent.connection;
     const source: UsageSource = connection.type === 'api' && connection.provider === 'ollama' ? 'free' : 'priced';
+    const taskOf = (c: ChatInfo) => this.client.getState().tasks.find((t) => t.id === c.taskId) ?? null;
+    // The system prompt and tools stay as they were when the turn began, so the provider's cached prefix holds;
+    // a change meanwhile (a criterion recorded, memory edited) goes to the agent as a note after the next tool results.
+    const first = this.chat(chat.id) ?? chat;
+    const frozen = freezePrompt(this.contextInput(agent, first, taskOf(first)));
+    const tools = this.toolsFor(run);
     for (let step = 0; step < maxSteps; step++) {
       if (!(await this.withinBudget(chat, run, signal))) {
         if (signal.aborted) throw new Error('stopped');
@@ -1369,14 +1375,18 @@ export class AgentRunner {
         return;
       }
       const current = this.chat(chat.id) ?? chat;
-      const task = this.client.getState().tasks.find((t) => t.id === current.taskId) ?? null;
+      const last = history.at(-1);
+      if (last?.role === 'tool') {
+        const note = contextUpdate(frozen, this.contextInput(agent, current, taskOf(current)));
+        if (note) history[history.length - 1] = { ...last, note: last.note ? `${last.note}\n\n${note}` : note };
+      }
       // Old tool results go once enough have piled up, in place, so the cached start of the history stays put between batches.
       run.trimmed += trimHistory(history);
       const writer = this.textWriter(chat.id);
       const turn = await model.complete({
-        system: systemPrompt(this.contextInput(agent, current, task)),
+        system: frozen.text,
         messages: history,
-        tools: this.toolsFor(run),
+        tools,
         signal,
         onText: writer.append,
       });
@@ -1554,7 +1564,9 @@ export class AgentRunner {
   private toolsFor(run: ChatRun): ToolSpec[] {
     const engine = run.engine;
     if (!engine) return AGENT_TOOLS;
-    return [...AGENT_TOOLS, ...(engine.testCommand ? [runTestsTool(engine.unreal ? 'unreal' : 'godot')] : []), ...engine.tools];
+    // By name, so the list (which comes before the system prompt in the cache) does not change with the server's order.
+    const fromServer = [...engine.tools].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return [...AGENT_TOOLS, ...(engine.testCommand ? [runTestsTool(engine.unreal ? 'unreal' : 'godot')] : []), ...fromServer];
   }
 
   /** The engine server for these settings, started again when they changed. */

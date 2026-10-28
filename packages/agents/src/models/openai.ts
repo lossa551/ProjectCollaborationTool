@@ -26,7 +26,10 @@ function toMessages(system: string, messages: LoopMessage[]): ChatMessage[] {
           })),
         }),
       });
-    } else for (const r of m.results) out.push({ role: 'tool', tool_call_id: r.id, content: r.isError ? `Error: ${r.content}` : r.content });
+    } else {
+      for (const r of m.results) out.push({ role: 'tool', tool_call_id: r.id, content: r.isError ? `Error: ${r.content}` : r.content });
+      if (m.note) out.push({ role: 'user', content: m.note });
+    }
   }
   return out;
 }

@@ -88,7 +88,7 @@ export function trimHistory(history: LoopMessage[], keep = KEEP_TOOL_STEPS, batc
   for (const i of old) {
     const m = history[i] as Extract<LoopMessage, { role: 'tool' }>;
     history[i] = {
-      role: 'tool',
+      ...m,
       results: m.results.map((r) => (clearable(r) ? { ...r, content: summarizeResult(calls.get(r.id), r) } : r)),
     };
   }

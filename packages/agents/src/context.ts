@@ -201,9 +201,43 @@ function pieces({ agent, chat, task, startedBy, memory, taskChatIds, readsMemory
 }
 
 export function systemPrompt(input: ContextInput): string {
-  return pieces(input)
-    .map((p) => p.text)
-    .join('\n\n');
+  return joinPieces(pieces(input));
+}
+
+const joinPieces = (parts: Piece[]) => parts.map((p) => p.text).join('\n\n');
+
+/**
+ * The system prompt as it stands, kept for a whole turn of our own loop (issue #90): the provider caches
+ * everything up to the newest message, so a prompt that changed mid-turn would make it write the whole
+ * conversation to the cache again. What changes meanwhile goes to the agent with contextUpdate instead.
+ */
+export interface FrozenPrompt {
+  text: string;
+  /** Each piece's text by label, as the agent was last told it. */
+  told: Map<string, string>;
+}
+
+export function freezePrompt(input: ContextInput): FrozenPrompt {
+  const parts = pieces(input);
+  return { text: joinPieces(parts), told: new Map(parts.map((p) => [p.label, p.text])) };
+}
+
+/**
+ * The pieces that changed since the agent was last told them, as a note to append after the next tool
+ * results; null when nothing did. Marks them as told, so each change is said once.
+ */
+export function contextUpdate(frozen: FrozenPrompt, input: ContextInput): string | null {
+  const now = pieces(input);
+  const changed = now.filter((p) => frozen.told.get(p.label) !== p.text);
+  const gone = [...frozen.told.keys()].filter((label) => !now.some((p) => p.label === label));
+  if (changed.length === 0 && gone.length === 0) return null;
+  frozen.told = new Map(now.map((p) => [p.label, p.text]));
+  return [
+    `[Update from the app: ${[...changed.map((p) => p.label), ...gone].join(', ').toLowerCase()} changed while you worked. ` +
+      'This replaces what your instructions said about it.]',
+    ...changed.map((p) => p.text),
+    ...gone.map((label) => `${label}: no longer applies.`),
+  ].join('\n\n');
 }
 
 /** The context panel's list: the pieces above, files the agent read, and the conversation. */
