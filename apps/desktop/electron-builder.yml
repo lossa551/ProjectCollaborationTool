@@ -10,6 +10,8 @@ copyright: Copyright © 2026 lossa551
 
 directories:
   output: release
+  # icon.ico (installer, .exe, shortcuts) comes from here; see scripts/icons.mjs.
+  buildResources: build
 
 files:
   - dist/**
@@ -22,6 +24,7 @@ asarUnpack:
 
 win:
   target: nsis
+  icon: build/icon.ico
   artifactName: Foreus-Setup-${version}.${ext}
 
 # One click: installs for the current user without admin rights, then opens.

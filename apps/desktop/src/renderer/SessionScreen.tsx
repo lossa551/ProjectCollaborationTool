@@ -9,6 +9,7 @@ import { GitHubScreen, OverlapsScreen, WorkspaceCard } from './GitHub';
 import { HomeScreen } from './Home';
 import { IssuesScreen } from './Issues';
 import { LocksScreen } from './Locks';
+import { Logo } from './Logo';
 import { MemoryScreen } from './Memory';
 import { NotificationSettings } from './Notifications';
 import { EngineSettings } from './Engine';
@@ -177,6 +178,7 @@ export function SessionScreen({ state }: { state: AppState }) {
   return (
     <div className={`shell${showSide && !(sideHidden && !selected) ? '' : ' no-side'}`}>
       <header className="titlebar">
+        <Logo size={20} />
         <strong>{session.session?.name ?? 'Session'}</strong>
         <span className={`status status-${session.status}`}>{statusLabel(session.status, session.pending)}</span>
         <UpdateButton hosting={!!hosting} />

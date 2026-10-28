@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { BackupFolder, BackupInfo, Result, SavedSessionInfo } from '../common/api';
 import { recall, remember } from './storage';
+import { Logo } from './Logo';
 import { UpdateButton } from './UpdateButton';
 
 export function ConnectScreen({ error }: { error: string | null }) {
@@ -55,7 +56,10 @@ export function ConnectScreen({ error }: { error: string | null }) {
   return (
     <main className="connect">
       <header>
-        <h1>Foreus</h1>
+        <h1 className="brand">
+          <Logo size={32} />
+          Foreus
+        </h1>
         <p className="muted">Start a live session on this PC, or join one with an invite code.</p>
         <UpdateButton hosting={false} />
       </header>

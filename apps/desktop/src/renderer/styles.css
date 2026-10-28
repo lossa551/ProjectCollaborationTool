@@ -108,6 +108,16 @@ textarea {
   margin-bottom: 24px;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  flex: none;
+}
+
 .connect > .field {
   max-width: 320px;
   margin-bottom: 20px;

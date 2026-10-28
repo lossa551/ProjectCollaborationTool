@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="6 6 52 52" width="52" height="52" role="img" aria-label="Foreus">
+  <defs><clipPath id="foreus-sq"><rect x="6" y="6" width="52" height="52" rx="12"/></clipPath></defs>
+  <g clip-path="url(#foreus-sq)">
+    <path d="M6 6 H24 V26 H36 V38 H24 V58 H6 Z" fill="#f0a948"/>
+    <path d="M28 6 H58 V58 H28 V42 H40 V22 H28 Z" fill="#6c9bf2"/>
+  </g>
+</svg>

@@ -1,4 +1,4 @@
-# Foreus
+# <img src="docs/logo.svg" width="32" height="32" alt=""> Foreus
 
 Foreus (called Project Collaboration Tool before) is a Windows desktop app
 where two developers and their AI agents work on the same project in one live
