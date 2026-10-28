@@ -1,7 +1,7 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, Notification, shell, Tray, type MessageBoxOptions, type OpenDialogOptions } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   AgentSaveMessage,
   ChatTitle,
@@ -40,6 +40,9 @@ import {
   Engine,
   GODOT_PLUGIN_COMMIT_MESSAGE,
   SETUP_COMMIT_MESSAGE,
+  FIRST_COMMIT_MESSAGE,
+  FIRST_COMMIT_SETUP_FILES,
+  planFirstCommit,
   samePath,
   PRESETS,
   PROTOCOL_VERSION,
@@ -71,6 +74,7 @@ import {
   type ResultWith,
   type SavedSessionInfo,
   type SetupOutcome,
+  type FirstCommitPlan,
   type SetupPlan,
   type SetupProgress,
   type SetupRequest,
@@ -105,7 +109,7 @@ import { EngineWatch, engineSettingsFor, findGodotOnPath, findUnrealOnPc } from 
 import { addEngineWire } from './unreal';
 import { GodotEditorLink } from './godot-editor';
 import { applyUpdate, getUpdateChannel, getUpdateState, setUpdateChannel, startUpdater } from './updater';
-import { GitError, clone, commitPaths, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
+import { GitError, clone, commitPaths, firstCommit, hasCommit, initRepository, installGitLfs, listProjectFiles, mergeBranch, pushBranch, readGitInfo, repositoryRoot, runGitAction, tagCommit, trustFolder, uncommittedChanges } from './git';
 import { commitAll, mainCheckout, removeWorktree, worktreeDiff, worktreeStatus } from '@pct/agents';
 import { WorkspaceWatcher } from './workspace';
 import { cutOffSentence, stopConfirmDetail, whoWouldBeCutOff } from '../common/background';
@@ -1482,6 +1486,65 @@ async function readSetup(engineInput: unknown): Promise<ResultWith<SetupPlan>> {
   }
 }
 
+// First commit: a repository with no commits (say a new, empty GitHub
+// repository) cannot give agent chats their own copy, so the GitHub page,
+// agent chats and setup offer to make one: README, .gitignore and setup's
+// files, on the default branch, pushed to GitHub if the person wants.
+
+async function planFirstCommitIn(root: string) {
+  const facts = await readProjectFacts(root);
+  const extra = FIRST_COMMIT_SETUP_FILES.filter((path) => path.includes('/') && existsSync(join(root, ...path.split('/'))));
+  const repo = client.getState().github.repo;
+  const origin = workspace?.remote ?? null;
+  const name = origin?.name ?? repo?.name ?? basename(root);
+  const plan = planFirstCommit(name, detectProject(facts).engine, [...facts.topFiles, ...extra]);
+  const target = origin ?? repo;
+  return {
+    ...plan,
+    branch: client.getState().github.defaultBranch ?? 'main',
+    pushTo: target ? `${target.owner}/${target.name}` : null,
+    // With an origin remote it is pushed there; otherwise origin is added for the linked repository.
+    remoteUrl: !origin && repo ? `https://github.com/${repo.owner}/${repo.name}.git` : null,
+  };
+}
+
+async function readFirstCommit(): Promise<ResultWith<FirstCommitPlan>> {
+  const root = workspace?.folder;
+  if (!root || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
+  try {
+    if (await hasCommit(root)) return { ok: false, error: 'This repository already has a commit.' };
+    const [plan, info, all] = await Promise.all([planFirstCommitIn(root), readGitInfo(root), listProjectFiles(root)]);
+    const leftOut = all.filter((path) => !plan.files.some((f) => samePath(f.path, path))).length;
+    return { ok: true, value: { files: plan.files, branch: plan.branch, pushTo: plan.pushTo, onGitHub: info.remoteBranches.length > 0, leftOut } };
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+async function makeFirstCommit(push: unknown): Promise<ResultWith<string>> {
+  const root = workspace?.folder;
+  if (!root || workspace?.error) return { ok: false, error: 'Choose your project folder first.' };
+  if (gitBusy || cloning || setupAbort) return { ok: false, error: 'Git is still busy with the last action.' };
+  gitBusy = true;
+  try {
+    if (await hasCommit(root)) return { ok: false, error: 'This repository already has a commit.' };
+    const plan = await planFirstCommitIn(root);
+    writeProjectFiles(root, plan.write);
+    const value = await firstCommit(root, {
+      paths: plan.files.map((f) => f.path),
+      message: FIRST_COMMIT_MESSAGE,
+      branch: plan.branch,
+      push: push === true ? { remoteUrl: plan.remoteUrl, token: await gitToken() } : null,
+    });
+    return { ok: true, value };
+  } catch (error) {
+    return failure(error);
+  } finally {
+    gitBusy = false;
+    void watcher?.poll();
+  }
+}
+
 /** Has the agent draft one folder's note; it is started on this PC if it is not running. */
 async function draftNote(agentId: string, folder: FolderInfo, report: FolderNotesReport, signal: AbortSignal) {
   const root = workspace?.folder;
@@ -1826,6 +1889,8 @@ ipcMain.on(Channel.setLockRules, (_event, rules: unknown) => {
 });
 ipcMain.handle(Channel.chooseWorkspace, () => chooseWorkspace());
 ipcMain.handle(Channel.readSetup, (_event, engine: unknown) => readSetup(engine));
+ipcMain.handle(Channel.readFirstCommit, () => readFirstCommit());
+ipcMain.handle(Channel.makeFirstCommit, (_event, push: unknown) => makeFirstCommit(push));
 ipcMain.handle(Channel.runSetup, (_event, request: unknown) => runSetup(request));
 ipcMain.on(Channel.cancelSetup, () => setupAbort?.abort());
 ipcMain.on(Channel.setEngineBridge, (_event, bridge: unknown) => {

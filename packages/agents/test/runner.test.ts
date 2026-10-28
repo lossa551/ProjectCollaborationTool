@@ -403,6 +403,20 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     stop: 'tool_use',
   });
 
+  it('works in the project folder and says how to fix it when the repository has no commit yet', async () => {
+    const { martin, profile, root } = await setup([write('t1', 'src/player.gd', 'extends Node2D\n'), { text: 'Done.', toolCalls: [], stop: 'end' }]);
+    gitIn(root)('init', '-q', '-b', 'main');
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Jump' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Make the player a Node2D' });
+
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Done.'));
+    expect(state.chats.find((c) => c.id === chatId)!.worktree).toBeNull();
+    expect(readFileSync(joinPath(root, 'src/player.gd'), 'utf8')).toBe('extends Node2D\n');
+    expect(state.messages[chatId]!.some((m) => m.kind === 'notice' && m.text.includes('has no commit yet') && m.text.includes('Make the first commit'))).toBe(true);
+  });
+
   it('edits only its own copy, on its own branch, and keeps the lock until the work is merged', async () => {
     const { martin, profile, model, root } = await setup([
       write('t1', 'src/player.gd', 'extends Node2D\n'),

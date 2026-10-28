@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { ENGINE_LABELS, Engine, todo, type SetupItem, type SetupItemId } from '@pct/shared';
 import type { AppState, SetupOutcome, SetupPlan } from '../common/api';
 import { formatTokens } from '../common/folder-notes';
+import { FirstCommitPrompt } from './FirstCommit';
 import { draftProblem } from './GitHub';
 
 // Project setup (#46), the "Add project" wizard. Make the project with the
@@ -45,9 +46,11 @@ export function SetupScreen({ state, onDone }: { state: AppState; onDone: () => 
     setChosen(new Set(todo(result.value.items).map((i) => i.id)));
     setFolders(new Set(result.value.noteFolders.map((f) => f.path)));
   };
+  // Again once the first commit is made, so folder notes are offered.
+  const committed = local?.git?.hasCommits;
   useEffect(() => {
     if (local?.folder) void load(engine);
-  }, [local?.folder, engine]);
+  }, [local?.folder, engine, committed]);
 
   if (!local) {
     return (
@@ -130,7 +133,12 @@ export function SetupScreen({ state, onDone }: { state: AppState; onDone: () => 
         {plan?.engine === 'godot' && (
           <p className="muted small">Summer Engine is built on Godot and uses the same project files, so this preset covers both.</p>
         )}
-        {plan?.firstCommit && <p className="muted small">This repository has no commit yet. Setup makes the first one.</p>}
+        {plan?.firstCommit && (
+          <FirstCommitPrompt
+            state={state}
+            why="Make it now so setup can offer folder notes and agent chats get their own copy, or let setup make it with its own files."
+          />
+        )}
         {plan?.reminders.map((r) => (
           <p key={r} className="warning small">
             {r}
