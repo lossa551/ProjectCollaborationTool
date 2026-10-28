@@ -23,8 +23,24 @@ Versions look like `0.MINOR.PATCH`.
 Planned next bump: **0.2.0 when game engine support lands**, starting with
 Godot and Summer Engine (#10). Not before.
 
-There is no beta or pre-release channel yet. Everyone on the app gets every
-release.
+## Beta branch
+
+Work that cannot be tested yet (first: Unreal Engine support, #11) goes to the
+long-lived `beta` branch instead of `main` (Martin, 2026-10-28). Its pull
+requests target `beta`.
+
+- **Nothing on `beta` is released.** The Release workflow only runs on pushes
+  to `main`, so installed apps never see beta work. Do not start the Release
+  workflow by hand on `beta`. CI still runs on every pull request, `beta`
+  ones included.
+- **Keep it current.** Merge `main` into `beta` (a merge, not a rebase) when
+  `main` moves, so promotion stays a clean merge.
+- **Promote** once the beta work has been tested: open a pull request from
+  `beta` to `main` and merge it. That push to `main` ships it as a normal
+  release; bump MINOR in the same PR if it finishes a milestone.
+
+There is no beta channel for the app itself: everyone on the app gets every
+release from `main`.
 
 ## Release notes
 
