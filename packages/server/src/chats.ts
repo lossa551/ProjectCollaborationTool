@@ -129,7 +129,7 @@ export class AgentChats {
    * files as they were at that message (the last checkpoint before it).
    */
   async branchChat(
-    input: { id: string; fromChatId: string; fromMessageId: string; agentId?: string; title: string },
+    input: { id: string; fromChatId: string; fromMessageId: string; agentId?: string; title: string; handoff?: Handoff },
     by: Participant,
     now = Date.now(),
   ): Promise<ChatResult<{ chat: ChatInfo; messages: ChatMessage[] }>> {
@@ -167,7 +167,7 @@ export class AgentChats {
       agentId: agent.id,
       taskId: parent.taskId,
       createdBy: owner(by),
-      handoff: parent.handoff,
+      handoff: input.handoff ?? parent.handoff,
       branchedFrom: { chatId: parent.id, messageId: input.fromMessageId, title: parent.title, files },
       worktree: null,
       state: 'idle',
@@ -177,8 +177,10 @@ export class AgentChats {
       createdAt: now,
       updatedAt: now,
     };
-    const kept = source.slice(0, end + 1);
-    if (checkpointMessage && !kept.includes(checkpointMessage)) kept.push(checkpointMessage);
+    // Continuing in a new chat (issue #88) takes the files and a handoff, not the conversation.
+    const fresh = !!input.handoff;
+    const kept = fresh ? [] : source.slice(0, end + 1);
+    if (!fresh && checkpointMessage && !kept.includes(checkpointMessage)) kept.push(checkpointMessage);
     const messages: ChatMessage[] = kept.map((m) => ({
       ...m,
       id: randomUUID(),
@@ -194,14 +196,18 @@ export class AgentChats {
       chatId: chat.id,
       author: owner(by),
       kind: 'notice',
-      text:
-        `${by.name} branched this chat from "${parent.title}".${switched} ` +
-        (!files
-          ? 'Only the conversation was branched: files changed later in the original chat are still changed in the project folder.'
-          : files.turn
-            ? `The files go back to this point too: the agent's own copy starts from the end of turn ${files.turn} (${files.commit.slice(0, 7)}), ` +
-              'and later turns of the original chat are not in it.'
-            : `The files go back to this point too: the agent's own copy starts from where the original chat's copy started, before its agent changed anything.`),
+      text: fresh
+        ? `${by.name} continued "${parent.title}" in this new chat, so it starts with a small context: it gets a handoff instead of the conversation.${switched} ` +
+          (!files
+            ? 'It works in the project folder, like the original.'
+            : `The agent's own copy starts from the original's files${files.turn ? ` at the end of turn ${files.turn} (${files.commit.slice(0, 7)})` : ''}.`)
+        : `${by.name} branched this chat from "${parent.title}".${switched} ` +
+          (!files
+            ? 'Only the conversation was branched: files changed later in the original chat are still changed in the project folder.'
+            : files.turn
+              ? `The files go back to this point too: the agent's own copy starts from the end of turn ${files.turn} (${files.commit.slice(0, 7)}), ` +
+                'and later turns of the original chat are not in it.'
+              : `The files go back to this point too: the agent's own copy starts from where the original chat's copy started, before its agent changed anything.`),
       streaming: false,
       tool: null,
       approval: null,
@@ -211,7 +217,7 @@ export class AgentChats {
     });
     this.chats.set(chat.id, chat);
     this.messages.set(chat.id, messages.slice(-CHAT_HISTORY_LIMIT));
-    return { ok: true, value: { chat, messages }, description: `branched "${parent.title}" into "${chat.title}"` };
+    return { ok: true, value: { chat, messages }, description: fresh ? `continued "${parent.title}" in a new chat, "${chat.title}"` : `branched "${parent.title}" into "${chat.title}"` };
   }
 
   updateChat(chatId: string, changes: { title?: string; taskId?: string | null; budget?: number | null }, now = Date.now()): ChatResult<ChatInfo> {

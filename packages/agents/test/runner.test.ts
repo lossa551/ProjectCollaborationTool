@@ -346,6 +346,42 @@ describe('agent runner', () => {
     ]);
   });
 
+  it('shortens old tool results in a long chat, and suggests a new chat once the context is large', async () => {
+    const small = { input: 20_000, output: 100, cacheRead: 0, cacheWrite: 0 };
+    const large = { input: 2_000, output: 100, cacheRead: 100_000, cacheWrite: 8_000 };
+    const read = (i: number): ModelTurn => ({
+      text: '',
+      toolCalls: [{ id: `r${i}`, name: 'read_file', input: { path: 'src/big.gd' } }],
+      stop: 'tool_use',
+      usage: i < 10 ? small : large,
+    });
+    const { martin, profile, model, root } = await setup([...Array.from({ length: 13 }, (_, i) => read(i + 1)), { text: 'Read it all.', toolCalls: [], stop: 'end', usage: large }]);
+    mkdirSync(joinPath(root, 'src'), { recursive: true });
+    writeFileSync(joinPath(root, 'src/big.gd'), Array.from({ length: 200 }, (_, i) => `var line_${i} = ${i}`).join('\n'));
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Long read' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Read the big file a lot' });
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.kind === 'text' && m.text === 'Read it all.' && !m.streaming));
+
+    const results = (i: number) => model.requests[i]!.messages.flatMap((m) => (m.role === 'tool' ? m.results : []));
+    // Up to 11 steps everything is sent whole; at 12, the 6 oldest are cleared in one go and the last 6 stay.
+    expect(results(11).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
+    expect(results(12).slice(0, 6).map((r) => r.content)).toEqual(
+      Array(6).fill('[Old result cleared to keep the context small: read src/big.gd, 200 lines. Run the tool again if you need it.]'),
+    );
+    expect(results(12).slice(6).every((r) => r.content.startsWith('    1  var line_0'))).toBe(true);
+    // The next request starts the same way, so the provider's cache still matches.
+    expect(model.requests[13]!.messages.slice(0, model.requests[12]!.messages.length)).toEqual(model.requests[12]!.messages);
+
+    // Past 100k tokens (as the provider counted them), it says so once.
+    const warnings = state.messages[chatId]!.filter((m) => m.kind === 'notice' && m.text.includes('Continue in a new chat'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.text).toContain('about 110k tokens');
+    const idle = await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.state === 'idle');
+    expect(idle.chats.find((c) => c.id === chatId)!.context).toMatchObject({ tokens: 110_000, warnAt: 100_000, trimmed: 6 });
+  });
+
   it('undoes files a command changed outside the agent’s paths unless a person keeps them', async () => {
     const command = `node -e "require('fs').writeFileSync('outside.txt','1')"`;
     const { martin, profile, root } = await setup(
@@ -670,6 +706,42 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     // Undoing it in the branch leaves the original chat's turn 1 alone.
     expect(readFileSync(joinPath(original.folder, 'src/jump.gd'), 'utf8')).toBe('jump\n');
     expect(martin.getState().messages[chatId]!.find((m) => m.id === first!.id)!.checkpoint!.undone).toBeNull();
+  });
+
+  it('continues a chat in a new one with its files and a handoff, but not its conversation', async () => {
+    const { martin, profile, root, model } = await setup([
+      write('t1', 'src/jump.gd', 'jump\n'),
+      { text: 'Jump done.', toolCalls: [], stop: 'end' },
+      write('t2', 'src/dash.gd', 'dash\n'),
+      { text: 'Dash done.', toolCalls: [], stop: 'end' },
+    ]);
+    commitProject(root);
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Moves' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.openChat(chatId);
+    martin.postChat(chatId, { kind: 'text', text: 'Add a jump' });
+    const [first] = await checkpoints(martin, chatId, 1);
+    const last = martin.getState().messages[chatId]!.at(-1)!;
+
+    const handoff = { fromChatId: chatId, fromName: 'Builder', stage: null, plan: 'Jump is done; add a dash next.', decisions: ['Jump height 2'], criteria: [], scope: [], readFirst: ['src/jump.gd'], notes: '' };
+    const nextId = martin.branchChat({ fromChatId: chatId, fromMessageId: last.id, title: 'Moves (continued)', handoff });
+    martin.postChat(nextId, { kind: 'handoff', text: 'Handoff from Builder.\n\nPlan:\nJump is done; add a dash next.' });
+    const state = await waitFor(martin, (s) => (s.messages[nextId] ?? []).some((m) => m.text === 'Dash done.' && !m.streaming));
+    const next = state.chats.find((c) => c.id === nextId)!;
+    expect(next.handoff).toMatchObject({ plan: 'Jump is done; add a dash next.', decisions: ['Jump height 2'] });
+    expect(next.branchedFrom!.files).toMatchObject({ commit: first!.checkpoint!.commit, turn: 1 });
+    // Only the notice and the handoff came along, and the agent was sent nothing of the old conversation.
+    const kinds = state.messages[nextId]!.map((m) => m.kind);
+    expect(kinds.slice(0, 2)).toEqual(['notice', 'handoff']);
+    expect(state.messages[nextId]![0]!.text).toContain('Martin continued "Moves" in this new chat');
+    expect(state.messages[nextId]!.some((m) => m.text === 'Jump done.')).toBe(false);
+    expect(model.requests.at(-2)!.messages).toEqual([{ role: 'user', text: 'Handoff from Builder.\n\nPlan:\nJump is done; add a dash next.' }]);
+    expect(model.requests.at(-2)!.system).toContain('Jump is done; add a dash next.');
+    // Its copy has the first chat's jump, and its own dash on top.
+    await checkpoints(martin, nextId, 1);
+    const copy = martin.getState().chats.find((c) => c.id === nextId)!.worktree!;
+    expect(readFileSync(joinPath(copy.folder, 'src/jump.gd'), 'utf8')).toBe('jump\n');
+    expect(readFileSync(joinPath(copy.folder, 'src/dash.gd'), 'utf8')).toBe('dash\n');
   });
 
   it('turns down an undo while the agent is not running', async () => {
