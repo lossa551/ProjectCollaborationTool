@@ -5,7 +5,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { TokenUsage } from '@pct/shared';
+import { CLAUDE_API_ENV, type CliAuth, type TokenUsage } from '@pct/shared';
 import { clip } from './files.js';
 
 // Command-line agents (Claude Code, Codex CLI) run headless in the project
@@ -16,6 +16,12 @@ import { clip } from './files.js';
 
 export type CliEvent =
   | { type: 'session'; id: string }
+  /**
+   * How Claude Code signed in, from its first line: plan is a claude.ai login
+   * (no API key in use); otherwise `source` names the key it found, e.g.
+   * ANTHROPIC_API_KEY, apiKeyHelper or "/login managed key" (a Console login).
+   */
+  | { type: 'auth'; plan: boolean; source: string }
   | { type: 'text'; text: string }
   | { type: 'tool'; id: string; name: string; summary: string }
   | { type: 'tool_result'; id: string; output: string; failed: boolean }
@@ -55,6 +61,8 @@ export function parseClaudeLine(line: string): CliEvent[] {
     total_cost_usd?: unknown;
     usage?: Record<string, unknown>;
     modelUsage?: Record<string, Record<string, unknown>>;
+    apiKeySource?: unknown;
+    apiProvider?: unknown;
   };
   try {
     event = JSON.parse(line);
@@ -63,6 +71,12 @@ export function parseClaudeLine(line: string): CliEvent[] {
   }
   const out: CliEvent[] = [];
   if (event.type === 'system' && event.subtype === 'init' && event.session_id) out.push({ type: 'session', id: event.session_id });
+  if (event.type === 'system' && event.subtype === 'init' && typeof event.apiKeySource === 'string') {
+    // Bedrock, Vertex and the like bill their own cloud account even without a key.
+    const thirdParty = typeof event.apiProvider === 'string' && event.apiProvider !== 'firstParty';
+    const source = thirdParty ? String(event.apiProvider) : event.apiKeySource;
+    out.push({ type: 'auth', plan: event.apiKeySource === 'none' && !thirdParty, source });
+  }
   const content = Array.isArray(event.message?.content) ? (event.message.content as Record<string, unknown>[]) : [];
   if (event.type === 'assistant') {
     const message = event.message;
@@ -115,6 +129,23 @@ export function parseClaudeLine(line: string): CliEvent[] {
     out.push({ type: 'error', message: typeof event.result === 'string' && event.result ? event.result : 'Claude Code stopped with an error' });
   }
   return out;
+}
+
+/**
+ * The environment for Claude Code: on the Claude plan, without the variables
+ * that would make it bill an API account instead.
+ */
+export function claudeEnv(base: NodeJS.ProcessEnv, auth: CliAuth): NodeJS.ProcessEnv {
+  if (auth !== 'plan') return { ...base };
+  // Windows variable names are not case sensitive.
+  const drop = new Set(CLAUDE_API_ENV.map((name) => name.toUpperCase()));
+  return Object.fromEntries(Object.entries(base).filter(([name]) => !drop.has(name.toUpperCase())));
+}
+
+/** A hint to add when Claude Code on the plan fails because nobody is signed in. */
+export function planLoginHint(message: string): string | null {
+  if (!/log ?in|invalid api key|not authenticated|authentication|oauth|unauthori[sz]ed|401/i.test(message)) return null;
+  return 'Claude Code is set to use your Claude plan: open a terminal on this PC, run `claude` and sign in with your Claude account (/login), then try again.';
 }
 
 /** One line of `codex exec --json` as chat events (current and older event shapes). */

@@ -42,7 +42,7 @@ async function join(name: string, agent?: { profileId: string; startedBy: string
 
 const builder = {
   name: 'Builder',
-  connection: { type: 'cli' as const, tool: 'claude-code' as const, model: null },
+  connection: { type: 'cli' as const, tool: 'claude-code' as const, model: null, auth: 'plan' as const },
   responsibilities: 'Builds things',
   allowedPaths: [],
   approvals: DEFAULT_APPROVALS,

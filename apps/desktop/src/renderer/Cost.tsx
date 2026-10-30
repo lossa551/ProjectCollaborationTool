@@ -30,16 +30,28 @@ export function CostLine({ total, empty = 'Nothing used yet' }: { total: UsageTo
     `${total.calls} model ${total.calls === 1 ? 'call' : 'calls'}`,
     total.longInput ? `${total.longInput.toLocaleString()} input tokens in long prompts, at the higher long-prompt price` : null,
     total.unpriced.length ? `No price for ${total.unpriced.join(', ')}: add one in Settings, Model prices.` : null,
+    planNote(total),
   ]
     .filter(Boolean)
     .join('\n');
   return (
     <span className="cost-line" title={detail}>
       {formatTokens(inputTokens(total))} in · {formatTokens(total.output)} out ·{' '}
-      <strong>{formatCost(total.cost)}</strong>
+      <strong>{onlyPlan(total) ? 'Claude plan' : formatCost(total.cost)}</strong>
+      {total.planCalls > 0 && !onlyPlan(total) && <span className="muted"> + Claude plan</span>}
       {total.unpriced.length > 0 && <span className="warning"> + unpriced</span>}
     </span>
   );
+}
+
+/** Every call was covered by a Claude plan, so there is no dollar cost to show. */
+const onlyPlan = (total: UsageTotal) => total.planCalls > 0 && total.planCalls === total.calls;
+
+/** For a tooltip: what the Claude plan covered and what it would have cost on the API. */
+export function planNote(total: UsageTotal): string | null {
+  if (total.planCalls === 0) return null;
+  const runs = `${total.planCalls} Claude Code ${total.planCalls === 1 ? 'run' : 'runs'} on a Claude plan`;
+  return `${runs}: not charged, and left out of the cost and budgets. About ${formatCost(total.planValue)} at API prices; they count towards the plan's usage limits.`;
 }
 
 const percent = (share: number) => `${Math.round(share * 100)}%`;
@@ -100,8 +112,8 @@ export function CacheSection({ rows, prices }: { rows: UsageRow[]; prices: Price
 export function CostShort({ total }: { total: UsageTotal }) {
   if (total.calls === 0) return <span className="muted">$0</span>;
   return (
-    <span title={`${allTokens(total).toLocaleString()} tokens`}>
-      {formatCost(total.cost)}
+    <span title={[`${allTokens(total).toLocaleString()} tokens`, planNote(total)].filter(Boolean).join('\n')}>
+      {onlyPlan(total) ? 'plan' : formatCost(total.cost)}
       {total.unpriced.length > 0 && <span className="warning">+</span>}
       <span className="muted"> · {formatTokens(allTokens(total))}</span>
     </span>

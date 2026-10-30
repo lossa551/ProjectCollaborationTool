@@ -34,8 +34,8 @@ const api = (id: string, model: string, provider: 'anthropic' | 'ollama' | 'deep
 const opus = api('Opus', 'claude-opus-5-5');
 const haiku = api('Haiku', 'claude-haiku-5-5');
 const local = api('Local', 'qwen3', 'ollama');
-const claudeCode = agent('Claude Code', { type: 'cli', tool: 'claude-code', model: null });
-const claudeHaiku = agent('Claude Code Haiku', { type: 'cli', tool: 'claude-code', model: 'haiku' });
+const claudeCode = agent('Claude Code', { type: 'cli', tool: 'claude-code', model: null, auth: 'api' });
+const claudeHaiku = agent('Claude Code Haiku', { type: 'cli', tool: 'claude-code', model: 'haiku', auth: 'api' });
 
 describe('draft usage ids', () => {
   it('keeps notes and commit drafts apart, both the agent’s own', () => {
@@ -58,6 +58,8 @@ describe('draft cost', () => {
     expect(draftCost(local, DEFAULT_PRICES)).toBe(0);
     // Claude Code's own default model is not known; its short names are.
     expect(draftCost(claudeCode, DEFAULT_PRICES)).toBeNull();
+    // On a Claude plan it bills nothing per token.
+    expect(draftCost(agent('Plan', { type: 'cli', tool: 'claude-code', model: 'opus', auth: 'plan' }), DEFAULT_PRICES)).toBe(0);
     expect(draftCost(claudeHaiku, DEFAULT_PRICES)).toBeCloseTo(0.0015, 6);
     expect(draftCost(api('X', 'mystery-model', 'deepseek'), DEFAULT_PRICES)).toBeNull();
   });

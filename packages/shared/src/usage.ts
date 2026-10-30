@@ -88,9 +88,11 @@ export function withDefaultTiers(table: PriceTable): PriceTable {
 
 /**
  * How a call's cost is known: from the price table, reported by the tool
- * itself (Claude Code), or free (a local model).
+ * itself (Claude Code), free (a local model), or covered by a Claude plan
+ * (Claude Code signed in with claude.ai): nothing billed, but the tool's
+ * API-price estimate is kept to show what it would have cost.
  */
-export const UsageSource = z.enum(['priced', 'reported', 'free']);
+export const UsageSource = z.enum(['priced', 'reported', 'free', 'plan']);
 export type UsageSource = z.infer<typeof UsageSource>;
 
 const Tokens = z.number().int().min(0).max(1e12);
@@ -137,7 +139,7 @@ export const UsageRow = TokenUsage.extend({
   source: UsageSource,
   day: UsageDay,
   calls: z.number().int().min(0),
-  /** Reported cost in dollars; only for source "reported". */
+  /** Reported cost in dollars; for source "reported", and for "plan" what it would have cost on the API. */
   cost: z.number().min(0),
   /**
    * The part of the tokens above that came from calls with a prompt past
@@ -198,7 +200,7 @@ export function addUsage(
     output: (row?.output ?? 0) + report.output,
     cacheRead: (row?.cacheRead ?? 0) + report.cacheRead,
     cacheWrite: (row?.cacheWrite ?? 0) + report.cacheWrite,
-    cost: (row?.cost ?? 0) + (report.source === 'reported' ? (report.cost ?? 0) : 0),
+    cost: (row?.cost ?? 0) + (report.source === 'reported' || report.source === 'plan' ? (report.cost ?? 0) : 0),
     ...(long ? { long } : {}),
     ...(rebuilds ? { cacheRebuilds: rebuilds } : {}),
     updatedAt: now,
@@ -240,7 +242,7 @@ export function tokenCost(tokens: TokenUsage, price: ModelPrice | null, long?: T
 
 /** What a row cost; null when its model has no price. */
 export function rowCost(row: UsageRow, prices: PriceTable): number | null {
-  if (row.source === 'free') return 0;
+  if (row.source === 'free' || row.source === 'plan') return 0;
   if (row.source === 'reported') return row.cost;
   return tokenCost(row, priceFor(row.model, prices), row.long);
 }
@@ -255,6 +257,10 @@ export interface UsageTotal extends TokenUsage {
   cacheRebuilds: number;
   /** Input tokens of calls priced at a long-prompt rate. */
   longInput: number;
+  /** Calls covered by a Claude plan (not in cost). */
+  planCalls: number;
+  /** What the plan calls would have cost on the API, as Claude Code estimated it. */
+  planValue: number;
 }
 
 export const EMPTY_TOTAL: UsageTotal = {
@@ -267,6 +273,8 @@ export const EMPTY_TOTAL: UsageTotal = {
   unpriced: [],
   cacheRebuilds: 0,
   longInput: 0,
+  planCalls: 0,
+  planValue: 0,
 };
 
 export function totalUsage(rows: UsageRow[], prices: PriceTable): UsageTotal {
@@ -279,6 +287,10 @@ export function totalUsage(rows: UsageRow[], prices: PriceTable): UsageTotal {
     total.calls += row.calls;
     total.cacheRebuilds += row.cacheRebuilds ?? 0;
     if (row.long) total.longInput += inputTokens(row.long);
+    if (row.source === 'plan') {
+      total.planCalls += row.calls;
+      total.planValue += row.cost;
+    }
     const cost = rowCost(row, prices);
     if (cost === null) {
       if (!total.unpriced.includes(row.model)) total.unpriced.push(row.model);

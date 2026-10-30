@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HookServer, OpenAICompatibleAdapter, parseClaudeLine, parseCodexLine } from '@pct/agents';
+import { HookServer, OpenAICompatibleAdapter, claudeEnv, parseClaudeLine, parseCodexLine, planLoginHint } from '@pct/agents';
 
 const hookScript = fileURLToPath(new URL('../bin/pct-hook.cjs', import.meta.url));
 let hook: HookServer | null = null;
@@ -118,6 +118,27 @@ describe('CLI output', () => {
     expect(parseCodexLine('{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50}}')).toEqual([
       { type: 'usage', model: null, usage: { input: 200, output: 50, cacheRead: 800, cacheWrite: 0 }, cost: null },
     ]);
+  });
+});
+
+describe('Claude Code sign-in', () => {
+  it('tells a Claude plan login from an API key', () => {
+    const init = (apiKeySource: string, apiProvider = 'firstParty') => parseClaudeLine(JSON.stringify({ type: 'system', subtype: 'init', session_id: 's', apiKeySource, apiProvider }));
+    expect(init('none')).toContainEqual({ type: 'auth', plan: true, source: 'none' });
+    expect(init('ANTHROPIC_API_KEY')).toContainEqual({ type: 'auth', plan: false, source: 'ANTHROPIC_API_KEY' });
+    expect(init('/login managed key')).toContainEqual({ type: 'auth', plan: false, source: '/login managed key' });
+    expect(init('none', 'bedrock')).toContainEqual({ type: 'auth', plan: false, source: 'bedrock' });
+  });
+
+  it('leaves API key variables out on the plan, in any case', () => {
+    const base = { PATH: '/bin', ANTHROPIC_API_KEY: 'k', Anthropic_Auth_Token: 't', CLAUDE_CODE_USE_BEDROCK: '1' };
+    expect(claudeEnv(base, 'plan')).toEqual({ PATH: '/bin' });
+    expect(claudeEnv(base, 'api')).toEqual(base);
+  });
+
+  it('says how to sign in when the plan login is missing', () => {
+    expect(planLoginHint('Invalid API key · Please run /login')).toMatch(/run `claude` and sign in/);
+    expect(planLoginHint('Tool failed')).toBeNull();
   });
 });
 
