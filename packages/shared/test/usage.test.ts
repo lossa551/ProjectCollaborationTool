@@ -65,6 +65,15 @@ describe('agent usage and cost', () => {
     expect(total.calls).toBe(5);
   });
 
+  it('keeps calls on a Claude plan out of the cost, with what they would have cost', () => {
+    const plan = addUsage(undefined, report({ source: 'plan', cost: 0.8 }), { agentId: 'a1', taskId: 't1' });
+    expect(plan.cost).toBe(0.8);
+    const total = totalUsage([row(), plan], DEFAULT_PRICES);
+    expect(total.cost).toBeCloseTo(6);
+    expect(total).toMatchObject({ calls: 2, planCalls: 1, planValue: 0.8 });
+    expect(budgetsFor({ id: 'c1', budget: 1, taskId: null }, null, [plan], DEFAULT_PRICES)[0]!.spent).toBe(0);
+  });
+
   it('measures a chat and its task against their budgets', () => {
     const rows = [row(), row({ chatId: 'c2' })];
     const chat = { id: 'c1', budget: 5, taskId: 't1' };

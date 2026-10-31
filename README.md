@@ -23,7 +23,7 @@ and agent chat. Design notes live in [docs/design](docs/design).
 - **Overlap warnings** when two people, a pull request or a lock touch the same file, or work strays outside a task's paths.
 
 ### Agents
-- **Any model or CLI agent**: Claude, DeepSeek, OpenAI, local models through Ollama, any OpenAI-compatible API, Claude Code and Codex CLI.
+- **Any model or CLI agent**: Claude, DeepSeek, OpenAI, local models through Ollama, any OpenAI-compatible API, Claude Code and Codex CLI. Claude Code can run on your **Claude Pro/Max plan** (sign in once with `claude`): API keys on the PC are kept away from it, its usage is shown as covered by the plan (with what it would have cost on the API) and budgets do not pause it.
 - **Shared agent chats** where both of you talk to the same agent, and approval cards for anything that needs a person.
 - **Same rules as people**: every edit and command is checked against locks, allowed paths and approval rules, and agents lock files themselves.
 - **Own copy of the project** for each agent chat (a git worktree), so agents never touch your folder or each other's work.

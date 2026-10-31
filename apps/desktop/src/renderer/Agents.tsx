@@ -14,6 +14,7 @@ import {
   type AgentConnection,
   type AgentProfile,
   type ApprovalPolicy,
+  type CliAuth,
   type Participant,
 } from '@pct/shared';
 import type { AppState } from '../common/api';
@@ -236,6 +237,7 @@ function AgentEditor({ agent, state, onDone }: { agent: AgentProfile | undefined
   const [choice, setChoice] = useState<ConnectionChoice>(agent ? choiceOf(agent.connection) : 'api:anthropic');
   const [model, setModel] = useState(agent?.connection.model ?? API_PROVIDERS.anthropic.model);
   const [baseUrl, setBaseUrl] = useState(agent?.connection.type === 'api' ? (agent.connection.baseUrl ?? '') : '');
+  const [auth, setAuth] = useState<CliAuth>(agent?.connection.type === 'cli' ? agent.connection.auth : 'plan');
   const [responsibilities, setResponsibilities] = useState(agent?.responsibilities ?? '');
   const [paths, setPaths] = useState(agent?.allowedPaths.join('\n') ?? '');
   const [approvals, setApprovals] = useState<AgentApprovals>(agent?.approvals ?? DEFAULT_APPROVALS);
@@ -256,7 +258,7 @@ function AgentEditor({ agent, state, onDone }: { agent: AgentProfile | undefined
     const connection: AgentConnection =
       kind === 'api'
         ? { type: 'api', provider: id as ApiProvider, model: model.trim(), baseUrl: baseUrl.trim() || null }
-        : { type: 'cli', tool: id as CliTool, model: model.trim() || null };
+        : { type: 'cli', tool: id as CliTool, model: model.trim() || null, auth };
     if (kind === 'api' && id === 'openai-compatible' && !baseUrl.trim()) {
       setError('Enter the API’s address, e.g. https://example.com/v1');
       return;
@@ -301,6 +303,15 @@ function AgentEditor({ agent, state, onDone }: { agent: AgentProfile | undefined
           <span>{kind === 'api' ? 'Model' : 'Model (optional; the tool’s default if empty)'}</span>
           <input value={model} onChange={(e) => setModel(e.target.value)} required={kind === 'api'} maxLength={100} spellCheck={false} />
         </label>
+        {kind === 'cli' && id === 'claude-code' && (
+          <label className="field">
+            <span>Signs in with</span>
+            <select value={auth} onChange={(e) => setAuth(e.target.value as CliAuth)}>
+              <option value="plan">Your Claude plan (claude.ai login)</option>
+              <option value="api">An API key (billed per token)</option>
+            </select>
+          </label>
+        )}
         {kind === 'api' && (id === 'openai-compatible' || id === 'ollama') && (
           <label className="field">
             <span>API address{preset?.baseUrl ? ` (default ${preset.baseUrl})` : ''}</span>
@@ -315,6 +326,13 @@ function AgentEditor({ agent, state, onDone }: { agent: AgentProfile | undefined
             ? 'Every tool it uses is checked by the app first (locks, paths, approvals) through a hook.'
             : 'Codex has no hook for this, so after each run the app checks what it changed and undoes changes outside its paths unless someone keeps them.'}
           {!state.cliTools[id as CliTool] && ' It is not installed on this PC.'}
+        </p>
+      )}
+      {kind === 'cli' && id === 'claude-code' && (
+        <p className="muted small">
+          {auth === 'plan'
+            ? 'It uses the Claude Pro or Max plan of whoever starts it, so it costs nothing extra per token; it counts towards that plan’s usage limits instead. Each PC signs in once: open a terminal, run claude and log in with your Claude account. API keys on the PC (ANTHROPIC_API_KEY and the like) are kept away from it so they cannot take over.'
+            : 'It uses the API key Claude Code finds on the PC of whoever starts it, such as ANTHROPIC_API_KEY, and every token is billed to that API account.'}
         </p>
       )}
       {keyName && <ApiKeyField name={keyName} label={preset!.label} status={state.apiKeys[keyName]} />}

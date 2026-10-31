@@ -17,6 +17,7 @@ import {
   parseSetupConfig,
   unrealLayout,
   budgetsFor,
+  onClaudePlan,
   draftUsageId,
   formatCost,
   priceFor,
@@ -46,7 +47,7 @@ import {
   type SetupConfig,
   type DraftKind,
 } from '@pct/shared';
-import { HookServer, parseClaudeLine, parseCodexLine, runCli, type CliEvent, type HookRequest } from './cli.js';
+import { HookServer, claudeEnv, parseClaudeLine, parseCodexLine, planLoginHint, runCli, type CliEvent, type HookRequest } from './cli.js';
 import { contextUpdate, describeContext, freezePrompt, systemPrompt, type ContextInput } from './context.js';
 import { resultShown, trimHistory } from './trim.js';
 import { ReadMemo } from './reads.js';
@@ -200,6 +201,8 @@ interface ChatRun {
   notes: string[];
   /** Per budget (see budgetsFor), how far a person said the agent may go past it. */
   budgetOk: Map<string, number>;
+  /** The CLI run going on now is covered by a Claude plan: as the agent is set, then as Claude Code says it signed in. */
+  plan: boolean;
   /** Model calls of the CLI run going on now, by id, until the tool reports the run's usage. */
   live: Map<string, { model: string | null; usage: TokenUsage }>;
   /** Said in the chat instead of "Stopped." when the run was stopped for a reason. */
@@ -247,6 +250,13 @@ const DRAFT_PURPOSES: Record<DraftKind, string> = {
   notes: 'short folder notes (AGENTS.md) that tell other agents what a folder is for',
   review: 'a short review answer about a change',
 };
+
+/** Said when Claude Code set to the Claude plan signed in with an API key anyway. */
+const apiKeyNotice = (source: string) =>
+  `Claude Code signed in with an API key (${source}) instead of your Claude plan, so this run is billed to the API. ` +
+  (source === '/login managed key'
+    ? 'It is logged in with a Console account: run `claude`, then /logout and /login with your Claude (claude.ai) account.'
+    : 'Remove that key from Claude Code\'s settings (apiKeyHelper, env) or the PC\'s environment, or set this agent to use an API key.');
 
 const BUDGET_PAUSED = 'Paused: the budget is used up. Raise the budget, or send a message to be asked again.';
 
@@ -362,13 +372,15 @@ export class AgentRunner {
     const live = new Map<string, { model: string | null; usage: TokenUsage }>();
     let reported = false;
     let failure: string | null = null;
+    let plan = onClaudePlan(connection);
     const onEvent = (event: CliEvent) => {
-      if (event.type === 'text') texts.push(event.text);
+      if (event.type === 'auth') plan = event.plan;
+      else if (event.type === 'text') texts.push(event.text);
       else if (event.type === 'error') failure = event.message;
       else if (event.type === 'progress') live.set(event.id, { model: event.model, usage: event.usage });
       else if (event.type === 'usage') {
         reported = true;
-        record(event.model ?? fallbackModel, event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
+        record(event.model ?? fallbackModel, plan ? 'plan' : event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
       }
     };
     let result: { exitCode: number | null; stderr: string };
@@ -377,18 +389,20 @@ export class AgentRunner {
       const hook = await this.hookServer();
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--settings', hook.claudeSettingsFile(settings.hookScript, settings.nodePath)];
       if (connection.model) args.push('--model', connection.model);
-      result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env, ...settings.hookEnv, ...hook.env(usageId) }, prompt, signal, parse: parseClaudeLine, onEvent });
+      const env = { ...claudeEnv(process.env, connection.auth), ...settings.hookEnv, ...hook.env(usageId) };
+      result = await runCli({ command, args, cwd: this.options.root, env, prompt, signal, parse: parseClaudeLine, onEvent });
     } else {
       const args = ['exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check'];
       if (connection.model) args.push('-m', connection.model);
       args.push('-');
       result = await runCli({ command, args, cwd: this.options.root, env: { ...process.env }, prompt, signal, parse: parseCodexLine, onEvent });
     }
-    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, 'priced', call.usage, null, true);
+    if (!reported) for (const call of live.values()) record(call.model ?? fallbackModel, plan ? 'plan' : 'priced', call.usage, null, true);
     if (signal.aborted) throw new Error('stopped');
     if (failure || (result.exitCode !== 0 && result.exitCode !== null)) {
       const detail = failure ?? (result.stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${result.exitCode}`);
-      throw new Error(`${CLI_TOOLS[tool].label}: ${detail}`);
+      const hint = onClaudePlan(connection) ? planLoginHint(detail) : null;
+      throw new Error(`${CLI_TOOLS[tool].label}: ${detail}${hint ? `\n\n${hint}` : ''}`);
     }
     if (result.exitCode === null) throw new Error(`${CLI_TOOLS[tool].label} could not be started. Is it installed?`);
     return texts.at(-1) ?? '';
@@ -431,6 +445,7 @@ export class AgentRunner {
         lastTurn: 0,
         notes: [],
         budgetOk: new Map(),
+        plan: false,
         live: new Map(),
         stopNotice: null,
         engine: null,
@@ -1111,6 +1126,8 @@ export class AgentRunner {
    * after another budget's worth. Resolves false to stop here.
    */
   private async withinBudget(chat: ChatInfo, run: ChatRun, signal: AbortSignal): Promise<boolean> {
+    // Budgets limit dollars billed; a run on a Claude plan bills none.
+    if (run.plan) return true;
     for (;;) {
       const state = this.client.getState();
       const current = state.chats.find((c) => c.id === chat.id) ?? chat;
@@ -1831,6 +1848,8 @@ export class AgentRunner {
     const context = systemPrompt(this.contextInput(agent, chat, task));
     const files = this.filesOf(chat.id);
     const before = await files.changedFiles();
+    const auth = agent.connection.auth;
+    run.plan = onClaudePlan(agent.connection);
 
     // A budget used up before the run starts: ask first.
     if (!(await this.withinBudget(chat, run, signal))) {
@@ -1850,6 +1869,10 @@ export class AgentRunner {
       switch (event.type) {
         case 'session':
           run.cliSession = event.id;
+          break;
+        case 'auth':
+          if (auth === 'plan' && !event.plan) this.notice(chat.id, apiKeyNotice(event.source));
+          run.plan = event.plan;
           break;
         case 'text':
           this.client.postChat(chat.id, { kind: 'text', text: event.text });
@@ -1882,7 +1905,7 @@ export class AgentRunner {
           break;
         case 'usage':
           reported = true;
-          this.recordUsage(chat.id, event.model ?? fallbackModel, event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
+          this.recordUsage(chat.id, event.model ?? fallbackModel, run.plan ? 'plan' : event.cost === null ? 'priced' : 'reported', event.usage, event.cost);
           break;
       }
     };
@@ -1902,7 +1925,7 @@ export class AgentRunner {
         command,
         args,
         cwd: files.root,
-        env: { ...process.env, ...settings.hookEnv, ...hook.env(chat.id) },
+        env: { ...claudeEnv(process.env, auth), ...settings.hookEnv, ...hook.env(chat.id) },
         prompt: fullPrompt,
         signal,
         parse: parseClaudeLine,
@@ -1927,7 +1950,7 @@ export class AgentRunner {
     }
     // A run stopped before the tool reported its usage still counts what it used so far.
     if (!reported) {
-      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, 'priced', call.usage, null, true);
+      for (const call of run.live.values()) this.recordUsage(chat.id, call.model ?? fallbackModel, run.plan ? 'plan' : 'priced', call.usage, null, true);
     }
     run.live.clear();
     // Open tool lines of a stopped or failed run stay readable.
@@ -1938,7 +1961,8 @@ export class AgentRunner {
     if (signal.aborted) throw new Error('stopped');
     if (failure || (result.exitCode !== 0 && result.exitCode !== null)) {
       const detail = failure ?? (result.stderr.trim().split('\n').slice(-3).join(' ') || `exit code ${result.exitCode}`);
-      throw new Error(`${CLI_TOOLS[tool].label}: ${detail}`);
+      const hint = auth === 'plan' ? planLoginHint(detail) : null;
+      throw new Error(`${CLI_TOOLS[tool].label}: ${detail}${hint ? `\n\n${hint}` : ''}`);
     }
     if (result.exitCode === null && !failure) throw new Error(`${CLI_TOOLS[tool].label} could not be started. Is it installed?`);
   }

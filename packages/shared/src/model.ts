@@ -391,6 +391,29 @@ export const CLI_TOOLS: Record<CliTool, { label: string; command: string }> = {
   codex: { label: 'Codex CLI', command: 'codex' },
 };
 
+/**
+ * How Claude Code signs in. plan: the claude.ai login of whoever runs it
+ * (Pro/Max), so nothing is billed per token; API key variables are left out
+ * of its environment so they cannot take over. api: whatever it finds, such
+ * as ANTHROPIC_API_KEY, billed to the API.
+ */
+export const CliAuth = z.enum(['plan', 'api']);
+export type CliAuth = z.infer<typeof CliAuth>;
+
+/** Variables that would make Claude Code bill an API account instead of the Claude plan. */
+export const CLAUDE_API_ENV = [
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_BASE_URL',
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+];
+
+/** True for a Claude Code agent set to run on the Claude plan. */
+export const onClaudePlan = (connection: AgentConnection): boolean =>
+  connection.type === 'cli' && connection.tool === 'claude-code' && connection.auth === 'plan';
+
 export const AgentConnection = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('api'),
@@ -404,6 +427,8 @@ export const AgentConnection = z.discriminatedUnion('type', [
     tool: CliTool,
     /** Passed to the tool's --model flag; null uses the tool's own default. */
     model: z.string().trim().min(1).max(100).nullable().default(null),
+    /** Claude Code only (see CliAuth). */
+    auth: CliAuth.default('plan'),
   }),
 ]);
 export type AgentConnection = z.infer<typeof AgentConnection>;
@@ -442,7 +467,7 @@ export type AgentProfile = z.infer<typeof AgentProfile>;
 
 export function describeConnection(connection: AgentConnection): string {
   if (connection.type === 'cli') {
-    const label = CLI_TOOLS[connection.tool].label;
+    const label = onClaudePlan(connection) ? 'Claude Code (Claude plan)' : CLI_TOOLS[connection.tool].label;
     return connection.model ? `${label} · ${connection.model}` : label;
   }
   return `${API_PROVIDERS[connection.provider].label} · ${connection.model}`;
