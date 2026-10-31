@@ -121,7 +121,7 @@ describe('remove from session', () => {
     // An agent running on the friend's PC.
     martin.saveAgent({
       name: 'Builder',
-      connection: { type: 'cli', tool: 'claude-code', model: null },
+      connection: { type: 'cli', tool: 'claude-code', model: null, auth: 'plan' },
       responsibilities: 'Builds things',
       allowedPaths: [],
       approvals: DEFAULT_APPROVALS,

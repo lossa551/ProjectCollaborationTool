@@ -6,6 +6,7 @@ import {
   draftCostWarning,
   draftRows,
   dollars,
+  onClaudePlan,
   totalUsage,
   usageDay,
   weekStart,
@@ -35,7 +36,13 @@ export const cheapestDraftAgent = (state: AppState) => cheapestAgent(draftAgents
 /** e.g. "Notes · Claude · claude-haiku-5-5 · about $0.0015 per note (cheapest)". */
 export function draftAgentLabel(agent: AgentProfile, state: AppState, cheapest: AgentProfile | undefined): string {
   const cost = draftCost(agent, state.session.prices);
-  const price = cost === null ? 'price unknown' : cost === 0 ? 'free (local)' : `about ${dollars(cost)} per note`;
+  const price = onClaudePlan(agent.connection)
+    ? 'on your Claude plan'
+    : cost === null
+      ? 'price unknown'
+      : cost === 0
+        ? 'free (local)'
+        : `about ${dollars(cost)} per note`;
   return `${agent.name} · ${describeConnection(agent.connection)} · ${price}${agent.id === cheapest?.id ? ' (cheapest)' : ''}`;
 }
 

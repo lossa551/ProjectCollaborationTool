@@ -128,7 +128,7 @@ const base = (extra: Partial<SessionState> = {}) => ({
     {
       id: 'builder',
       name: 'Builder',
-      connection: { type: 'cli' as const, tool: 'claude-code' as const, model: null },
+      connection: { type: 'cli' as const, tool: 'claude-code' as const, model: null, auth: 'plan' as const },
       responsibilities: '',
       allowedPaths: [],
       approvals: { editInScope: 'allow' as const, editOutsideScope: 'ask' as const, commands: 'ask' as const },

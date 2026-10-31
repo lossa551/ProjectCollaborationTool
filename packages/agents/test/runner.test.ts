@@ -2,8 +2,19 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_APPROVALS, SessionClient, commitDraftUsageId, newIdentity, notesDraftUsageId, type AgentProfile, type SessionState } from '@pct/shared';
+import {
+  DEFAULT_APPROVALS,
+  SessionClient,
+  commitDraftUsageId,
+  newIdentity,
+  notesDraftUsageId,
+  totalUsage,
+  type AgentConnection,
+  type AgentProfile,
+  type SessionState,
+} from '@pct/shared';
 import { startServer, type RunningServer } from '@pct/server';
 import { AgentRunner, type AgentRunnerOptions, type ModelAdapter, type ModelRequest, type ModelTurn } from '@pct/agents';
 
@@ -61,7 +72,15 @@ class ScriptedModel implements ModelAdapter {
   }
 }
 
-async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: Partial<AgentRunnerOptions> = {}, allowedPaths = ['src/**']) {
+const OPUS_API: AgentConnection = { type: 'api', provider: 'anthropic', model: 'claude-opus-5-5', baseUrl: null };
+
+async function setup(
+  turns: ModelTurn[],
+  approvals = DEFAULT_APPROVALS,
+  extra: Partial<AgentRunnerOptions> = {},
+  allowedPaths = ['src/**'],
+  connection: AgentConnection = OPUS_API,
+) {
   server = await startServer({ port: 0, host: '127.0.0.1' });
   const root = mkdtempSync(joinPath(tmpdir(), 'pct-agent-'));
   // Agents' own copies go next to the project folder.
@@ -70,7 +89,7 @@ async function setup(turns: ModelTurn[], approvals = DEFAULT_APPROVALS, extra: P
   await waitFor(martin, (s) => s.status === 'connected');
   martin.saveAgent({
     name: 'Builder',
-    connection: { type: 'api', provider: 'anthropic', model: 'claude-opus-5-5', baseUrl: null },
+    connection,
     responsibilities: 'Implements gameplay code.',
     allowedPaths,
     approvals,
@@ -921,6 +940,57 @@ describe('agent copies (worktrees)', { timeout: 60_000 }, () => {
     expect(model.requests[0]!.system).toContain('folder notes');
     const state = await waitFor(martin, (s) => s.usage.length === 1);
     expect(state.usage[0]).toMatchObject({ chatId: notesDraftUsageId(profile.id), agentId: profile.id, taskId: null, model: 'claude-haiku-5-5' });
+  });
+});
+
+// The fake is a script with a shebang, which Windows cannot run directly.
+describe.skipIf(process.platform === 'win32')('Claude Code on a Claude plan', () => {
+  const cli = {
+    hookScript: fileURLToPath(new URL('../bin/pct-hook.cjs', import.meta.url)),
+    nodePath: process.execPath,
+    commands: { 'claude-code': fileURLToPath(new URL('./fixtures/fake-claude.mjs', import.meta.url)) },
+  };
+  const savedKey = process.env.ANTHROPIC_API_KEY;
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = savedKey;
+  });
+
+  async function chatWith(auth: 'plan' | 'api') {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+    const { martin, profile } = await setup([], DEFAULT_APPROVALS, { cli }, [], { type: 'cli', tool: 'claude-code', model: null, auth });
+    const chatId = martin.createChat({ agentId: profile.id, title: 'Plan' });
+    await waitFor(martin, (s) => s.chats.some((c) => c.id === chatId));
+    martin.updateChat(chatId, { budget: 0.1 });
+    await waitFor(martin, (s) => s.chats.find((c) => c.id === chatId)?.budget === 0.1);
+    martin.openChat(chatId);
+    return { martin, chatId };
+  }
+
+  const texts = (state: SessionState, chatId: string) => (state.messages[chatId] ?? []).filter((m) => m.kind === 'text' && m.author.kind === 'agent').map((m) => m.text);
+
+  it('keeps API keys away from it, counts its usage as not charged and does not pause it at a budget', async () => {
+    const { martin, chatId } = await chatWith('plan');
+    martin.postChat(chatId, { kind: 'text', text: 'First' });
+    await waitFor(martin, (s) => texts(s, chatId).length === 1 && s.usage.some((r) => r.chatId === chatId));
+    // Past the $0.10 budget at API prices, but nothing was billed: it goes on without asking.
+    martin.postChat(chatId, { kind: 'text', text: 'Second' });
+    const state = await waitFor(martin, (s) => texts(s, chatId).length === 2 && s.usage.find((r) => r.chatId === chatId)?.calls === 2);
+    expect(texts(state, chatId)).toEqual(['key: none', 'key: none']);
+    expect(state.messages[chatId]!.some((m) => m.approval)).toBe(false);
+    const rows = state.usage.filter((r) => r.chatId === chatId);
+    expect(rows).toEqual([expect.objectContaining({ source: 'plan', model: 'claude-opus-5-5', cost: 1 })]);
+    expect(totalUsage(rows, state.prices)).toMatchObject({ cost: 0, planCalls: 2, planValue: 1 });
+  });
+
+  it('set to an API key, uses the key and its cost counts towards budgets', async () => {
+    const { martin, chatId } = await chatWith('api');
+    martin.postChat(chatId, { kind: 'text', text: 'First' });
+    await waitFor(martin, (s) => texts(s, chatId).length === 1 && s.usage.some((r) => r.chatId === chatId));
+    martin.postChat(chatId, { kind: 'text', text: 'Second' });
+    const state = await waitFor(martin, (s) => (s.messages[chatId] ?? []).some((m) => m.approval?.state === 'pending'));
+    expect(texts(state, chatId)).toEqual(['key: ANTHROPIC_API_KEY']);
+    expect(state.usage.find((r) => r.chatId === chatId)).toMatchObject({ source: 'reported', cost: 0.5 });
   });
 });
 

@@ -8,6 +8,7 @@ import {
   checkpointAt,
   contextIsLarge,
   describeConnection,
+  onClaudePlan,
   totalUsage,
   type AgentProfile,
   type ChatContext,
@@ -1228,6 +1229,7 @@ function BudgetSection({ state, chat, task }: { state: AppState; chat: ChatInfo;
   const { session } = state;
   const online = session.status === 'connected';
   const budgets = budgetsFor(chat, task, session.usage, session.prices);
+  const agent = session.agents.find((a) => a.id === chat.agentId);
   const chatSpent = totalUsage(
     session.usage.filter((r) => r.chatId === chat.id),
     session.prices,
@@ -1242,7 +1244,11 @@ function BudgetSection({ state, chat, task }: { state: AppState; chat: ChatInfo;
           Task: <BudgetMeter spent={taskBudget.spent} limit={taskBudget.limit} />
         </p>
       )}
-      <p className="muted small">When a budget is used up, the agent stops and asks here before it spends more.</p>
+      {agent && onClaudePlan(agent.connection) ? (
+        <p className="muted small">This agent runs on a Claude plan, so it bills nothing per token and budgets do not pause it. It counts towards the plan’s usage limits instead.</p>
+      ) : (
+        <p className="muted small">When a budget is used up, the agent stops and asks here before it spends more.</p>
+      )}
     </section>
   );
 }

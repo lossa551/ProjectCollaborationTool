@@ -112,7 +112,7 @@ const state = (extra: Partial<NoticeInput> = {}): NoticeInput => ({
     {
       id: 'builder',
       name: 'Builder',
-      connection: { type: 'cli', tool: 'claude-code', model: null },
+      connection: { type: 'cli', tool: 'claude-code', model: null, auth: 'plan' },
       responsibilities: '',
       allowedPaths: [],
       approvals: { editInScope: 'allow', editOutsideScope: 'ask', commands: 'ask' },

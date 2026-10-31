@@ -1,4 +1,4 @@
-import type { AgentProfile } from './model.js';
+import { onClaudePlan, type AgentProfile } from './model.js';
 import { commitDraftUsageId } from './commit-message.js';
 import { priceFor, tokenCost, type PriceTable, type UsageRow } from './usage.js';
 
@@ -62,9 +62,14 @@ export function agentModel(agent: AgentProfile): string | null {
   return agent.connection.type === 'cli' ? (MODEL_ALIASES[model.toLowerCase()] ?? model) : model;
 }
 
-/** Estimated dollars for one typical draft by this agent: 0 for a local model, null when its price is unknown. */
+/**
+ * Estimated dollars for one typical draft by this agent: 0 for a local model
+ * or Claude Code on a Claude plan (it uses the plan's limits, not dollars),
+ * null when its price is unknown.
+ */
 export function draftCost(agent: AgentProfile, prices: PriceTable): number | null {
   if (agent.connection.type === 'api' && agent.connection.provider === 'ollama') return 0;
+  if (onClaudePlan(agent.connection)) return 0;
   const model = agentModel(agent);
   return model ? tokenCost(TYPICAL_DRAFT, priceFor(model, prices)) : null;
 }
